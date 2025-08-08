@@ -1,0 +1,237 @@
+syntax = "proto3";
+package kwik.common;
+
+option go_package = "kwik/proto/common";
+
+// Path information - complete information about a connection path
+message PathInfo {
+    string path_id = 1;            // Unique path identifier
+    string address = 2;            // Server address (host:port)
+    bool is_primary = 3;           // Whether this is the primary path
+    PathStatus status = 4;         // Current path status
+    uint64 created_at = 5;         // Path creation timestamp
+    uint64 last_active = 6;        // Last activity timestamp
+    PathMetrics metrics = 7;       // Current path performance metrics
+    PathCapabilities capabilities = 8; // Path capabilities
+    map<string, string> metadata = 9;  // Additional path metadata
+}
+
+// Path status - current state of a connection path
+enum PathStatus {
+    PATH_UNKNOWN = 0;
+    PATH_ACTIVE = 1;               // Path is active and healthy
+    PATH_DEAD = 2;                 // Path is dead/unreachable
+    PATH_CONNECTING = 3;           // Path is being established
+    PATH_DISCONNECTING = 4;        // Path is being closed
+    PATH_DEGRADED = 5;             // Path has performance issues
+    PATH_RECOVERING = 6;           // Path is recovering from issues
+    PATH_SUSPENDED = 7;            // Path is temporarily suspended
+}
+
+// Path performance metrics
+message PathMetrics {
+    uint64 rtt_ms = 1;             // Round-trip time in milliseconds
+    uint64 bandwidth_bps = 2;      // Estimated bandwidth in bits per second
+    float packet_loss_rate = 3;    // Packet loss rate (0.0 to 1.0)
+    uint64 bytes_sent = 4;         // Total bytes sent on this path
+    uint64 bytes_received = 5;     // Total bytes received on this path
+    uint64 packets_sent = 6;       // Total packets sent
+    uint64 packets_received = 7;   // Total packets received
+    uint64 retransmissions = 8;    // Number of retransmissions
+    uint64 last_activity = 9;      // Timestamp of last activity
+    CongestionState congestion = 10; // Congestion control state
+}
+
+// Congestion control state
+message CongestionState {
+    uint64 congestion_window = 1;  // Current congestion window size
+    uint64 slow_start_threshold = 2; // Slow start threshold
+    CongestionAlgorithm algorithm = 3; // Congestion control algorithm
+    uint64 bytes_in_flight = 4;   // Bytes currently in flight
+    uint64 max_datagram_size = 5;  // Maximum datagram size
+}
+
+// Congestion control algorithms
+enum CongestionAlgorithm {
+    CUBIC = 0;
+    BBR = 1;
+    RENO = 2;
+    NEW_RENO = 3;
+}
+
+// Path capabilities - what features a path supports
+message PathCapabilities {
+    uint32 max_packet_size = 1;    // Maximum packet size supported
+    bool supports_ecn = 2;         // Explicit Congestion Notification support
+    bool supports_migration = 3;   // Connection migration support
+    repeated string extensions = 4; // Supported QUIC extensions
+    uint32 max_streams = 5;        // Maximum concurrent streams
+    uint64 max_data = 6;           // Maximum connection data
+}
+
+// Session information - complete information about a KWIK session
+message SessionInfo {
+    string session_id = 1;         // Unique session identifier
+    repeated PathInfo paths = 2;   // All paths in this session
+    uint64 created_at = 3;         // Session creation timestamp
+    bool is_client = 4;            // Whether this is a client session
+    SessionState state = 5;        // Current session state
+    SessionMetrics metrics = 6;    // Session-level metrics
+    SessionConfig config = 7;      // Session configuration
+    map<string, string> metadata = 8; // Additional session metadata
+}
+
+// Session state
+enum SessionState {
+    SESSION_INITIALIZING = 0;      // Session is being initialized
+    SESSION_ACTIVE = 1;            // Session is active
+    SESSION_CLOSING = 2;           // Session is being closed
+    SESSION_CLOSED = 3;            // Session is closed
+    SESSION_ERROR = 4;             // Session is in error state
+}
+
+// Session-level metrics
+message SessionMetrics {
+    uint64 total_bytes_sent = 1;
+    uint64 total_bytes_received = 2;
+    uint64 total_packets_sent = 3;
+    uint64 total_packets_received = 4;
+    uint64 active_streams = 5;
+    uint64 total_streams_created = 6;
+    uint64 path_switches = 7;      // Number of times primary path switched
+    uint64 connection_migrations = 8; // Number of connection migrations
+    AggregationStats aggregation = 9; // Data aggregation statistics
+}
+
+// Data aggregation statistics
+message AggregationStats {
+    uint64 frames_aggregated = 1;  // Total frames aggregated
+    uint64 packets_aggregated = 2; // Total packets aggregated
+    uint64 reorder_events = 3;     // Number of reordering events
+    uint64 duplicate_frames = 4;   // Number of duplicate frames detected
+    float aggregation_efficiency = 5; // Aggregation efficiency ratio
+}
+
+// Session configuration
+message SessionConfig {
+    uint32 max_paths = 1;          // Maximum number of paths
+    uint32 optimal_streams_per_real = 2; // Optimal logical streams per real stream
+    uint32 max_streams_per_real = 3; // Maximum logical streams per real stream
+    uint64 idle_timeout = 4;       // Idle timeout in seconds
+    uint64 max_packet_size = 5;    // Maximum packet size
+    bool enable_aggregation = 6;   // Whether to enable data aggregation
+    bool enable_migration = 7;     // Whether to enable connection migration
+    repeated string features = 8;  // Enabled features
+}
+
+// Stream information - information about a logical stream
+message StreamInfo {
+    uint64 logical_stream_id = 1;
+    string path_id = 2;            // Primary path for this stream
+    StreamType stream_type = 3;
+    StreamState stream_state = 4;
+    uint64 bytes_sent = 5;
+    uint64 bytes_received = 6;
+    uint64 created_at = 7;
+    uint64 last_activity = 8;
+    uint32 priority = 9;
+    map<string, string> metadata = 10;
+}
+
+// Stream types
+enum StreamType {
+    STREAM_BIDIRECTIONAL = 0;
+    STREAM_UNIDIRECTIONAL = 1;
+    STREAM_CONTROL = 2;
+    STREAM_DATA = 3;
+}
+
+// Stream states
+enum StreamState {
+    STREAM_IDLE = 0;
+    STREAM_OPEN = 1;
+    STREAM_HALF_CLOSED_LOCAL = 2;
+    STREAM_HALF_CLOSED_REMOTE = 3;
+    STREAM_CLOSED = 4;
+    STREAM_RESET_SENT = 5;
+    STREAM_RESET_RECEIVED = 6;
+}
+
+// Error information - structured error reporting
+message ErrorInfo {
+    string error_code = 1;         // KWIK error code
+    string message = 2;            // Human-readable error message
+    string component = 3;          // Component that generated the error
+    uint64 timestamp = 4;          // Error timestamp
+    map<string, string> context = 5; // Additional error context
+    ErrorSeverity severity = 6;    // Error severity level
+}
+
+// Error severity levels
+enum ErrorSeverity {
+    SEVERITY_INFO = 0;
+    SEVERITY_WARNING = 1;
+    SEVERITY_ERROR = 2;
+    SEVERITY_CRITICAL = 3;
+    SEVERITY_FATAL = 4;
+}
+
+// Version information - KWIK protocol version
+message VersionInfo {
+    uint32 major = 1;
+    uint32 minor = 2;
+    uint32 patch = 3;
+    string build = 4;
+    repeated string features = 5;   // Supported features in this version
+}
+
+// Timestamp - standardized timestamp format
+message Timestamp {
+    int64 seconds = 1;             // Seconds since Unix epoch
+    int32 nanos = 2;               // Nanoseconds within the second
+}
+
+// Address information - network address details
+message AddressInfo {
+    string host = 1;               // Hostname or IP address
+    uint32 port = 2;               // Port number
+    AddressFamily family = 3;      // Address family
+    string interface = 4;          // Network interface (optional)
+}
+
+// Address families
+enum AddressFamily {
+    UNSPECIFIED = 0;
+    IPV4 = 1;
+    IPV6 = 2;
+    UNIX = 3;
+}
+
+// Feature flags - runtime feature configuration
+message FeatureFlags {
+    bool enable_multipath = 1;
+    bool enable_aggregation = 2;
+    bool enable_migration = 3;
+    bool enable_raw_packets = 4;
+    bool enable_compression = 5;
+    bool enable_encryption = 6;
+    bool enable_metrics = 7;
+    bool enable_debugging = 8;
+}
+
+// Health check information
+message HealthCheck {
+    HealthStatus status = 1;
+    string message = 2;
+    uint64 timestamp = 3;
+    repeated HealthCheck component_health = 4; // Health of sub-components
+    map<string, string> details = 5;
+}
+
+// Health status
+enum HealthStatus {
+    HEALTH_HEALTHY = 0;
+    HEALTH_DEGRADED = 1;
+    HEALTH_UNHEALTHY = 2;
+    HEALTH_UNKNOWN = 3;
+}

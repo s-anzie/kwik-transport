@@ -1,0 +1,211 @@
+syntax = "proto3";
+package kwik.data;
+
+option go_package = "kwik/proto/data";
+
+// Data frame - carries application data for logical streams
+message DataFrame {
+    uint64 frame_id = 1;           // Unique frame identifier
+    uint64 logical_stream_id = 2;  // KWIK logical stream ID
+    uint64 offset = 3;             // KWIK logical offset (not QUIC offset)
+    bytes data = 4;                // Application data payload
+    bool fin = 5;                  // Final frame for this stream
+    uint64 timestamp = 6;          // Frame creation timestamp
+    string path_id = 7;            // Path this frame is transmitted on
+    uint32 data_length = 8;        // Length of data payload
+    uint32 checksum = 9;           // Frame data checksum
+}
+
+// Data packet - container for multiple data frames
+message DataPacket {
+    uint64 packet_id = 1;          // Unique packet identifier
+    string path_id = 2;            // Path this packet is transmitted on
+    repeated DataFrame frames = 3;  // Data frames in this packet
+    uint32 checksum = 4;           // Packet checksum
+    uint64 timestamp = 5;          // Packet creation timestamp
+    PacketMetadata metadata = 6;   // Packet metadata
+}
+
+// Packet metadata - additional packet information
+message PacketMetadata {
+    uint32 total_size = 1;         // Total packet size in bytes
+    uint32 frame_count = 2;        // Number of frames in packet
+    CompressionType compression = 3; // Compression used
+    uint32 sequence_number = 4;    // Sequence number within path
+    bool retransmission = 5;       // Whether this is a retransmission
+}
+
+// Compression types
+enum CompressionType {
+    COMPRESSION_NONE = 0;
+    COMPRESSION_GZIP = 1;
+    COMPRESSION_LZ4 = 2;
+    COMPRESSION_ZSTD = 3;
+}
+
+// ACK frame - acknowledge received packets
+message AckFrame {
+    uint64 ack_id = 1;             // Unique ACK identifier
+    repeated uint64 acked_packet_ids = 2;  // Packet IDs being acknowledged
+    string path_id = 3;            // Path these ACKs apply to
+    uint64 timestamp = 4;          // ACK creation timestamp
+    repeated AckRange ack_ranges = 5;      // Ranges of acknowledged packets
+    uint64 largest_acked = 6;      // Largest packet ID acknowledged
+    uint64 ack_delay = 7;          // Delay since packet was received (microseconds)
+}
+
+// ACK range - contiguous range of acknowledged packets
+message AckRange {
+    uint64 start = 1;              // First packet ID in range
+    uint64 end = 2;                // Last packet ID in range (inclusive)
+}
+
+// Stream flow control frame - manage stream-level flow control
+message StreamFlowControlFrame {
+    uint64 logical_stream_id = 1;
+    uint64 max_stream_data = 2;    // Maximum data allowed on this stream
+    uint64 stream_data_blocked = 3; // Stream is blocked at this offset
+}
+
+// Connection flow control frame - manage connection-level flow control
+message ConnectionFlowControlFrame {
+    string path_id = 1;
+    uint64 max_data = 2;           // Maximum data allowed on this path
+    uint64 data_blocked = 3;       // Path is blocked at this offset
+}
+
+// Stream reset frame - reset a logical stream
+message StreamResetFrame {
+    uint64 logical_stream_id = 1;
+    uint64 application_error_code = 2;
+    uint64 final_size = 3;         // Final size of stream data
+    string reason = 4;             // Human-readable reset reason
+}
+
+// Stop sending frame - request peer to stop sending on stream
+message StopSendingFrame {
+    uint64 logical_stream_id = 1;
+    uint64 application_error_code = 2;
+    string reason = 3;
+}
+
+// Crypto frame - carry cryptographic handshake data
+message CryptoFrame {
+    uint64 offset = 1;             // Offset in crypto stream
+    bytes crypto_data = 2;         // Cryptographic handshake data
+}
+
+// New connection ID frame - provide new connection ID
+message NewConnectionIdFrame {
+    uint64 sequence_number = 1;
+    uint64 retire_prior_to = 2;
+    bytes connection_id = 3;
+    bytes stateless_reset_token = 4;
+}
+
+// Retire connection ID frame - retire old connection ID
+message RetireConnectionIdFrame {
+    uint64 sequence_number = 1;
+}
+
+// Path challenge frame - validate path connectivity
+message PathChallengeFrame {
+    bytes challenge_data = 1;      // 8 bytes of challenge data
+    string path_id = 2;
+}
+
+// Path response frame - respond to path challenge
+message PathResponseFrame {
+    bytes response_data = 1;       // Echo of challenge data
+    string path_id = 2;
+}
+
+// Connection close frame - close connection with error
+message ConnectionCloseFrame {
+    uint64 error_code = 1;
+    uint64 frame_type = 2;         // Frame type that caused error
+    string reason_phrase = 3;
+    bool application_error = 4;    // Whether this is an application error
+}
+
+// Padding frame - pad packets to desired size
+message PaddingFrame {
+    uint32 padding_length = 1;
+}
+
+// Ping frame - test connectivity
+message PingFrame {
+    uint64 timestamp = 1;
+    bytes ping_data = 2;
+}
+
+// Data frame container - wrapper for all data plane frames
+message DataFrameContainer {
+    DataFrameType type = 1;
+    bytes payload = 2;
+    uint64 timestamp = 3;
+    string path_id = 4;
+}
+
+// Data frame types - all possible data plane frame types
+enum DataFrameType {
+    DATA_FRAME_DATA = 0;
+    DATA_FRAME_ACK = 1;
+    DATA_FRAME_STREAM_FLOW_CONTROL = 2;
+    DATA_FRAME_CONNECTION_FLOW_CONTROL = 3;
+    DATA_FRAME_STREAM_RESET = 4;
+    DATA_FRAME_STOP_SENDING = 5;
+    DATA_FRAME_CRYPTO = 6;
+    DATA_FRAME_NEW_CONNECTION_ID = 7;
+    DATA_FRAME_RETIRE_CONNECTION_ID = 8;
+    DATA_FRAME_PATH_CHALLENGE = 9;
+    DATA_FRAME_PATH_RESPONSE = 10;
+    DATA_FRAME_CONNECTION_CLOSE = 11;
+    DATA_FRAME_PADDING = 12;
+    DATA_FRAME_PING = 13;
+}
+
+// Stream state information
+message StreamState {
+    uint64 logical_stream_id = 1;
+    StreamStateType state = 2;
+    uint64 bytes_sent = 3;
+    uint64 bytes_received = 4;
+    uint64 max_stream_data_sent = 5;
+    uint64 max_stream_data_received = 6;
+    bool fin_sent = 7;
+    bool fin_received = 8;
+}
+
+// Stream state types
+enum StreamStateType {
+    DATA_STREAM_IDLE = 0;
+    DATA_STREAM_OPEN = 1;
+    DATA_STREAM_HALF_CLOSED_LOCAL = 2;
+    DATA_STREAM_HALF_CLOSED_REMOTE = 3;
+    DATA_STREAM_CLOSED = 4;
+    DATA_STREAM_RESET_SENT = 5;
+    DATA_STREAM_RESET_RECEIVED = 6;
+}
+
+// Aggregated data statistics for multi-path
+message AggregatedDataStats {
+    uint64 total_bytes_sent = 1;
+    uint64 total_bytes_received = 2;
+    uint64 total_packets_sent = 3;
+    uint64 total_packets_received = 4;
+    repeated PathDataStats path_stats = 5;
+    uint64 aggregation_timestamp = 6;
+}
+
+// Per-path data statistics
+message PathDataStats {
+    string path_id = 1;
+    uint64 bytes_sent = 2;
+    uint64 bytes_received = 3;
+    uint64 packets_sent = 4;
+    uint64 packets_received = 5;
+    uint64 retransmissions = 6;
+    float loss_rate = 7;
+    uint64 rtt_ms = 8;
+}

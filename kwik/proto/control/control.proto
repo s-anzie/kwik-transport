@@ -1,0 +1,150 @@
+syntax = "proto3";
+package kwik.control;
+
+option go_package = "kwik/proto/control";
+
+// Control frame wrapper - main container for all control messages
+message ControlFrame {
+    uint64 frame_id = 1;
+    ControlFrameType type = 2;
+    bytes payload = 3;
+    uint64 timestamp = 4;
+    string source_path_id = 5;  // Path ID of sender
+    string target_path_id = 6;  // Path ID of intended recipient
+}
+
+// Control frame types - all possible control operations
+enum ControlFrameType {
+    ADD_PATH_REQUEST = 0;
+    ADD_PATH_RESPONSE = 1;
+    REMOVE_PATH_REQUEST = 2;
+    REMOVE_PATH_RESPONSE = 3;
+    PATH_STATUS_NOTIFICATION = 4;
+    AUTHENTICATION_REQUEST = 5;
+    AUTHENTICATION_RESPONSE = 6;
+    STREAM_CREATE_NOTIFICATION = 7;
+    RAW_PACKET_TRANSMISSION = 8;
+    HEARTBEAT = 9;
+    SESSION_CLOSE = 10;
+}
+
+// Add path request - server requests client to connect to secondary server
+message AddPathRequest {
+    string target_address = 1;     // Address of secondary server to connect to
+    string session_id = 2;         // Current session ID for authentication
+    uint32 priority = 3;           // Path priority (0 = highest)
+    map<string, string> metadata = 4;  // Additional path metadata
+}
+
+// Add path response - client responds with success/failure
+message AddPathResponse {
+    bool success = 1;
+    string path_id = 2;            // New path ID if successful
+    string error_message = 3;      // Error details if failed
+    string error_code = 4;         // Structured error code
+    uint64 connection_time_ms = 5; // Time taken to establish connection
+}
+
+// Remove path request - server requests path removal
+message RemovePathRequest {
+    string path_id = 1;
+    string reason = 2;             // Reason for removal
+    bool graceful = 3;             // Whether to close gracefully
+    uint32 timeout_ms = 4;         // Timeout for graceful close
+}
+
+// Remove path response - client confirms path removal
+message RemovePathResponse {
+    bool success = 1;
+    string path_id = 2;
+    string error_message = 3;
+    uint64 streams_migrated = 4;   // Number of streams migrated to other paths
+}
+
+// Path status notification - notify peer of path status changes
+message PathStatusNotification {
+    string path_id = 1;
+    PathStatus status = 2;
+    string reason = 3;
+    uint64 timestamp = 4;
+    PathMetrics metrics = 5;       // Current path performance metrics
+}
+
+// Path status enum - possible path states
+enum PathStatus {
+    CONTROL_PATH_ACTIVE = 0;
+    CONTROL_PATH_DEAD = 1;
+    CONTROL_PATH_CONNECTING = 2;
+    CONTROL_PATH_DISCONNECTING = 3;
+    CONTROL_PATH_DEGRADED = 4;     // Path experiencing issues but still usable
+    CONTROL_PATH_RECOVERING = 5;   // Path recovering from issues
+}
+
+// Path performance metrics
+message PathMetrics {
+    uint64 rtt_ms = 1;             // Round-trip time in milliseconds
+    uint64 bandwidth_bps = 2;      // Estimated bandwidth in bits per second
+    float packet_loss_rate = 3;    // Packet loss rate (0.0 to 1.0)
+    uint64 bytes_sent = 4;         // Total bytes sent on this path
+    uint64 bytes_received = 5;     // Total bytes received on this path
+    uint64 last_activity = 6;      // Timestamp of last activity
+}
+
+// Authentication request - authenticate on new path using existing session
+message AuthenticationRequest {
+    string session_id = 1;
+    bytes credentials = 2;         // Authentication credentials
+    string client_version = 3;     // Client KWIK version
+    repeated string supported_features = 4;  // Supported KWIK features
+}
+
+// Authentication response - server responds to authentication
+message AuthenticationResponse {
+    bool success = 1;
+    string session_id = 2;         // Confirmed session ID
+    string error_message = 3;
+    string server_version = 4;     // Server KWIK version
+    repeated string enabled_features = 5;    // Features enabled for this session
+    uint64 session_timeout = 6;    // Session timeout in seconds
+}
+
+// Stream creation notification - notify peer of new logical stream
+message StreamCreateNotification {
+    uint64 logical_stream_id = 1;
+    string path_id = 2;            // Path where stream was created
+    StreamType stream_type = 3;    // Type of stream
+    uint32 priority = 4;           // Stream priority
+    map<string, string> metadata = 5;  // Stream metadata
+}
+
+// Stream types
+enum StreamType {
+    CONTROL_STREAM_BIDIRECTIONAL = 0;
+    CONTROL_STREAM_UNIDIRECTIONAL = 1;
+    CONTROL_STREAM_CONTROL = 2;
+    CONTROL_STREAM_DATA = 3;
+}
+
+// Raw packet transmission - send raw data through specific path
+message RawPacketTransmission {
+    bytes data = 1;
+    string target_path_id = 2;     // Path to send data through
+    string source_server_id = 3;   // ID of sending server
+    string protocol_hint = 4;      // Hint about the protocol of raw data
+    bool preserve_order = 5;       // Whether to preserve packet order
+}
+
+// Heartbeat message - keep paths alive and measure performance
+message Heartbeat {
+    uint64 sequence_number = 1;
+    uint64 timestamp = 2;
+    bytes echo_data = 3;           // Data to be echoed back
+    PathMetrics current_metrics = 4;
+}
+
+// Session close notification - gracefully close entire session
+message SessionClose {
+    string reason = 1;
+    uint32 timeout_ms = 2;         // Time to wait before force close
+    bool migrate_streams = 3;      // Whether to attempt stream migration
+}
