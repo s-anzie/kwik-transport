@@ -23,6 +23,12 @@ type ChunkCoordinator struct {
 	maxConcurrent    int                        // Maximum concurrent transfers
 	ctx              context.Context            // Context for cancellation
 	cancel           context.CancelFunc         // Cancel function
+	
+	// Dynamic optimization fields
+	pathMetrics      map[string]*PathMetrics    // Performance metrics per path
+	metricsMutex     sync.RWMutex               // Protects pathMetrics map
+	optimizationEnabled bool                    // Whether dynamic optimization is enabled
+	rebalanceInterval   time.Duration           // How often to rebalance chunk distribution
 }
 
 // TransferState tracks the state of an active file transfer
@@ -93,6 +99,30 @@ const (
 	DistributionStrategyPrimaryFirst                            // Primary server gets priority
 )
 
+// PathMetrics tracks performance metrics for a specific path
+type PathMetrics struct {
+	PathID           string        // Path identifier
+	ServerType       ServerType    // Which server this path belongs to
+	TotalChunksSent  uint64        // Total number of chunks sent via this path
+	TotalBytesSent   uint64        // Total bytes sent via this path
+	TotalSendTime    time.Duration // Total time spent sending chunks
+	AverageBandwidth float64       // Average bandwidth in bytes/second
+	LastBandwidth    float64       // Most recent bandwidth measurement
+	SuccessRate      float64       // Success rate (0.0 to 1.0)
+	AverageLatency   time.Duration // Average latency for chunk sending
+	LastActivity     time.Time     // Last time this path was used
+	FailureCount     uint64        // Number of failed chunk sends
+	mutex            sync.RWMutex  // Protects this metrics data
+}
+
+// BandwidthSample represents a single bandwidth measurement
+type BandwidthSample struct {
+	Timestamp time.Time
+	Bandwidth float64 // bytes/second
+	ChunkSize int32
+	Duration  time.Duration
+}
+
 // NewChunkCoordinator creates a new chunk coordinator
 func NewChunkCoordinator(primarySession Session, secondaryPaths []string, fileDirectory string, chunkSize int32, maxConcurrent int) (*ChunkCoordinator, error) {
 	// Validate parameters
@@ -116,19 +146,26 @@ func NewChunkCoordinator(primarySession Session, secondaryPaths []string, fileDi
 	ctx, cancel := context.WithCancel(context.Background())
 	
 	coordinator := &ChunkCoordinator{
-		primarySession:  primarySession,
-		secondaryPaths:  secondaryPaths,
-		chunkSize:       chunkSize,
-		activeTransfers: make(map[string]*TransferState),
-		fileDirectory:   fileDirectory,
-		maxConcurrent:   maxConcurrent,
-		ctx:             ctx,
-		cancel:          cancel,
+		primarySession:      primarySession,
+		secondaryPaths:      secondaryPaths,
+		chunkSize:           chunkSize,
+		activeTransfers:     make(map[string]*TransferState),
+		fileDirectory:       fileDirectory,
+		maxConcurrent:       maxConcurrent,
+		ctx:                 ctx,
+		cancel:              cancel,
+		pathMetrics:         make(map[string]*PathMetrics),
+		optimizationEnabled: true,
+		rebalanceInterval:   30 * time.Second, // Rebalance every 30 seconds
 	}
+	
+	// Initialize path metrics for all available paths
+	coordinator.initializePathMetrics()
 	
 	// Start background monitoring
 	go coordinator.monitorTransfers()
 	go coordinator.handleSecondaryResponses()
+	go coordinator.monitorPathPerformance()
 	
 	return coordinator, nil
 }
@@ -277,11 +314,71 @@ func (cc *ChunkCoordinator) distributeAlternating(transferState *TransferState, 
 	return nil
 }
 
-// distributeBandwidthBased distributes chunks based on measured bandwidth (placeholder for future implementation)
+// distributeBandwidthBased distributes chunks based on measured bandwidth
 func (cc *ChunkCoordinator) distributeBandwidthBased(transferState *TransferState, totalChunks uint32) error {
-	// For now, fall back to alternating distribution
-	// TODO: Implement bandwidth measurement and intelligent distribution
-	return cc.distributeAlternating(transferState, totalChunks)
+	if !cc.optimizationEnabled {
+		return cc.distributeAlternating(transferState, totalChunks)
+	}
+	
+	// Get current bandwidth metrics for primary and secondary paths
+	primaryBandwidth := cc.getPrimaryPathBandwidth()
+	secondaryBandwidth := cc.getSecondaryPathBandwidth()
+	
+	// If we don't have enough metrics yet, fall back to alternating
+	if primaryBandwidth <= 0 && secondaryBandwidth <= 0 {
+		return cc.distributeAlternating(transferState, totalChunks)
+	}
+	
+	// Calculate total bandwidth and distribution ratio
+	totalBandwidth := primaryBandwidth + secondaryBandwidth
+	if totalBandwidth <= 0 {
+		return cc.distributeAlternating(transferState, totalChunks)
+	}
+	
+	// Calculate how many chunks each server should get based on bandwidth
+	primaryRatio := primaryBandwidth / totalBandwidth
+	
+	primaryChunkCount := uint32(float64(totalChunks) * primaryRatio)
+	secondaryChunkCount := totalChunks - primaryChunkCount
+	
+	// Ensure at least one chunk per server if both are available
+	if primaryChunkCount == 0 && primaryBandwidth > 0 {
+		primaryChunkCount = 1
+		secondaryChunkCount = totalChunks - 1
+	}
+	if secondaryChunkCount == 0 && secondaryBandwidth > 0 {
+		secondaryChunkCount = 1
+		primaryChunkCount = totalChunks - 1
+	}
+	
+	// Distribute chunks based on calculated counts
+	primaryAssigned := uint32(0)
+	secondaryAssigned := uint32(0)
+	
+	for i := uint32(0); i < totalChunks; i++ {
+		assignment := ChunkAssignment{
+			ChunkID:     i,
+			SequenceNum: i,
+			Status:      ChunkStatusPending,
+			AssignedAt:  time.Now(),
+			RetryCount:  0,
+		}
+		
+		// Assign to primary if we haven't reached the limit, or if secondary is full
+		if primaryAssigned < primaryChunkCount && (secondaryAssigned >= secondaryChunkCount || primaryBandwidth > secondaryBandwidth) {
+			assignment.AssignedTo = ServerTypePrimary
+			transferState.PrimaryChunks = append(transferState.PrimaryChunks, i)
+			primaryAssigned++
+		} else {
+			assignment.AssignedTo = ServerTypeSecondary
+			transferState.SecondaryChunks = append(transferState.SecondaryChunks, i)
+			secondaryAssigned++
+		}
+		
+		transferState.ChunkAssignments[i] = assignment
+	}
+	
+	return nil
 }
 
 // distributeRoundRobin distributes chunks in round-robin fashion
@@ -350,6 +447,8 @@ func (cc *ChunkCoordinator) coordinateSecondaryChunks(transferState *TransferSta
 
 // sendChunk sends a chunk directly from the primary server
 func (cc *ChunkCoordinator) sendChunk(transferState *TransferState, sequenceNum uint32, serverType ServerType) error {
+	startTime := time.Now()
+	
 	// Update chunk status
 	transferState.mutex.Lock()
 	assignment := transferState.ChunkAssignments[sequenceNum]
@@ -360,12 +459,18 @@ func (cc *ChunkCoordinator) sendChunk(transferState *TransferState, sequenceNum 
 	// Read chunk data from file
 	chunk, err := cc.readChunkFromFile(transferState.Metadata, sequenceNum)
 	if err != nil {
+		// Update metrics for failure
+		cc.updatePrimaryPathMetrics(0, time.Since(startTime), false)
 		return fmt.Errorf("failed to read chunk %d: %w", sequenceNum, err)
 	}
 	
 	// Send chunk via stream
 	err = cc.sendChunkViaStream(chunk)
+	sendDuration := time.Since(startTime)
+	
 	if err != nil {
+		// Update metrics for failure
+		cc.updatePrimaryPathMetrics(int32(len(chunk.Data)), sendDuration, false)
 		return fmt.Errorf("failed to send chunk %d: %w", sequenceNum, err)
 	}
 	
@@ -378,6 +483,9 @@ func (cc *ChunkCoordinator) sendChunk(transferState *TransferState, sequenceNum 
 	transferState.CompletedChunks[sequenceNum] = true
 	transferState.LastActivity = time.Now()
 	transferState.mutex.Unlock()
+	
+	// Update metrics for success
+	cc.updatePrimaryPathMetrics(int32(len(chunk.Data)), sendDuration, true)
 	
 	return nil
 }
@@ -733,6 +841,16 @@ func (cc *ChunkCoordinator) handleChunkSentResponse(response *ChunkCommand) {
 		return // Chunk was not assigned to secondary server
 	}
 	
+	// Calculate send duration for metrics
+	sendDuration := time.Since(assignment.AssignedAt)
+	chunkSize := int32(0)
+	if response.Size > 0 {
+		chunkSize = response.Size
+	}
+	
+	// Update secondary path metrics
+	cc.updateSecondaryPathMetrics(chunkSize, sendDuration, true)
+	
 	// Update chunk status to sent
 	assignment.Status = ChunkStatusSent
 	assignment.SentAt = time.Now()
@@ -902,4 +1020,467 @@ func (cc *ChunkCoordinator) ReassignFailedChunks(filename string, maxRetries int
 	}
 	
 	return nil
+}
+// initializePathMetrics initializes metrics for all available paths
+func (cc *ChunkCoordinator) initializePathMetrics() {
+	cc.metricsMutex.Lock()
+	defer cc.metricsMutex.Unlock()
+	
+	// Initialize metrics for primary path
+	primaryPaths := cc.primarySession.GetActivePaths()
+	for _, path := range primaryPaths {
+		if path.IsPrimary {
+			cc.pathMetrics[path.PathID] = &PathMetrics{
+				PathID:           path.PathID,
+				ServerType:       ServerTypePrimary,
+				TotalChunksSent:  0,
+				TotalBytesSent:   0,
+				TotalSendTime:    0,
+				AverageBandwidth: 0,
+				LastBandwidth:    0,
+				SuccessRate:      1.0, // Start with optimistic success rate
+				AverageLatency:   0,
+				LastActivity:     time.Now(),
+				FailureCount:     0,
+			}
+		}
+	}
+	
+	// Initialize metrics for secondary paths
+	for _, pathID := range cc.secondaryPaths {
+		cc.pathMetrics[pathID] = &PathMetrics{
+			PathID:           pathID,
+			ServerType:       ServerTypeSecondary,
+			TotalChunksSent:  0,
+			TotalBytesSent:   0,
+			TotalSendTime:    0,
+			AverageBandwidth: 0,
+			LastBandwidth:    0,
+			SuccessRate:      1.0, // Start with optimistic success rate
+			AverageLatency:   0,
+			LastActivity:     time.Now(),
+			FailureCount:     0,
+		}
+	}
+}
+
+// getPrimaryPathBandwidth returns the average bandwidth for primary paths
+func (cc *ChunkCoordinator) getPrimaryPathBandwidth() float64 {
+	cc.metricsMutex.RLock()
+	defer cc.metricsMutex.RUnlock()
+	
+	totalBandwidth := 0.0
+	pathCount := 0
+	
+	for _, metrics := range cc.pathMetrics {
+		if metrics.ServerType == ServerTypePrimary && metrics.AverageBandwidth > 0 {
+			totalBandwidth += metrics.AverageBandwidth
+			pathCount++
+		}
+	}
+	
+	if pathCount == 0 {
+		return 0
+	}
+	
+	return totalBandwidth / float64(pathCount)
+}
+
+// getSecondaryPathBandwidth returns the average bandwidth for secondary paths
+func (cc *ChunkCoordinator) getSecondaryPathBandwidth() float64 {
+	cc.metricsMutex.RLock()
+	defer cc.metricsMutex.RUnlock()
+	
+	totalBandwidth := 0.0
+	pathCount := 0
+	
+	for _, metrics := range cc.pathMetrics {
+		if metrics.ServerType == ServerTypeSecondary && metrics.AverageBandwidth > 0 {
+			totalBandwidth += metrics.AverageBandwidth
+			pathCount++
+		}
+	}
+	
+	if pathCount == 0 {
+		return 0
+	}
+	
+	return totalBandwidth / float64(pathCount)
+}
+
+// updatePrimaryPathMetrics updates performance metrics for primary paths
+func (cc *ChunkCoordinator) updatePrimaryPathMetrics(chunkSize int32, sendDuration time.Duration, success bool) {
+	// Find primary path ID from active paths
+	activePaths := cc.primarySession.GetActivePaths()
+	for _, path := range activePaths {
+		if path.IsPrimary {
+			cc.updatePathMetrics(path.PathID, chunkSize, sendDuration, success)
+			break
+		}
+	}
+}
+
+// updatePathMetrics updates performance metrics for a specific path
+func (cc *ChunkCoordinator) updatePathMetrics(pathID string, chunkSize int32, sendDuration time.Duration, success bool) {
+	cc.metricsMutex.Lock()
+	defer cc.metricsMutex.Unlock()
+	
+	metrics, exists := cc.pathMetrics[pathID]
+	if !exists {
+		return // Path not found
+	}
+	
+	metrics.mutex.Lock()
+	defer metrics.mutex.Unlock()
+	
+	// Update basic counters
+	if success {
+		metrics.TotalChunksSent++
+		metrics.TotalBytesSent += uint64(chunkSize)
+		metrics.TotalSendTime += sendDuration
+		metrics.LastActivity = time.Now()
+		
+		// Calculate bandwidth for this chunk
+		if sendDuration > 0 {
+			chunkBandwidth := float64(chunkSize) / sendDuration.Seconds()
+			metrics.LastBandwidth = chunkBandwidth
+			
+			// Update average bandwidth using exponential moving average
+			alpha := 0.3 // Smoothing factor
+			if metrics.AverageBandwidth == 0 {
+				metrics.AverageBandwidth = chunkBandwidth
+			} else {
+				metrics.AverageBandwidth = alpha*chunkBandwidth + (1-alpha)*metrics.AverageBandwidth
+			}
+		}
+		
+		// Update average latency
+		if metrics.TotalChunksSent > 0 {
+			metrics.AverageLatency = metrics.TotalSendTime / time.Duration(metrics.TotalChunksSent)
+		}
+	} else {
+		metrics.FailureCount++
+	}
+	
+	// Update success rate
+	totalAttempts := metrics.TotalChunksSent + metrics.FailureCount
+	if totalAttempts > 0 {
+		metrics.SuccessRate = float64(metrics.TotalChunksSent) / float64(totalAttempts)
+	}
+}
+
+// monitorPathPerformance monitors path performance and triggers rebalancing
+func (cc *ChunkCoordinator) monitorPathPerformance() {
+	ticker := time.NewTicker(cc.rebalanceInterval)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-cc.ctx.Done():
+			return
+		case <-ticker.C:
+			if cc.optimizationEnabled {
+				cc.rebalanceActiveTransfers()
+			}
+		}
+	}
+}
+
+// rebalanceActiveTransfers rebalances chunk distribution for active transfers
+func (cc *ChunkCoordinator) rebalanceActiveTransfers() {
+	cc.transfersMutex.RLock()
+	activeTransfers := make([]*TransferState, 0, len(cc.activeTransfers))
+	for _, transfer := range cc.activeTransfers {
+		if transfer.Status == TransferStatusActive {
+			activeTransfers = append(activeTransfers, transfer)
+		}
+	}
+	cc.transfersMutex.RUnlock()
+	
+	// Check each active transfer for rebalancing opportunities
+	for _, transfer := range activeTransfers {
+		cc.rebalanceTransfer(transfer)
+	}
+}
+
+// rebalanceTransfer rebalances chunk distribution for a specific transfer
+func (cc *ChunkCoordinator) rebalanceTransfer(transferState *TransferState) {
+	transferState.mutex.Lock()
+	defer transferState.mutex.Unlock()
+	
+	// Get current bandwidth metrics
+	primaryBandwidth := cc.getPrimaryPathBandwidth()
+	secondaryBandwidth := cc.getSecondaryPathBandwidth()
+	
+	if primaryBandwidth <= 0 && secondaryBandwidth <= 0 {
+		return // No metrics available
+	}
+	
+	// Calculate current distribution
+	primaryPending := 0
+	secondaryPending := 0
+	
+	for _, assignment := range transferState.ChunkAssignments {
+		if assignment.Status == ChunkStatusPending || assignment.Status == ChunkStatusRetrying {
+			if assignment.AssignedTo == ServerTypePrimary {
+				primaryPending++
+			} else {
+				secondaryPending++
+			}
+		}
+	}
+	
+	totalPending := primaryPending + secondaryPending
+	if totalPending == 0 {
+		return // No pending chunks to rebalance
+	}
+	
+	// Calculate optimal distribution based on current bandwidth
+	totalBandwidth := primaryBandwidth + secondaryBandwidth
+	if totalBandwidth <= 0 {
+		return
+	}
+	
+	optimalPrimaryRatio := primaryBandwidth / totalBandwidth
+	optimalPrimaryCount := int(float64(totalPending) * optimalPrimaryRatio)
+	
+	// Check if rebalancing is needed (threshold of 20% difference)
+	currentPrimaryRatio := float64(primaryPending) / float64(totalPending)
+	if absFloat(currentPrimaryRatio-optimalPrimaryRatio) < 0.2 {
+		return // Current distribution is close enough to optimal
+	}
+	
+	// Perform rebalancing by reassigning pending chunks
+	chunksToReassign := absInt(primaryPending - optimalPrimaryCount)
+	if chunksToReassign == 0 {
+		return
+	}
+	
+	reassignedCount := 0
+	targetServer := ServerTypePrimary
+	sourceServer := ServerTypeSecondary
+	
+	if primaryPending > optimalPrimaryCount {
+		// Too many chunks on primary, move some to secondary
+		targetServer = ServerTypeSecondary
+		sourceServer = ServerTypePrimary
+	}
+	
+	// Find chunks to reassign
+	for chunkID, assignment := range transferState.ChunkAssignments {
+		if reassignedCount >= chunksToReassign {
+			break
+		}
+		
+		if assignment.AssignedTo == sourceServer && 
+		   (assignment.Status == ChunkStatusPending || assignment.Status == ChunkStatusRetrying) {
+			
+			// Reassign this chunk
+			assignment.AssignedTo = targetServer
+			assignment.Status = ChunkStatusPending
+			assignment.RetryCount = 0
+			assignment.LastError = ""
+			transferState.ChunkAssignments[chunkID] = assignment
+			
+			// Update chunk lists
+			if targetServer == ServerTypePrimary {
+				// Move from secondary to primary
+				transferState.PrimaryChunks = append(transferState.PrimaryChunks, chunkID)
+				cc.removeFromSlice(&transferState.SecondaryChunks, chunkID)
+			} else {
+				// Move from primary to secondary
+				transferState.SecondaryChunks = append(transferState.SecondaryChunks, chunkID)
+				cc.removeFromSlice(&transferState.PrimaryChunks, chunkID)
+			}
+			
+			reassignedCount++
+		}
+	}
+	
+	// Trigger sending of reassigned chunks
+	if reassignedCount > 0 {
+		transferState.LastActivity = time.Now()
+		
+		// Start sending reassigned chunks
+		if targetServer == ServerTypePrimary {
+			go cc.sendReassignedPrimaryChunks(transferState, reassignedCount)
+		} else {
+			go cc.sendReassignedSecondaryChunks(transferState, reassignedCount)
+		}
+	}
+}
+
+// sendReassignedPrimaryChunks sends chunks that were reassigned to primary server
+func (cc *ChunkCoordinator) sendReassignedPrimaryChunks(transferState *TransferState, maxChunks int) {
+	sent := 0
+	for _, sequenceNum := range transferState.PrimaryChunks {
+		if sent >= maxChunks {
+			break
+		}
+		
+		transferState.mutex.RLock()
+		assignment := transferState.ChunkAssignments[sequenceNum]
+		transferState.mutex.RUnlock()
+		
+		if assignment.Status == ChunkStatusPending && assignment.AssignedTo == ServerTypePrimary {
+			select {
+			case <-cc.ctx.Done():
+				return
+			default:
+				err := cc.sendChunk(transferState, sequenceNum, ServerTypePrimary)
+				if err != nil {
+					cc.handleChunkError(transferState, sequenceNum, err)
+				}
+				sent++
+			}
+		}
+	}
+}
+
+// sendReassignedSecondaryChunks sends chunks that were reassigned to secondary server
+func (cc *ChunkCoordinator) sendReassignedSecondaryChunks(transferState *TransferState, maxChunks int) {
+	sent := 0
+	for _, sequenceNum := range transferState.SecondaryChunks {
+		if sent >= maxChunks {
+			break
+		}
+		
+		transferState.mutex.RLock()
+		assignment := transferState.ChunkAssignments[sequenceNum]
+		transferState.mutex.RUnlock()
+		
+		if assignment.Status == ChunkStatusPending && assignment.AssignedTo == ServerTypeSecondary {
+			select {
+			case <-cc.ctx.Done():
+				return
+			default:
+				err := cc.sendChunkCommand(transferState, sequenceNum)
+				if err != nil {
+					cc.handleChunkError(transferState, sequenceNum, err)
+				}
+				sent++
+			}
+		}
+	}
+}
+
+// removeFromSlice removes a value from a uint32 slice
+func (cc *ChunkCoordinator) removeFromSlice(slice *[]uint32, value uint32) {
+	for i, v := range *slice {
+		if v == value {
+			*slice = append((*slice)[:i], (*slice)[i+1:]...)
+			break
+		}
+	}
+}
+
+// abs returns the absolute value of an integer
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// GetPathMetrics returns current performance metrics for all paths
+func (cc *ChunkCoordinator) GetPathMetrics() map[string]*PathMetrics {
+	cc.metricsMutex.RLock()
+	defer cc.metricsMutex.RUnlock()
+	
+	// Create a copy of metrics to avoid race conditions
+	result := make(map[string]*PathMetrics)
+	for pathID, metrics := range cc.pathMetrics {
+		metrics.mutex.RLock()
+		result[pathID] = &PathMetrics{
+			PathID:           metrics.PathID,
+			ServerType:       metrics.ServerType,
+			TotalChunksSent:  metrics.TotalChunksSent,
+			TotalBytesSent:   metrics.TotalBytesSent,
+			TotalSendTime:    metrics.TotalSendTime,
+			AverageBandwidth: metrics.AverageBandwidth,
+			LastBandwidth:    metrics.LastBandwidth,
+			SuccessRate:      metrics.SuccessRate,
+			AverageLatency:   metrics.AverageLatency,
+			LastActivity:     metrics.LastActivity,
+			FailureCount:     metrics.FailureCount,
+		}
+		metrics.mutex.RUnlock()
+	}
+	
+	return result
+}
+
+// SetOptimizationEnabled enables or disables dynamic optimization
+func (cc *ChunkCoordinator) SetOptimizationEnabled(enabled bool) {
+	cc.optimizationEnabled = enabled
+}
+
+// IsOptimizationEnabled returns whether dynamic optimization is enabled
+func (cc *ChunkCoordinator) IsOptimizationEnabled() bool {
+	return cc.optimizationEnabled
+}
+
+// SetRebalanceInterval sets the interval for rebalancing chunk distribution
+func (cc *ChunkCoordinator) SetRebalanceInterval(interval time.Duration) {
+	cc.rebalanceInterval = interval
+}
+
+// GetRebalanceInterval returns the current rebalance interval
+func (cc *ChunkCoordinator) GetRebalanceInterval() time.Duration {
+	return cc.rebalanceInterval
+}
+
+// GetOptimizationStatus returns detailed status of the optimization system
+func (cc *ChunkCoordinator) GetOptimizationStatus() map[string]any {
+	status := make(map[string]any)
+	
+	status["optimization_enabled"] = cc.optimizationEnabled
+	status["rebalance_interval"] = cc.rebalanceInterval.String()
+	
+	// Get path metrics summary
+	pathMetrics := cc.GetPathMetrics()
+	pathSummary := make(map[string]any)
+	
+	for pathID, metrics := range pathMetrics {
+		pathSummary[pathID] = map[string]any{
+			"server_type":        metrics.ServerType.String(),
+			"total_chunks_sent":  metrics.TotalChunksSent,
+			"total_bytes_sent":   metrics.TotalBytesSent,
+			"average_bandwidth":  metrics.AverageBandwidth,
+			"last_bandwidth":     metrics.LastBandwidth,
+			"success_rate":       metrics.SuccessRate,
+			"average_latency":    metrics.AverageLatency.String(),
+			"last_activity":      metrics.LastActivity.Format(time.RFC3339),
+			"failure_count":      metrics.FailureCount,
+		}
+	}
+	
+	status["path_metrics"] = pathSummary
+	status["primary_bandwidth"] = cc.getPrimaryPathBandwidth()
+	status["secondary_bandwidth"] = cc.getSecondaryPathBandwidth()
+	
+	return status
+}
+// updateSecondaryPathMetrics updates performance metrics for secondary paths
+func (cc *ChunkCoordinator) updateSecondaryPathMetrics(chunkSize int32, sendDuration time.Duration, success bool) {
+	// Update metrics for all secondary paths (since we don't know which specific path was used)
+	for _, pathID := range cc.secondaryPaths {
+		cc.updatePathMetrics(pathID, chunkSize, sendDuration, success)
+	}
+}
+
+// absFloat returns the absolute value of a float64
+func absFloat(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// absInt returns the absolute value of an integer
+func absInt(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }

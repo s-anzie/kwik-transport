@@ -38,7 +38,7 @@
     - Implémenter la réception des chunks via AcceptStream()
     - _Requirements: 1.1, 1.2, 1.3_
 
-- [-] 4. Implémenter le coordinateur de chunks sur le serveur principal
+- [x] 4. Implémenter le coordinateur de chunks sur le serveur principal
   - [x] 4.1 Créer ChunkCoordinator
     - Implémenter la division des fichiers en chunks
     - Créer la stratégie de distribution des chunks
@@ -51,33 +51,33 @@
     - Ajouter la gestion des notifications de completion
     - _Requirements: 3.2, 3.3, 3.4_
 
-  - [ ] 4.3 Ajouter l'optimisation dynamique de distribution
+  - [x] 4.3 Ajouter l'optimisation dynamique de distribution
     - Implémenter la mesure de bande passante par chemin
     - Créer l'algorithme d'assignation intelligente des chunks
     - Ajouter le réajustement dynamique selon les performances
     - _Requirements: 7.1, 7.2, 7.3, 7.4_
 
-- [ ] 5. Implémenter le gestionnaire de fichiers sur le serveur principal
-  - [ ] 5.1 Créer FileTransferServer
+- [x] 5. Implémenter le gestionnaire de fichiers sur le serveur principal
+  - [x] 5.1 Créer FileTransferServer
     - Implémenter la gestion des demandes de fichier
     - Créer la lecture et division des fichiers en chunks
     - Ajouter la génération des checksums
     - _Requirements: 1.1, 2.1, 8.1_
 
-  - [ ] 5.2 Intégrer avec ServerSession existante
+  - [x] 5.2 Intégrer avec ServerSession existante
     - Connecter FileTransferServer avec la session KWIK
     - Utiliser les streams existants pour l'envoi de chunks
     - Implémenter la réception des demandes de fichier
     - _Requirements: 1.2, 1.3_
 
-- [ ] 6. Implémenter la gestion des commandes sur le serveur secondaire
-  - [ ] 6.1 Créer SecondaryFileHandler
+- [x] 6. Implémenter la gestion des commandes sur le serveur secondaire
+  - [x] 6.1 Créer SecondaryFileHandler
     - Implémenter la réception des commandes SEND_CHUNK
     - Créer la lecture et envoi des chunks demandés
     - Ajouter la notification de completion au serveur principal
     - _Requirements: 4.1, 4.2, 4.3, 4.4_
 
-  - [ ] 6.2 Intégrer avec le système de raw packets existant
+  - [x] 6.2 Intégrer avec le système de raw packets existant
     - Utiliser handleRawPacketTransmission() pour recevoir les commandes
     - Implémenter le parsing des ChunkCommand
     - Créer l'envoi des chunks via les streams KWIK
