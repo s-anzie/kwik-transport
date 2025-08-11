@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/quic-go/quic-go"
 	"kwik/internal/utils"
 )
 
@@ -51,14 +52,15 @@ const (
 
 // ClientStream represents a client-side KWIK stream
 type ClientStream struct {
-	id       uint64
-	pathID   string
-	session  ClientSession
-	created  time.Time
-	state    StreamState
-	readBuf  []byte
-	writeBuf []byte
-	mutex    sync.RWMutex
+	id         uint64
+	pathID     string
+	session    ClientSession
+	created    time.Time
+	state      StreamState
+	readBuf    []byte
+	writeBuf   []byte
+	quicStream quic.Stream // Underlying QUIC stream
+	mutex      sync.RWMutex
 }
 
 // NewClientStream creates a new client stream
@@ -74,6 +76,18 @@ func NewClientStream(id uint64, pathID string, session ClientSession) *ClientStr
 	}
 }
 
+// NewClientStreamWithQuic creates a new client stream with an underlying QUIC stream
+func NewClientStreamWithQuic(id uint64, pathID string, session ClientSession, quicStream quic.Stream) *ClientStream {
+	return &ClientStream{
+		id:         id,
+		pathID:     pathID,
+		session:    session,
+		created:    time.Now(),
+		state:      StreamStateOpen,
+		quicStream: quicStream, // Store the underlying QUIC stream
+	}
+}
+
 // Read reads data from the stream (QUIC-compatible)
 func (s *ClientStream) Read(p []byte) (int, error) {
 	s.mutex.RLock()
@@ -81,34 +95,19 @@ func (s *ClientStream) Read(p []byte) (int, error) {
 	
 	// Check stream state for QUIC compatibility
 	switch s.state {
-	case StreamStateClosed, StreamStateResetReceived:
-		return 0, utils.NewKwikError(utils.ErrStreamCreationFailed, "stream is closed", nil)
+	case StreamStateClosed, StreamStateResetSent, StreamStateResetReceived:
+		return 0, utils.NewKwikError(utils.ErrStreamClosed, "stream is closed", nil)
 	case StreamStateHalfClosedRemote:
-		// Can still read remaining data, but no new data will arrive
-		if len(s.readBuf) == 0 {
-			return 0, nil // EOF - no more data
-		}
-	case StreamStateResetSent:
-		return 0, utils.NewKwikError(utils.ErrStreamCreationFailed, "stream was reset", nil)
+		return 0, utils.NewKwikError(utils.ErrStreamClosed, "stream is half-closed for reading", nil)
 	}
 	
-	// Return available data from buffer
-	if len(s.readBuf) == 0 {
-		return 0, nil // No data available, would block in real implementation
+	// Check if we have a QUIC stream to read from
+	if s.quicStream == nil {
+		return 0, utils.NewKwikError(utils.ErrStreamCreationFailed, "no underlying QUIC stream", nil)
 	}
 	
-	// Copy data to user buffer
-	n := copy(p, s.readBuf)
-	s.readBuf = s.readBuf[n:]
-	
-	// TODO: Implement actual data reading from aggregated paths
-	// This should:
-	// 1. Read data from multiple paths via data plane
-	// 2. Aggregate and reorder data based on KWIK logical offsets
-	// 3. Return properly ordered data to application
-	// 4. Handle flow control and congestion control
-	
-	return n, nil
+	// Read directly from the underlying QUIC stream
+	return s.quicStream.Read(p)
 }
 
 // Write writes data to the stream (QUIC-compatible)
@@ -120,9 +119,9 @@ func (s *ClientStream) Write(p []byte) (int, error) {
 	// Check stream state for QUIC compatibility
 	switch s.state {
 	case StreamStateClosed, StreamStateResetSent, StreamStateResetReceived:
-		return 0, utils.NewKwikError(utils.ErrStreamCreationFailed, "stream is closed", nil)
+		return 0, utils.NewKwikError(utils.ErrStreamClosed, "stream is closed", nil)
 	case StreamStateHalfClosedLocal:
-		return 0, utils.NewKwikError(utils.ErrStreamCreationFailed, "stream is half-closed for writing", nil)
+		return 0, utils.NewKwikError(utils.ErrStreamClosed, "stream is half-closed for writing", nil)
 	}
 	
 	// Validate input
@@ -130,29 +129,19 @@ func (s *ClientStream) Write(p []byte) (int, error) {
 		return 0, nil // Nothing to write
 	}
 	
-	// Check if write would exceed buffer limits (QUIC-like flow control)
-	if len(s.writeBuf)+len(p) > utils.DefaultWriteBufferSize {
-		return 0, utils.NewKwikError(utils.ErrStreamCreationFailed, "write buffer full", nil)
+	// Check if single write would exceed reasonable limits (QUIC-like flow control)
+	// Allow large writes but prevent extremely large ones that could cause memory issues
+	if len(p) > 10*utils.DefaultWriteBufferSize {
+		return 0, utils.NewKwikError(utils.ErrStreamCreationFailed, "write too large", nil)
 	}
 	
-	// Ensure write operation uses primary path (Requirement 4.3)
-	// Client writes must always go to primary server via primary path
-	err := s.session.ValidatePathForWriteOperation(s.pathID)
-	if err != nil {
-		return 0, utils.NewKwikError(utils.ErrInvalidFrame,
-			"write operation validation failed", err)
+	// Check if we have a QUIC stream to write to
+	if s.quicStream == nil {
+		return 0, utils.NewKwikError(utils.ErrStreamCreationFailed, "no underlying QUIC stream", nil)
 	}
 	
-	// TODO: Implement actual data writing to primary path data plane
-	// This should:
-	// 1. Send data only to primary path via data plane
-	// 2. Use proper KWIK logical offsets
-	// 3. Handle flow control and congestion control
-	// 4. Fragment large writes if necessary
-	
-	s.writeBuf = append(s.writeBuf, p...)
-	
-	return len(p), nil
+	// Write directly to the underlying QUIC stream
+	return s.quicStream.Write(p)
 }
 
 // Close closes the stream (QUIC-compatible)

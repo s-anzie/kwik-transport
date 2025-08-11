@@ -60,6 +60,7 @@ type PathHealthMetrics struct {
 // Path represents a single connection path to a server
 type Path interface {
 	ID() string
+	SetID(id string) // Add SetID method for path ID synchronization
 	Address() string
 	IsActive() bool
 	IsPrimary() bool
@@ -67,6 +68,10 @@ type Path interface {
 	GetControlStream() (quic.Stream, error)
 	GetDataStreams() []quic.Stream
 	Close() error
+	
+	// New methods for proper control stream management
+	CreateControlStreamAsClient() (quic.Stream, error)
+	AcceptControlStreamAsServer() (quic.Stream, error)
 }
 
 // ConnectionWrapper wraps a QUIC connection with KWIK-specific functionality

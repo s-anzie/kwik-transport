@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/quic-go/quic-go"
+	"google.golang.org/protobuf/proto"
 	"kwik/internal/utils"
 	"kwik/pkg/protocol"
 	"kwik/proto/control"
-	"google.golang.org/protobuf/proto"
 )
 
 // ControlPlaneImpl implements the ControlPlane interface
@@ -40,27 +40,27 @@ type ControlPlaneImpl struct {
 
 // ControlPlaneConfig holds configuration for the control plane
 type ControlPlaneConfig struct {
-	MaxFrameSize        uint32
-	FrameTimeout        time.Duration
-	HeartbeatInterval   time.Duration
-	MaxRetries          int
-	EnableCompression   bool
-	EnableEncryption    bool
-	BufferSize          int
-	ProcessingWorkers   int
+	MaxFrameSize      uint32
+	FrameTimeout      time.Duration
+	HeartbeatInterval time.Duration
+	MaxRetries        int
+	EnableCompression bool
+	EnableEncryption  bool
+	BufferSize        int
+	ProcessingWorkers int
 }
 
 // DefaultControlPlaneConfig returns default control plane configuration
 func DefaultControlPlaneConfig() *ControlPlaneConfig {
 	return &ControlPlaneConfig{
-		MaxFrameSize:        utils.DefaultMaxPacketSize,
-		FrameTimeout:        utils.DefaultHandshakeTimeout,
-		HeartbeatInterval:   utils.DefaultKeepAliveInterval,
-		MaxRetries:          3,
-		EnableCompression:   false,
-		EnableEncryption:    false,
-		BufferSize:          4096,
-		ProcessingWorkers:   2,
+		MaxFrameSize:      utils.DefaultMaxPacketSize,
+		FrameTimeout:      utils.DefaultHandshakeTimeout,
+		HeartbeatInterval: utils.DefaultKeepAliveInterval,
+		MaxRetries:        3,
+		EnableCompression: false,
+		EnableEncryption:  false,
+		BufferSize:        4096,
+		ProcessingWorkers: 2,
 	}
 }
 
@@ -80,6 +80,9 @@ func NewControlPlane(config *ControlPlaneConfig) *ControlPlaneImpl {
 		cancel:              cancel,
 		config:              config,
 	}
+
+	// Register default frame handlers
+	cp.registerDefaultHandlers()
 
 	// Start processing workers
 	for i := 0; i < config.ProcessingWorkers; i++ {
@@ -257,6 +260,73 @@ func (cp *ControlPlaneImpl) HandleAuthenticationRequest(req *AuthenticationReque
 
 	return utils.NewKwikError(utils.ErrAuthenticationFailed,
 		"AuthenticationRequest handling not fully implemented", nil)
+}
+
+// HandleRawPacketTransmission handles RawPacketTransmission control frames
+func (cp *ControlPlaneImpl) HandleRawPacketTransmission(req *RawPacketTransmission) error {
+	// Validate request
+	if req == nil {
+		return utils.NewKwikError(utils.ErrInvalidFrame, "RawPacketTransmission is nil", nil)
+	}
+
+	if len(req.Data) == 0 {
+		return utils.NewKwikError(utils.ErrInvalidFrame, "raw packet data is empty", nil)
+	}
+
+	if req.TargetPathID == "" {
+		return utils.NewKwikError(utils.ErrInvalidFrame, "target path ID is empty", nil)
+	}
+
+	// Check if target path exists and is active
+	cp.pathsMutex.RLock()
+	targetStream, exists := cp.pathStreams[req.TargetPathID]
+	cp.pathsMutex.RUnlock()
+
+	if !exists {
+		return utils.NewPathNotFoundError(req.TargetPathID)
+	}
+
+	// Create raw packet transmission notification for client
+	notification := &control.RawPacketTransmission{
+		Data:           req.Data,
+		TargetPathId:   req.TargetPathID,
+		SourceServerId: req.SourceServerID,
+		ProtocolHint:   req.ProtocolHint,
+		PreserveOrder:  req.PreserveOrder,
+	}
+
+	// Serialize notification
+	payload, err := proto.Marshal(notification)
+	if err != nil {
+		return utils.NewKwikError(utils.ErrInvalidFrame,
+			"failed to serialize raw packet transmission", err)
+	}
+
+	// Create control frame
+	frame := &control.ControlFrame{
+		FrameId:      generateFrameID(),
+		Type:         control.ControlFrameType_RAW_PACKET_TRANSMISSION,
+		Payload:      payload,
+		Timestamp:    uint64(time.Now().UnixNano()),
+		SourcePathId: req.SourceServerID, // Source server ID
+		TargetPathId: req.TargetPathID,   // Target path for transmission
+	}
+
+	// Serialize and send control frame to client
+	frameData, err := proto.Marshal(frame)
+	if err != nil {
+		return utils.NewKwikError(utils.ErrInvalidFrame,
+			"failed to serialize raw packet control frame", err)
+	}
+
+	// Send to target path's control stream
+	_, err = targetStream.Write(frameData)
+	if err != nil {
+		return utils.NewKwikError(utils.ErrConnectionLost,
+			fmt.Sprintf("failed to send raw packet transmission to path %s", req.TargetPathID), err)
+	}
+
+	return nil
 }
 
 // SendPathStatusNotification sends a path status notification
@@ -593,19 +663,32 @@ func convertToControlPathStatus(status PathStatus) control.PathStatus {
 	}
 }
 
+// registerDefaultHandlers registers default frame handlers
+func (cp *ControlPlaneImpl) registerDefaultHandlers() {
+	// Register raw packet transmission handler
+	rawPacketHandler := NewRawPacketHandler(cp)
+	cp.RegisterFrameHandler(control.ControlFrameType_RAW_PACKET_TRANSMISSION, rawPacketHandler)
+
+	// TODO: Register other default handlers as they are implemented
+	// - AddPathRequest handler
+	// - RemovePathRequest handler
+	// - AuthenticationRequest handler
+	// - PathStatusNotification handler
+}
+
 // generateFrameID generates a unique frame identifier
 func generateFrameID() uint64 {
 	// Use timestamp + random bytes for better uniqueness
 	timestamp := uint64(time.Now().UnixNano())
-	
+
 	// Add some randomness to avoid collisions in high-frequency scenarios
 	randomBytes := make([]byte, 4)
 	rand.Read(randomBytes)
-	
+
 	// Combine timestamp with random data
-	randomPart := uint64(randomBytes[0])<<24 | uint64(randomBytes[1])<<16 | 
+	randomPart := uint64(randomBytes[0])<<24 | uint64(randomBytes[1])<<16 |
 		uint64(randomBytes[2])<<8 | uint64(randomBytes[3])
-	
+
 	// Use upper bits for timestamp, lower bits for randomness
 	return (timestamp & 0xFFFFFFFFFFFF0000) | (randomPart & 0x000000000000FFFF)
 }

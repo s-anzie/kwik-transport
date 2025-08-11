@@ -11,6 +11,7 @@ type ControlPlane interface {
 	HandleAddPathRequest(req *AddPathRequest) error
 	HandleRemovePathRequest(req *RemovePathRequest) error
 	HandleAuthenticationRequest(req *AuthenticationRequest) error
+	HandleRawPacketTransmission(req *RawPacketTransmission) error
 	SendPathStatusNotification(pathID string, status PathStatus) error
 }
 
@@ -71,6 +72,8 @@ type RawPacketTransmission struct {
 	Data           []byte
 	TargetPathID   string
 	SourceServerID string
+	ProtocolHint   string
+	PreserveOrder  bool
 }
 
 // PathStatus represents path status in control messages

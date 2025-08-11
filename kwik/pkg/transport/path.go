@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -47,6 +48,11 @@ func (p *path) ID() string {
 	return p.id
 }
 
+// SetID sets the path identifier (used for synchronization with server)
+func (p *path) SetID(id string) {
+	p.id = id
+}
+
 // Address returns the server address
 func (p *path) Address() string {
 	return p.address
@@ -75,16 +81,6 @@ func (p *path) GetConnection() quic.Connection {
 func (p *path) GetControlStream() (quic.Stream, error) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	
-	// Lazy initialization of control stream
-	if p.controlStream == nil && p.connection != nil && p.wrapper != nil {
-		stream, err := p.wrapper.CreateControlStream()
-		if err != nil {
-			return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
-				"failed to create control stream", err)
-		}
-		p.controlStream = stream
-	}
 	
 	if p.controlStream == nil {
 		return nil, utils.NewKwikError(utils.ErrConnectionLost,
@@ -154,10 +150,57 @@ func (p *path) removeDataStream(stream quic.Stream) {
 }
 
 // setControlStream sets the control stream for this path
+// Note: This method assumes the caller already holds the path mutex
 func (p *path) setControlStream(stream quic.Stream) {
+	p.controlStream = stream
+}
+
+// CreateControlStreamAsClient creates a control stream as client (OpenStreamSync)
+func (p *path) CreateControlStreamAsClient() (quic.Stream, error) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
+	
+	if p.connection == nil {
+		return nil, utils.NewKwikError(utils.ErrConnectionLost, "connection is nil", nil)
+	}
+	
+	// Client creates the control stream
+	stream, err := p.connection.OpenStreamSync(p.connection.Context())
+	if err != nil {
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed, 
+			"failed to create control stream as client", err)
+	}
+	
+	fmt.Printf("DEBUG: Client created control stream with ID: %d\n", stream.StreamID())
+	
+	// Set as control stream for the path
 	p.controlStream = stream
+	
+	return stream, nil
+}
+
+// AcceptControlStreamAsServer accepts a control stream as server (AcceptStream)
+func (p *path) AcceptControlStreamAsServer() (quic.Stream, error) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	
+	if p.connection == nil {
+		return nil, utils.NewKwikError(utils.ErrConnectionLost, "connection is nil", nil)
+	}
+	
+	// Server accepts the control stream created by client
+	stream, err := p.connection.AcceptStream(p.connection.Context())
+	if err != nil {
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed, 
+			"failed to accept control stream as server", err)
+	}
+	
+	fmt.Printf("DEBUG: Server accepted control stream with ID: %d\n", stream.StreamID())
+	
+	// Set as control stream for the path
+	p.controlStream = stream
+	
+	return stream, nil
 }
 
 // connectionWrapper implements the ConnectionWrapper interface

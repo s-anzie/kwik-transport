@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/quic-go/quic-go"
+	kwiктls "kwik/internal/tls"
 	"kwik/internal/utils"
 )
 
@@ -71,14 +72,8 @@ func (pm *pathManager) CreatePath(address string) (Path, error) {
 	// Create connection wrapper with path reference
 	p.wrapper = newConnectionWrapper(conn, p)
 
-	// Establish control plane stream automatically
-	err = pm.establishControlPlaneStream(p)
-	if err != nil {
-		// Close connection if control stream establishment fails
-		conn.CloseWithError(0, "failed to establish control plane stream")
-		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
-			"failed to establish control plane stream", err)
-	}
+	// NOTE: Control stream will be created manually by the session
+	// Don't create it automatically here to avoid stream ID conflicts
 
 	pm.paths[pathID] = p
 	pm.activePaths[pathID] = p
@@ -551,10 +546,19 @@ func (pm *pathManager) SetFailureThreshold(threshold int) {
 // healthMonitoringLoop runs the health monitoring in background
 func (pm *pathManager) healthMonitoringLoop() {
 	for {
+		pm.healthMutex.RLock()
+		ticker := pm.healthTicker
+		stopChan := pm.healthStopChan
+		pm.healthMutex.RUnlock()
+		
+		if ticker == nil || stopChan == nil {
+			return // Health monitoring was stopped
+		}
+		
 		select {
-		case <-pm.healthTicker.C:
+		case <-ticker.C:
 			pm.performHealthCheck()
-		case <-pm.healthStopChan:
+		case <-stopChan:
 			return
 		}
 	}
@@ -737,17 +741,8 @@ func (pm *pathManager) establishControlPlaneStream(p *path) error {
 
 // generateClientTLSConfig generates a TLS config for client connections
 func generateClientTLSConfig() *tls.Config {
-	// TODO: Implement proper TLS configuration for production
-	// This should include:
-	// 1. Proper certificate validation
-	// 2. ALPN protocol negotiation
-	// 3. Cipher suite configuration
-	// 4. Certificate pinning if required
-	
-	return &tls.Config{
-		InsecureSkipVerify: true, // For development only
-		NextProtos:         []string{"kwik"}, // ALPN for KWIK protocol
-	}
+	// Use client TLS config that accepts self-signed certificates for demo
+	return kwiктls.GenerateClientTLSConfig()
 }
 
 // generatePathID generates a unique path identifier

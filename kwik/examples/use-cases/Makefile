@@ -1,0 +1,107 @@
+# KWIK Use Cases Examples
+# Simple, focused examples demonstrating specific KWIK features
+
+.PHONY: all clean help
+
+# Build all use case examples
+all: simple-echo multi-path concurrent raw-packets
+
+# Simple Echo Example (complete client-server pair)
+simple-echo: bin
+	@echo "Building simple echo example..."
+	go build -o bin/echo-server ./simple-echo/server/server.go
+	go build -o bin/echo-client ./simple-echo/client.go
+
+# Multi-Path Example (primary server, secondary server, and client)
+multi-path: bin
+	@echo "Building multi-path example..."
+	go build -o bin/multipath-primary-server ./multi-path-demo/primary/server.go
+	go build -o bin/multipath-secondary-server ./multi-path-demo/secondary/server.go
+	go build -o bin/multipath-client ./multi-path-demo/client.go
+
+# Concurrent Streams Example (complete client-server pair)
+concurrent: bin
+	@echo "Building concurrent streams example..."
+	go build -o bin/concurrent-server ./concurrent-streams/server/server.go
+	go build -o bin/concurrent-client ./concurrent-streams/client.go
+
+# Raw Packets Example (complete client-server pair)
+raw-packets: bin
+	@echo "Building raw packets example..."
+	go build -o bin/rawpackets-server ./raw-packets/server/server.go
+	go build -o bin/rawpackets-client ./raw-packets/client.go
+
+# Run Examples - Each use case has both client and server
+run-echo-server: simple-echo
+	@echo "Starting echo server on localhost:4433..."
+	./bin/echo-server
+
+run-echo-client: simple-echo
+	@echo "Running echo client..."
+	./bin/echo-client
+
+run-multipath-primary-server: multi-path
+	@echo "Starting multi-path PRIMARY server on localhost:4433..."
+	./bin/multipath-primary-server
+
+run-multipath-secondary-server: multi-path
+	@echo "Starting multi-path SECONDARY server on localhost:4434..."
+	./bin/multipath-secondary-server
+
+run-multipath-client: multi-path
+	@echo "Running multi-path client..."
+	./bin/multipath-client
+
+# Legacy target for backward compatibility
+run-multipath-server: run-multipath-primary-server
+
+run-concurrent-server: concurrent
+	@echo "Starting concurrent streams server on localhost:4433..."
+	./bin/concurrent-server
+
+run-concurrent-client: concurrent
+	@echo "Running concurrent streams client..."
+	./bin/concurrent-client
+
+run-rawpackets-server: raw-packets
+	@echo "Starting raw packets server on localhost:4433..."
+	./bin/rawpackets-server
+
+run-rawpackets-client: raw-packets
+	@echo "Running raw packets client..."
+	./bin/rawpackets-client
+
+# Clean built binaries
+clean:
+	@echo "Cleaning use case examples..."
+	rm -rf bin/
+
+# Create bin directory
+bin:
+	mkdir -p bin
+
+# Help
+help:
+	@echo "KWIK Use Cases Examples"
+	@echo "======================"
+	@echo ""
+	@echo "Build targets (each builds complete client-server pair):"
+	@echo "  all                    - Build all examples"
+	@echo "  simple-echo           - Build simple echo client/server"
+	@echo "  multi-path            - Build multi-path demo client/server"
+	@echo "  concurrent            - Build concurrent streams client/server"
+	@echo "  raw-packets           - Build raw packets client/server"
+	@echo ""
+	@echo "Run examples (start server first, then client):"
+	@echo "  run-echo-server              - Start echo server"
+	@echo "  run-echo-client              - Run echo client"
+	@echo "  run-multipath-primary-server - Start multi-path PRIMARY server (port 4433)"
+	@echo "  run-multipath-secondary-server - Start multi-path SECONDARY server (port 4434)"
+	@echo "  run-multipath-client         - Run multi-path client"
+	@echo "  run-concurrent-server        - Start concurrent streams server"
+	@echo "  run-concurrent-client        - Run concurrent streams client"
+	@echo "  run-rawpackets-server        - Start raw packets server"
+	@echo "  run-rawpackets-client        - Run raw packets client"
+	@echo ""
+	@echo "  clean                 - Remove built binaries"
+	@echo "  help                  - Show this help"

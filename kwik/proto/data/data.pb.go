@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.6
 // 	protoc        v6.30.2
-// source: proto/data.proto
+// source: proto/data/data.proto
 
 package data
 
@@ -58,11 +58,11 @@ func (x CompressionType) String() string {
 }
 
 func (CompressionType) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_data_proto_enumTypes[0].Descriptor()
+	return file_proto_data_data_proto_enumTypes[0].Descriptor()
 }
 
 func (CompressionType) Type() protoreflect.EnumType {
-	return &file_proto_data_proto_enumTypes[0]
+	return &file_proto_data_data_proto_enumTypes[0]
 }
 
 func (x CompressionType) Number() protoreflect.EnumNumber {
@@ -71,7 +71,7 @@ func (x CompressionType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CompressionType.Descriptor instead.
 func (CompressionType) EnumDescriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{0}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{0}
 }
 
 // Data frame types - all possible data plane frame types
@@ -141,11 +141,11 @@ func (x DataFrameType) String() string {
 }
 
 func (DataFrameType) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_data_proto_enumTypes[1].Descriptor()
+	return file_proto_data_data_proto_enumTypes[1].Descriptor()
 }
 
 func (DataFrameType) Type() protoreflect.EnumType {
-	return &file_proto_data_proto_enumTypes[1]
+	return &file_proto_data_data_proto_enumTypes[1]
 }
 
 func (x DataFrameType) Number() protoreflect.EnumNumber {
@@ -154,7 +154,7 @@ func (x DataFrameType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use DataFrameType.Descriptor instead.
 func (DataFrameType) EnumDescriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{1}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{1}
 }
 
 // Stream state types
@@ -203,11 +203,11 @@ func (x StreamStateType) String() string {
 }
 
 func (StreamStateType) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_data_proto_enumTypes[2].Descriptor()
+	return file_proto_data_data_proto_enumTypes[2].Descriptor()
 }
 
 func (StreamStateType) Type() protoreflect.EnumType {
-	return &file_proto_data_proto_enumTypes[2]
+	return &file_proto_data_data_proto_enumTypes[2]
 }
 
 func (x StreamStateType) Number() protoreflect.EnumNumber {
@@ -216,7 +216,7 @@ func (x StreamStateType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use StreamStateType.Descriptor instead.
 func (StreamStateType) EnumDescriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{2}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{2}
 }
 
 // Data frame - carries application data for logical streams
@@ -237,7 +237,7 @@ type DataFrame struct {
 
 func (x *DataFrame) Reset() {
 	*x = DataFrame{}
-	mi := &file_proto_data_proto_msgTypes[0]
+	mi := &file_proto_data_data_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -249,7 +249,7 @@ func (x *DataFrame) String() string {
 func (*DataFrame) ProtoMessage() {}
 
 func (x *DataFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[0]
+	mi := &file_proto_data_data_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -262,7 +262,7 @@ func (x *DataFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataFrame.ProtoReflect.Descriptor instead.
 func (*DataFrame) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{0}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *DataFrame) GetFrameId() uint64 {
@@ -343,7 +343,7 @@ type DataPacket struct {
 
 func (x *DataPacket) Reset() {
 	*x = DataPacket{}
-	mi := &file_proto_data_proto_msgTypes[1]
+	mi := &file_proto_data_data_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -355,7 +355,7 @@ func (x *DataPacket) String() string {
 func (*DataPacket) ProtoMessage() {}
 
 func (x *DataPacket) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[1]
+	mi := &file_proto_data_data_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -368,7 +368,7 @@ func (x *DataPacket) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataPacket.ProtoReflect.Descriptor instead.
 func (*DataPacket) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{1}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *DataPacket) GetPacketId() uint64 {
@@ -427,7 +427,7 @@ type PacketMetadata struct {
 
 func (x *PacketMetadata) Reset() {
 	*x = PacketMetadata{}
-	mi := &file_proto_data_proto_msgTypes[2]
+	mi := &file_proto_data_data_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -439,7 +439,7 @@ func (x *PacketMetadata) String() string {
 func (*PacketMetadata) ProtoMessage() {}
 
 func (x *PacketMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[2]
+	mi := &file_proto_data_data_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -452,7 +452,7 @@ func (x *PacketMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PacketMetadata.ProtoReflect.Descriptor instead.
 func (*PacketMetadata) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{2}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *PacketMetadata) GetTotalSize() uint32 {
@@ -506,7 +506,7 @@ type AckFrame struct {
 
 func (x *AckFrame) Reset() {
 	*x = AckFrame{}
-	mi := &file_proto_data_proto_msgTypes[3]
+	mi := &file_proto_data_data_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -518,7 +518,7 @@ func (x *AckFrame) String() string {
 func (*AckFrame) ProtoMessage() {}
 
 func (x *AckFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[3]
+	mi := &file_proto_data_data_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -531,7 +531,7 @@ func (x *AckFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AckFrame.ProtoReflect.Descriptor instead.
 func (*AckFrame) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{3}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *AckFrame) GetAckId() uint64 {
@@ -594,7 +594,7 @@ type AckRange struct {
 
 func (x *AckRange) Reset() {
 	*x = AckRange{}
-	mi := &file_proto_data_proto_msgTypes[4]
+	mi := &file_proto_data_data_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -606,7 +606,7 @@ func (x *AckRange) String() string {
 func (*AckRange) ProtoMessage() {}
 
 func (x *AckRange) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[4]
+	mi := &file_proto_data_data_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -619,7 +619,7 @@ func (x *AckRange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AckRange.ProtoReflect.Descriptor instead.
 func (*AckRange) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{4}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *AckRange) GetStart() uint64 {
@@ -648,7 +648,7 @@ type StreamFlowControlFrame struct {
 
 func (x *StreamFlowControlFrame) Reset() {
 	*x = StreamFlowControlFrame{}
-	mi := &file_proto_data_proto_msgTypes[5]
+	mi := &file_proto_data_data_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -660,7 +660,7 @@ func (x *StreamFlowControlFrame) String() string {
 func (*StreamFlowControlFrame) ProtoMessage() {}
 
 func (x *StreamFlowControlFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[5]
+	mi := &file_proto_data_data_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -673,7 +673,7 @@ func (x *StreamFlowControlFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamFlowControlFrame.ProtoReflect.Descriptor instead.
 func (*StreamFlowControlFrame) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{5}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *StreamFlowControlFrame) GetLogicalStreamId() uint64 {
@@ -709,7 +709,7 @@ type ConnectionFlowControlFrame struct {
 
 func (x *ConnectionFlowControlFrame) Reset() {
 	*x = ConnectionFlowControlFrame{}
-	mi := &file_proto_data_proto_msgTypes[6]
+	mi := &file_proto_data_data_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -721,7 +721,7 @@ func (x *ConnectionFlowControlFrame) String() string {
 func (*ConnectionFlowControlFrame) ProtoMessage() {}
 
 func (x *ConnectionFlowControlFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[6]
+	mi := &file_proto_data_data_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -734,7 +734,7 @@ func (x *ConnectionFlowControlFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConnectionFlowControlFrame.ProtoReflect.Descriptor instead.
 func (*ConnectionFlowControlFrame) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{6}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ConnectionFlowControlFrame) GetPathId() string {
@@ -771,7 +771,7 @@ type StreamResetFrame struct {
 
 func (x *StreamResetFrame) Reset() {
 	*x = StreamResetFrame{}
-	mi := &file_proto_data_proto_msgTypes[7]
+	mi := &file_proto_data_data_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -783,7 +783,7 @@ func (x *StreamResetFrame) String() string {
 func (*StreamResetFrame) ProtoMessage() {}
 
 func (x *StreamResetFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[7]
+	mi := &file_proto_data_data_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -796,7 +796,7 @@ func (x *StreamResetFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamResetFrame.ProtoReflect.Descriptor instead.
 func (*StreamResetFrame) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{7}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *StreamResetFrame) GetLogicalStreamId() uint64 {
@@ -839,7 +839,7 @@ type StopSendingFrame struct {
 
 func (x *StopSendingFrame) Reset() {
 	*x = StopSendingFrame{}
-	mi := &file_proto_data_proto_msgTypes[8]
+	mi := &file_proto_data_data_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -851,7 +851,7 @@ func (x *StopSendingFrame) String() string {
 func (*StopSendingFrame) ProtoMessage() {}
 
 func (x *StopSendingFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[8]
+	mi := &file_proto_data_data_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -864,7 +864,7 @@ func (x *StopSendingFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopSendingFrame.ProtoReflect.Descriptor instead.
 func (*StopSendingFrame) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{8}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *StopSendingFrame) GetLogicalStreamId() uint64 {
@@ -899,7 +899,7 @@ type CryptoFrame struct {
 
 func (x *CryptoFrame) Reset() {
 	*x = CryptoFrame{}
-	mi := &file_proto_data_proto_msgTypes[9]
+	mi := &file_proto_data_data_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -911,7 +911,7 @@ func (x *CryptoFrame) String() string {
 func (*CryptoFrame) ProtoMessage() {}
 
 func (x *CryptoFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[9]
+	mi := &file_proto_data_data_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -924,7 +924,7 @@ func (x *CryptoFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CryptoFrame.ProtoReflect.Descriptor instead.
 func (*CryptoFrame) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{9}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *CryptoFrame) GetOffset() uint64 {
@@ -954,7 +954,7 @@ type NewConnectionIdFrame struct {
 
 func (x *NewConnectionIdFrame) Reset() {
 	*x = NewConnectionIdFrame{}
-	mi := &file_proto_data_proto_msgTypes[10]
+	mi := &file_proto_data_data_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -966,7 +966,7 @@ func (x *NewConnectionIdFrame) String() string {
 func (*NewConnectionIdFrame) ProtoMessage() {}
 
 func (x *NewConnectionIdFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[10]
+	mi := &file_proto_data_data_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -979,7 +979,7 @@ func (x *NewConnectionIdFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NewConnectionIdFrame.ProtoReflect.Descriptor instead.
 func (*NewConnectionIdFrame) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{10}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *NewConnectionIdFrame) GetSequenceNumber() uint64 {
@@ -1020,7 +1020,7 @@ type RetireConnectionIdFrame struct {
 
 func (x *RetireConnectionIdFrame) Reset() {
 	*x = RetireConnectionIdFrame{}
-	mi := &file_proto_data_proto_msgTypes[11]
+	mi := &file_proto_data_data_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1032,7 +1032,7 @@ func (x *RetireConnectionIdFrame) String() string {
 func (*RetireConnectionIdFrame) ProtoMessage() {}
 
 func (x *RetireConnectionIdFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[11]
+	mi := &file_proto_data_data_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1045,7 +1045,7 @@ func (x *RetireConnectionIdFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetireConnectionIdFrame.ProtoReflect.Descriptor instead.
 func (*RetireConnectionIdFrame) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{11}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RetireConnectionIdFrame) GetSequenceNumber() uint64 {
@@ -1066,7 +1066,7 @@ type PathChallengeFrame struct {
 
 func (x *PathChallengeFrame) Reset() {
 	*x = PathChallengeFrame{}
-	mi := &file_proto_data_proto_msgTypes[12]
+	mi := &file_proto_data_data_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1078,7 +1078,7 @@ func (x *PathChallengeFrame) String() string {
 func (*PathChallengeFrame) ProtoMessage() {}
 
 func (x *PathChallengeFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[12]
+	mi := &file_proto_data_data_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1091,7 +1091,7 @@ func (x *PathChallengeFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PathChallengeFrame.ProtoReflect.Descriptor instead.
 func (*PathChallengeFrame) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{12}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *PathChallengeFrame) GetChallengeData() []byte {
@@ -1119,7 +1119,7 @@ type PathResponseFrame struct {
 
 func (x *PathResponseFrame) Reset() {
 	*x = PathResponseFrame{}
-	mi := &file_proto_data_proto_msgTypes[13]
+	mi := &file_proto_data_data_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1131,7 +1131,7 @@ func (x *PathResponseFrame) String() string {
 func (*PathResponseFrame) ProtoMessage() {}
 
 func (x *PathResponseFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[13]
+	mi := &file_proto_data_data_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1144,7 +1144,7 @@ func (x *PathResponseFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PathResponseFrame.ProtoReflect.Descriptor instead.
 func (*PathResponseFrame) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{13}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *PathResponseFrame) GetResponseData() []byte {
@@ -1174,7 +1174,7 @@ type ConnectionCloseFrame struct {
 
 func (x *ConnectionCloseFrame) Reset() {
 	*x = ConnectionCloseFrame{}
-	mi := &file_proto_data_proto_msgTypes[14]
+	mi := &file_proto_data_data_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1186,7 +1186,7 @@ func (x *ConnectionCloseFrame) String() string {
 func (*ConnectionCloseFrame) ProtoMessage() {}
 
 func (x *ConnectionCloseFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[14]
+	mi := &file_proto_data_data_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1199,7 +1199,7 @@ func (x *ConnectionCloseFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConnectionCloseFrame.ProtoReflect.Descriptor instead.
 func (*ConnectionCloseFrame) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{14}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ConnectionCloseFrame) GetErrorCode() uint64 {
@@ -1240,7 +1240,7 @@ type PaddingFrame struct {
 
 func (x *PaddingFrame) Reset() {
 	*x = PaddingFrame{}
-	mi := &file_proto_data_proto_msgTypes[15]
+	mi := &file_proto_data_data_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1252,7 +1252,7 @@ func (x *PaddingFrame) String() string {
 func (*PaddingFrame) ProtoMessage() {}
 
 func (x *PaddingFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[15]
+	mi := &file_proto_data_data_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1265,7 +1265,7 @@ func (x *PaddingFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PaddingFrame.ProtoReflect.Descriptor instead.
 func (*PaddingFrame) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{15}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *PaddingFrame) GetPaddingLength() uint32 {
@@ -1286,7 +1286,7 @@ type PingFrame struct {
 
 func (x *PingFrame) Reset() {
 	*x = PingFrame{}
-	mi := &file_proto_data_proto_msgTypes[16]
+	mi := &file_proto_data_data_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1298,7 +1298,7 @@ func (x *PingFrame) String() string {
 func (*PingFrame) ProtoMessage() {}
 
 func (x *PingFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[16]
+	mi := &file_proto_data_data_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1311,7 +1311,7 @@ func (x *PingFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingFrame.ProtoReflect.Descriptor instead.
 func (*PingFrame) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{16}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *PingFrame) GetTimestamp() uint64 {
@@ -1341,7 +1341,7 @@ type DataFrameContainer struct {
 
 func (x *DataFrameContainer) Reset() {
 	*x = DataFrameContainer{}
-	mi := &file_proto_data_proto_msgTypes[17]
+	mi := &file_proto_data_data_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1353,7 +1353,7 @@ func (x *DataFrameContainer) String() string {
 func (*DataFrameContainer) ProtoMessage() {}
 
 func (x *DataFrameContainer) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[17]
+	mi := &file_proto_data_data_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1366,7 +1366,7 @@ func (x *DataFrameContainer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataFrameContainer.ProtoReflect.Descriptor instead.
 func (*DataFrameContainer) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{17}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *DataFrameContainer) GetType() DataFrameType {
@@ -1414,7 +1414,7 @@ type StreamState struct {
 
 func (x *StreamState) Reset() {
 	*x = StreamState{}
-	mi := &file_proto_data_proto_msgTypes[18]
+	mi := &file_proto_data_data_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1426,7 +1426,7 @@ func (x *StreamState) String() string {
 func (*StreamState) ProtoMessage() {}
 
 func (x *StreamState) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[18]
+	mi := &file_proto_data_data_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1439,7 +1439,7 @@ func (x *StreamState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamState.ProtoReflect.Descriptor instead.
 func (*StreamState) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{18}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *StreamState) GetLogicalStreamId() uint64 {
@@ -1513,7 +1513,7 @@ type AggregatedDataStats struct {
 
 func (x *AggregatedDataStats) Reset() {
 	*x = AggregatedDataStats{}
-	mi := &file_proto_data_proto_msgTypes[19]
+	mi := &file_proto_data_data_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1525,7 +1525,7 @@ func (x *AggregatedDataStats) String() string {
 func (*AggregatedDataStats) ProtoMessage() {}
 
 func (x *AggregatedDataStats) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[19]
+	mi := &file_proto_data_data_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1538,7 +1538,7 @@ func (x *AggregatedDataStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AggregatedDataStats.ProtoReflect.Descriptor instead.
 func (*AggregatedDataStats) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{19}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *AggregatedDataStats) GetTotalBytesSent() uint64 {
@@ -1600,7 +1600,7 @@ type PathDataStats struct {
 
 func (x *PathDataStats) Reset() {
 	*x = PathDataStats{}
-	mi := &file_proto_data_proto_msgTypes[20]
+	mi := &file_proto_data_data_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1612,7 +1612,7 @@ func (x *PathDataStats) String() string {
 func (*PathDataStats) ProtoMessage() {}
 
 func (x *PathDataStats) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_data_proto_msgTypes[20]
+	mi := &file_proto_data_data_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1625,7 +1625,7 @@ func (x *PathDataStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PathDataStats.ProtoReflect.Descriptor instead.
 func (*PathDataStats) Descriptor() ([]byte, []int) {
-	return file_proto_data_proto_rawDescGZIP(), []int{20}
+	return file_proto_data_data_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *PathDataStats) GetPathId() string {
@@ -1684,11 +1684,11 @@ func (x *PathDataStats) GetRttMs() uint64 {
 	return 0
 }
 
-var File_proto_data_proto protoreflect.FileDescriptor
+var File_proto_data_data_proto protoreflect.FileDescriptor
 
-const file_proto_data_proto_rawDesc = "" +
+const file_proto_data_data_proto_rawDesc = "" +
 	"\n" +
-	"\x10proto/data.proto\x12\tkwik.data\"\x84\x02\n" +
+	"\x15proto/data/data.proto\x12\tkwik.data\"\x84\x02\n" +
 	"\tDataFrame\x12\x19\n" +
 	"\bframe_id\x18\x01 \x01(\x04R\aframeId\x12*\n" +
 	"\x11logical_stream_id\x18\x02 \x01(\x04R\x0flogicalStreamId\x12\x16\n" +
@@ -1839,20 +1839,20 @@ const file_proto_data_proto_rawDesc = "" +
 	"\x1aDATA_STREAM_RESET_RECEIVED\x10\x06B\x11Z\x0fkwik/proto/datab\x06proto3"
 
 var (
-	file_proto_data_proto_rawDescOnce sync.Once
-	file_proto_data_proto_rawDescData []byte
+	file_proto_data_data_proto_rawDescOnce sync.Once
+	file_proto_data_data_proto_rawDescData []byte
 )
 
-func file_proto_data_proto_rawDescGZIP() []byte {
-	file_proto_data_proto_rawDescOnce.Do(func() {
-		file_proto_data_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_data_proto_rawDesc), len(file_proto_data_proto_rawDesc)))
+func file_proto_data_data_proto_rawDescGZIP() []byte {
+	file_proto_data_data_proto_rawDescOnce.Do(func() {
+		file_proto_data_data_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_data_data_proto_rawDesc), len(file_proto_data_data_proto_rawDesc)))
 	})
-	return file_proto_data_proto_rawDescData
+	return file_proto_data_data_proto_rawDescData
 }
 
-var file_proto_data_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_proto_data_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
-var file_proto_data_proto_goTypes = []any{
+var file_proto_data_data_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_proto_data_data_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_proto_data_data_proto_goTypes = []any{
 	(CompressionType)(0),               // 0: kwik.data.CompressionType
 	(DataFrameType)(0),                 // 1: kwik.data.DataFrameType
 	(StreamStateType)(0),               // 2: kwik.data.StreamStateType
@@ -1878,7 +1878,7 @@ var file_proto_data_proto_goTypes = []any{
 	(*AggregatedDataStats)(nil),        // 22: kwik.data.AggregatedDataStats
 	(*PathDataStats)(nil),              // 23: kwik.data.PathDataStats
 }
-var file_proto_data_proto_depIdxs = []int32{
+var file_proto_data_data_proto_depIdxs = []int32{
 	3,  // 0: kwik.data.DataPacket.frames:type_name -> kwik.data.DataFrame
 	5,  // 1: kwik.data.DataPacket.metadata:type_name -> kwik.data.PacketMetadata
 	0,  // 2: kwik.data.PacketMetadata.compression:type_name -> kwik.data.CompressionType
@@ -1893,27 +1893,27 @@ var file_proto_data_proto_depIdxs = []int32{
 	0,  // [0:7] is the sub-list for field type_name
 }
 
-func init() { file_proto_data_proto_init() }
-func file_proto_data_proto_init() {
-	if File_proto_data_proto != nil {
+func init() { file_proto_data_data_proto_init() }
+func file_proto_data_data_proto_init() {
+	if File_proto_data_data_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_data_proto_rawDesc), len(file_proto_data_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_data_data_proto_rawDesc), len(file_proto_data_data_proto_rawDesc)),
 			NumEnums:      3,
 			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_proto_data_proto_goTypes,
-		DependencyIndexes: file_proto_data_proto_depIdxs,
-		EnumInfos:         file_proto_data_proto_enumTypes,
-		MessageInfos:      file_proto_data_proto_msgTypes,
+		GoTypes:           file_proto_data_data_proto_goTypes,
+		DependencyIndexes: file_proto_data_data_proto_depIdxs,
+		EnumInfos:         file_proto_data_data_proto_enumTypes,
+		MessageInfos:      file_proto_data_data_proto_msgTypes,
 	}.Build()
-	File_proto_data_proto = out.File
-	file_proto_data_proto_goTypes = nil
-	file_proto_data_proto_depIdxs = nil
+	File_proto_data_data_proto = out.File
+	file_proto_data_data_proto_goTypes = nil
+	file_proto_data_data_proto_depIdxs = nil
 }

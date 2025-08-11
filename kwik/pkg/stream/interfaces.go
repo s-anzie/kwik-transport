@@ -29,6 +29,19 @@ type StreamManager interface {
 	GetActiveStreams() []*LogicalStream
 }
 
+// LogicalStreamManagerInterface manages logical KWIK streams without requiring new QUIC streams
+type LogicalStreamManagerInterface interface {
+	CreateLogicalStream(pathID string) (*LogicalStreamInfo, error)
+	GetLogicalStream(streamID uint64) (*LogicalStreamInfo, error)
+	CloseLogicalStream(streamID uint64) error
+	GetActiveStreams() []*LogicalStreamInfo
+	GetStreamCount() int
+	SetDefaultPath(pathID string)
+	GetDefaultPath() string
+	StartCleanupRoutine()
+	Close() error
+}
+
 // StreamPool manages a pool of real QUIC streams for reuse
 type StreamPool interface {
 	GetStream(pathID string) (quic.Stream, error)

@@ -24,8 +24,10 @@ enum ControlFrameType {
     AUTHENTICATION_RESPONSE = 6;
     STREAM_CREATE_NOTIFICATION = 7;
     RAW_PACKET_TRANSMISSION = 8;
-    HEARTBEAT = 9;
-    SESSION_CLOSE = 10;
+    RAW_MESSAGE_REQUEST = 9;
+    RAW_MESSAGE_RESPONSE = 10;
+    HEARTBEAT = 11;
+    SESSION_CLOSE = 12;
 }
 
 // Add path request - server requests client to connect to secondary server
@@ -34,6 +36,7 @@ message AddPathRequest {
     string session_id = 2;         // Current session ID for authentication
     uint32 priority = 3;           // Path priority (0 = highest)
     map<string, string> metadata = 4;  // Additional path metadata
+    string path_id = 5;            // Server-generated path ID that client should use
 }
 
 // Add path response - client responds with success/failure
@@ -132,6 +135,22 @@ message RawPacketTransmission {
     string source_server_id = 3;   // ID of sending server
     string protocol_hint = 4;      // Hint about the protocol of raw data
     bool preserve_order = 5;       // Whether to preserve packet order
+}
+
+// Raw message request - server requests client to send raw message to secondary server
+message RawMessageRequest {
+    string target_address = 1;     // Address of target server (e.g., "localhost:4434")
+    bytes message_data = 2;        // Raw message data to send
+    string message_id = 3;         // Unique message identifier
+    string message_type = 4;       // Type of message (optional)
+}
+
+// Raw message response - confirmation that raw message was processed
+message RawMessageResponse {
+    string message_id = 1;         // Original message identifier
+    bool success = 2;              // Whether message was sent successfully
+    string error_message = 3;      // Error message if failed
+    bytes response_data = 4;       // Optional response data from secondary server
 }
 
 // Heartbeat message - keep paths alive and measure performance

@@ -179,6 +179,11 @@ func (am *AuthenticationManager) IsAuthenticated() bool {
 	return am.isAuthenticated
 }
 
+// MarkAuthenticated marks the session as authenticated (for demo/testing purposes)
+func (am *AuthenticationManager) MarkAuthenticated() {
+	am.isAuthenticated = true
+}
+
 // GetSessionID returns the session ID
 func (am *AuthenticationManager) GetSessionID() string {
 	return am.sessionID

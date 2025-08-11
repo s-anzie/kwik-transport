@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.6
 // 	protoc        v6.30.2
-// source: proto/control.proto
+// source: proto/control/control.proto
 
 package control
 
@@ -34,8 +34,10 @@ const (
 	ControlFrameType_AUTHENTICATION_RESPONSE    ControlFrameType = 6
 	ControlFrameType_STREAM_CREATE_NOTIFICATION ControlFrameType = 7
 	ControlFrameType_RAW_PACKET_TRANSMISSION    ControlFrameType = 8
-	ControlFrameType_HEARTBEAT                  ControlFrameType = 9
-	ControlFrameType_SESSION_CLOSE              ControlFrameType = 10
+	ControlFrameType_RAW_MESSAGE_REQUEST        ControlFrameType = 9
+	ControlFrameType_RAW_MESSAGE_RESPONSE       ControlFrameType = 10
+	ControlFrameType_HEARTBEAT                  ControlFrameType = 11
+	ControlFrameType_SESSION_CLOSE              ControlFrameType = 12
 )
 
 // Enum value maps for ControlFrameType.
@@ -50,8 +52,10 @@ var (
 		6:  "AUTHENTICATION_RESPONSE",
 		7:  "STREAM_CREATE_NOTIFICATION",
 		8:  "RAW_PACKET_TRANSMISSION",
-		9:  "HEARTBEAT",
-		10: "SESSION_CLOSE",
+		9:  "RAW_MESSAGE_REQUEST",
+		10: "RAW_MESSAGE_RESPONSE",
+		11: "HEARTBEAT",
+		12: "SESSION_CLOSE",
 	}
 	ControlFrameType_value = map[string]int32{
 		"ADD_PATH_REQUEST":           0,
@@ -63,8 +67,10 @@ var (
 		"AUTHENTICATION_RESPONSE":    6,
 		"STREAM_CREATE_NOTIFICATION": 7,
 		"RAW_PACKET_TRANSMISSION":    8,
-		"HEARTBEAT":                  9,
-		"SESSION_CLOSE":              10,
+		"RAW_MESSAGE_REQUEST":        9,
+		"RAW_MESSAGE_RESPONSE":       10,
+		"HEARTBEAT":                  11,
+		"SESSION_CLOSE":              12,
 	}
 )
 
@@ -79,11 +85,11 @@ func (x ControlFrameType) String() string {
 }
 
 func (ControlFrameType) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_control_proto_enumTypes[0].Descriptor()
+	return file_proto_control_control_proto_enumTypes[0].Descriptor()
 }
 
 func (ControlFrameType) Type() protoreflect.EnumType {
-	return &file_proto_control_proto_enumTypes[0]
+	return &file_proto_control_control_proto_enumTypes[0]
 }
 
 func (x ControlFrameType) Number() protoreflect.EnumNumber {
@@ -92,7 +98,7 @@ func (x ControlFrameType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ControlFrameType.Descriptor instead.
 func (ControlFrameType) EnumDescriptor() ([]byte, []int) {
-	return file_proto_control_proto_rawDescGZIP(), []int{0}
+	return file_proto_control_control_proto_rawDescGZIP(), []int{0}
 }
 
 // Path status enum - possible path states
@@ -138,11 +144,11 @@ func (x PathStatus) String() string {
 }
 
 func (PathStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_control_proto_enumTypes[1].Descriptor()
+	return file_proto_control_control_proto_enumTypes[1].Descriptor()
 }
 
 func (PathStatus) Type() protoreflect.EnumType {
-	return &file_proto_control_proto_enumTypes[1]
+	return &file_proto_control_control_proto_enumTypes[1]
 }
 
 func (x PathStatus) Number() protoreflect.EnumNumber {
@@ -151,7 +157,7 @@ func (x PathStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use PathStatus.Descriptor instead.
 func (PathStatus) EnumDescriptor() ([]byte, []int) {
-	return file_proto_control_proto_rawDescGZIP(), []int{1}
+	return file_proto_control_control_proto_rawDescGZIP(), []int{1}
 }
 
 // Stream types
@@ -191,11 +197,11 @@ func (x StreamType) String() string {
 }
 
 func (StreamType) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_control_proto_enumTypes[2].Descriptor()
+	return file_proto_control_control_proto_enumTypes[2].Descriptor()
 }
 
 func (StreamType) Type() protoreflect.EnumType {
-	return &file_proto_control_proto_enumTypes[2]
+	return &file_proto_control_control_proto_enumTypes[2]
 }
 
 func (x StreamType) Number() protoreflect.EnumNumber {
@@ -204,7 +210,7 @@ func (x StreamType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use StreamType.Descriptor instead.
 func (StreamType) EnumDescriptor() ([]byte, []int) {
-	return file_proto_control_proto_rawDescGZIP(), []int{2}
+	return file_proto_control_control_proto_rawDescGZIP(), []int{2}
 }
 
 // Control frame wrapper - main container for all control messages
@@ -222,7 +228,7 @@ type ControlFrame struct {
 
 func (x *ControlFrame) Reset() {
 	*x = ControlFrame{}
-	mi := &file_proto_control_proto_msgTypes[0]
+	mi := &file_proto_control_control_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -234,7 +240,7 @@ func (x *ControlFrame) String() string {
 func (*ControlFrame) ProtoMessage() {}
 
 func (x *ControlFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_control_proto_msgTypes[0]
+	mi := &file_proto_control_control_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -247,7 +253,7 @@ func (x *ControlFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ControlFrame.ProtoReflect.Descriptor instead.
 func (*ControlFrame) Descriptor() ([]byte, []int) {
-	return file_proto_control_proto_rawDescGZIP(), []int{0}
+	return file_proto_control_control_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *ControlFrame) GetFrameId() uint64 {
@@ -299,13 +305,14 @@ type AddPathRequest struct {
 	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`                                                        // Current session ID for authentication
 	Priority      uint32                 `protobuf:"varint,3,opt,name=priority,proto3" json:"priority,omitempty"`                                                                          // Path priority (0 = highest)
 	Metadata      map[string]string      `protobuf:"bytes,4,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Additional path metadata
+	PathId        string                 `protobuf:"bytes,5,opt,name=path_id,json=pathId,proto3" json:"path_id,omitempty"`                                                                 // Server-generated path ID that client should use
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AddPathRequest) Reset() {
 	*x = AddPathRequest{}
-	mi := &file_proto_control_proto_msgTypes[1]
+	mi := &file_proto_control_control_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -317,7 +324,7 @@ func (x *AddPathRequest) String() string {
 func (*AddPathRequest) ProtoMessage() {}
 
 func (x *AddPathRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_control_proto_msgTypes[1]
+	mi := &file_proto_control_control_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -330,7 +337,7 @@ func (x *AddPathRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddPathRequest.ProtoReflect.Descriptor instead.
 func (*AddPathRequest) Descriptor() ([]byte, []int) {
-	return file_proto_control_proto_rawDescGZIP(), []int{1}
+	return file_proto_control_control_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *AddPathRequest) GetTargetAddress() string {
@@ -361,6 +368,13 @@ func (x *AddPathRequest) GetMetadata() map[string]string {
 	return nil
 }
 
+func (x *AddPathRequest) GetPathId() string {
+	if x != nil {
+		return x.PathId
+	}
+	return ""
+}
+
 // Add path response - client responds with success/failure
 type AddPathResponse struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
@@ -375,7 +389,7 @@ type AddPathResponse struct {
 
 func (x *AddPathResponse) Reset() {
 	*x = AddPathResponse{}
-	mi := &file_proto_control_proto_msgTypes[2]
+	mi := &file_proto_control_control_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -387,7 +401,7 @@ func (x *AddPathResponse) String() string {
 func (*AddPathResponse) ProtoMessage() {}
 
 func (x *AddPathResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_control_proto_msgTypes[2]
+	mi := &file_proto_control_control_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -400,7 +414,7 @@ func (x *AddPathResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddPathResponse.ProtoReflect.Descriptor instead.
 func (*AddPathResponse) Descriptor() ([]byte, []int) {
-	return file_proto_control_proto_rawDescGZIP(), []int{2}
+	return file_proto_control_control_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *AddPathResponse) GetSuccess() bool {
@@ -451,7 +465,7 @@ type RemovePathRequest struct {
 
 func (x *RemovePathRequest) Reset() {
 	*x = RemovePathRequest{}
-	mi := &file_proto_control_proto_msgTypes[3]
+	mi := &file_proto_control_control_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -463,7 +477,7 @@ func (x *RemovePathRequest) String() string {
 func (*RemovePathRequest) ProtoMessage() {}
 
 func (x *RemovePathRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_control_proto_msgTypes[3]
+	mi := &file_proto_control_control_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -476,7 +490,7 @@ func (x *RemovePathRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemovePathRequest.ProtoReflect.Descriptor instead.
 func (*RemovePathRequest) Descriptor() ([]byte, []int) {
-	return file_proto_control_proto_rawDescGZIP(), []int{3}
+	return file_proto_control_control_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *RemovePathRequest) GetPathId() string {
@@ -520,7 +534,7 @@ type RemovePathResponse struct {
 
 func (x *RemovePathResponse) Reset() {
 	*x = RemovePathResponse{}
-	mi := &file_proto_control_proto_msgTypes[4]
+	mi := &file_proto_control_control_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -532,7 +546,7 @@ func (x *RemovePathResponse) String() string {
 func (*RemovePathResponse) ProtoMessage() {}
 
 func (x *RemovePathResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_control_proto_msgTypes[4]
+	mi := &file_proto_control_control_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -545,7 +559,7 @@ func (x *RemovePathResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemovePathResponse.ProtoReflect.Descriptor instead.
 func (*RemovePathResponse) Descriptor() ([]byte, []int) {
-	return file_proto_control_proto_rawDescGZIP(), []int{4}
+	return file_proto_control_control_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *RemovePathResponse) GetSuccess() bool {
@@ -590,7 +604,7 @@ type PathStatusNotification struct {
 
 func (x *PathStatusNotification) Reset() {
 	*x = PathStatusNotification{}
-	mi := &file_proto_control_proto_msgTypes[5]
+	mi := &file_proto_control_control_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -602,7 +616,7 @@ func (x *PathStatusNotification) String() string {
 func (*PathStatusNotification) ProtoMessage() {}
 
 func (x *PathStatusNotification) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_control_proto_msgTypes[5]
+	mi := &file_proto_control_control_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -615,7 +629,7 @@ func (x *PathStatusNotification) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PathStatusNotification.ProtoReflect.Descriptor instead.
 func (*PathStatusNotification) Descriptor() ([]byte, []int) {
-	return file_proto_control_proto_rawDescGZIP(), []int{5}
+	return file_proto_control_control_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *PathStatusNotification) GetPathId() string {
@@ -668,7 +682,7 @@ type PathMetrics struct {
 
 func (x *PathMetrics) Reset() {
 	*x = PathMetrics{}
-	mi := &file_proto_control_proto_msgTypes[6]
+	mi := &file_proto_control_control_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -680,7 +694,7 @@ func (x *PathMetrics) String() string {
 func (*PathMetrics) ProtoMessage() {}
 
 func (x *PathMetrics) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_control_proto_msgTypes[6]
+	mi := &file_proto_control_control_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -693,7 +707,7 @@ func (x *PathMetrics) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PathMetrics.ProtoReflect.Descriptor instead.
 func (*PathMetrics) Descriptor() ([]byte, []int) {
-	return file_proto_control_proto_rawDescGZIP(), []int{6}
+	return file_proto_control_control_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *PathMetrics) GetRttMs() uint64 {
@@ -751,7 +765,7 @@ type AuthenticationRequest struct {
 
 func (x *AuthenticationRequest) Reset() {
 	*x = AuthenticationRequest{}
-	mi := &file_proto_control_proto_msgTypes[7]
+	mi := &file_proto_control_control_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -763,7 +777,7 @@ func (x *AuthenticationRequest) String() string {
 func (*AuthenticationRequest) ProtoMessage() {}
 
 func (x *AuthenticationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_control_proto_msgTypes[7]
+	mi := &file_proto_control_control_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -776,7 +790,7 @@ func (x *AuthenticationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthenticationRequest.ProtoReflect.Descriptor instead.
 func (*AuthenticationRequest) Descriptor() ([]byte, []int) {
-	return file_proto_control_proto_rawDescGZIP(), []int{7}
+	return file_proto_control_control_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *AuthenticationRequest) GetSessionId() string {
@@ -822,7 +836,7 @@ type AuthenticationResponse struct {
 
 func (x *AuthenticationResponse) Reset() {
 	*x = AuthenticationResponse{}
-	mi := &file_proto_control_proto_msgTypes[8]
+	mi := &file_proto_control_control_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -834,7 +848,7 @@ func (x *AuthenticationResponse) String() string {
 func (*AuthenticationResponse) ProtoMessage() {}
 
 func (x *AuthenticationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_control_proto_msgTypes[8]
+	mi := &file_proto_control_control_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -847,7 +861,7 @@ func (x *AuthenticationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthenticationResponse.ProtoReflect.Descriptor instead.
 func (*AuthenticationResponse) Descriptor() ([]byte, []int) {
-	return file_proto_control_proto_rawDescGZIP(), []int{8}
+	return file_proto_control_control_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *AuthenticationResponse) GetSuccess() bool {
@@ -906,7 +920,7 @@ type StreamCreateNotification struct {
 
 func (x *StreamCreateNotification) Reset() {
 	*x = StreamCreateNotification{}
-	mi := &file_proto_control_proto_msgTypes[9]
+	mi := &file_proto_control_control_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -918,7 +932,7 @@ func (x *StreamCreateNotification) String() string {
 func (*StreamCreateNotification) ProtoMessage() {}
 
 func (x *StreamCreateNotification) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_control_proto_msgTypes[9]
+	mi := &file_proto_control_control_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -931,7 +945,7 @@ func (x *StreamCreateNotification) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamCreateNotification.ProtoReflect.Descriptor instead.
 func (*StreamCreateNotification) Descriptor() ([]byte, []int) {
-	return file_proto_control_proto_rawDescGZIP(), []int{9}
+	return file_proto_control_control_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *StreamCreateNotification) GetLogicalStreamId() uint64 {
@@ -983,7 +997,7 @@ type RawPacketTransmission struct {
 
 func (x *RawPacketTransmission) Reset() {
 	*x = RawPacketTransmission{}
-	mi := &file_proto_control_proto_msgTypes[10]
+	mi := &file_proto_control_control_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -995,7 +1009,7 @@ func (x *RawPacketTransmission) String() string {
 func (*RawPacketTransmission) ProtoMessage() {}
 
 func (x *RawPacketTransmission) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_control_proto_msgTypes[10]
+	mi := &file_proto_control_control_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1008,7 +1022,7 @@ func (x *RawPacketTransmission) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RawPacketTransmission.ProtoReflect.Descriptor instead.
 func (*RawPacketTransmission) Descriptor() ([]byte, []int) {
-	return file_proto_control_proto_rawDescGZIP(), []int{10}
+	return file_proto_control_control_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RawPacketTransmission) GetData() []byte {
@@ -1046,6 +1060,144 @@ func (x *RawPacketTransmission) GetPreserveOrder() bool {
 	return false
 }
 
+// Raw message request - server requests client to send raw message to secondary server
+type RawMessageRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TargetAddress string                 `protobuf:"bytes,1,opt,name=target_address,json=targetAddress,proto3" json:"target_address,omitempty"` // Address of target server (e.g., "localhost:4434")
+	MessageData   []byte                 `protobuf:"bytes,2,opt,name=message_data,json=messageData,proto3" json:"message_data,omitempty"`       // Raw message data to send
+	MessageId     string                 `protobuf:"bytes,3,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`             // Unique message identifier
+	MessageType   string                 `protobuf:"bytes,4,opt,name=message_type,json=messageType,proto3" json:"message_type,omitempty"`       // Type of message (optional)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RawMessageRequest) Reset() {
+	*x = RawMessageRequest{}
+	mi := &file_proto_control_control_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RawMessageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RawMessageRequest) ProtoMessage() {}
+
+func (x *RawMessageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_control_control_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RawMessageRequest.ProtoReflect.Descriptor instead.
+func (*RawMessageRequest) Descriptor() ([]byte, []int) {
+	return file_proto_control_control_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *RawMessageRequest) GetTargetAddress() string {
+	if x != nil {
+		return x.TargetAddress
+	}
+	return ""
+}
+
+func (x *RawMessageRequest) GetMessageData() []byte {
+	if x != nil {
+		return x.MessageData
+	}
+	return nil
+}
+
+func (x *RawMessageRequest) GetMessageId() string {
+	if x != nil {
+		return x.MessageId
+	}
+	return ""
+}
+
+func (x *RawMessageRequest) GetMessageType() string {
+	if x != nil {
+		return x.MessageType
+	}
+	return ""
+}
+
+// Raw message response - confirmation that raw message was processed
+type RawMessageResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	MessageId     string                 `protobuf:"bytes,1,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`          // Original message identifier
+	Success       bool                   `protobuf:"varint,2,opt,name=success,proto3" json:"success,omitempty"`                              // Whether message was sent successfully
+	ErrorMessage  string                 `protobuf:"bytes,3,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"` // Error message if failed
+	ResponseData  []byte                 `protobuf:"bytes,4,opt,name=response_data,json=responseData,proto3" json:"response_data,omitempty"` // Optional response data from secondary server
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RawMessageResponse) Reset() {
+	*x = RawMessageResponse{}
+	mi := &file_proto_control_control_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RawMessageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RawMessageResponse) ProtoMessage() {}
+
+func (x *RawMessageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_control_control_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RawMessageResponse.ProtoReflect.Descriptor instead.
+func (*RawMessageResponse) Descriptor() ([]byte, []int) {
+	return file_proto_control_control_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *RawMessageResponse) GetMessageId() string {
+	if x != nil {
+		return x.MessageId
+	}
+	return ""
+}
+
+func (x *RawMessageResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *RawMessageResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *RawMessageResponse) GetResponseData() []byte {
+	if x != nil {
+		return x.ResponseData
+	}
+	return nil
+}
+
 // Heartbeat message - keep paths alive and measure performance
 type Heartbeat struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
@@ -1059,7 +1211,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_proto_control_proto_msgTypes[11]
+	mi := &file_proto_control_control_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1071,7 +1223,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_control_proto_msgTypes[11]
+	mi := &file_proto_control_control_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1084,7 +1236,7 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_proto_control_proto_rawDescGZIP(), []int{11}
+	return file_proto_control_control_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Heartbeat) GetSequenceNumber() uint64 {
@@ -1127,7 +1279,7 @@ type SessionClose struct {
 
 func (x *SessionClose) Reset() {
 	*x = SessionClose{}
-	mi := &file_proto_control_proto_msgTypes[12]
+	mi := &file_proto_control_control_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1139,7 +1291,7 @@ func (x *SessionClose) String() string {
 func (*SessionClose) ProtoMessage() {}
 
 func (x *SessionClose) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_control_proto_msgTypes[12]
+	mi := &file_proto_control_control_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1152,7 +1304,7 @@ func (x *SessionClose) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionClose.ProtoReflect.Descriptor instead.
 func (*SessionClose) Descriptor() ([]byte, []int) {
-	return file_proto_control_proto_rawDescGZIP(), []int{12}
+	return file_proto_control_control_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *SessionClose) GetReason() string {
@@ -1176,24 +1328,25 @@ func (x *SessionClose) GetMigrateStreams() bool {
 	return false
 }
 
-var File_proto_control_proto protoreflect.FileDescriptor
+var File_proto_control_control_proto protoreflect.FileDescriptor
 
-const file_proto_control_proto_rawDesc = "" +
+const file_proto_control_control_proto_rawDesc = "" +
 	"\n" +
-	"\x13proto/control.proto\x12\fkwik.control\"\xe1\x01\n" +
+	"\x1bproto/control/control.proto\x12\fkwik.control\"\xe1\x01\n" +
 	"\fControlFrame\x12\x19\n" +
 	"\bframe_id\x18\x01 \x01(\x04R\aframeId\x122\n" +
 	"\x04type\x18\x02 \x01(\x0e2\x1e.kwik.control.ControlFrameTypeR\x04type\x12\x18\n" +
 	"\apayload\x18\x03 \x01(\fR\apayload\x12\x1c\n" +
 	"\ttimestamp\x18\x04 \x01(\x04R\ttimestamp\x12$\n" +
 	"\x0esource_path_id\x18\x05 \x01(\tR\fsourcePathId\x12$\n" +
-	"\x0etarget_path_id\x18\x06 \x01(\tR\ftargetPathId\"\xf7\x01\n" +
+	"\x0etarget_path_id\x18\x06 \x01(\tR\ftargetPathId\"\x90\x02\n" +
 	"\x0eAddPathRequest\x12%\n" +
 	"\x0etarget_address\x18\x01 \x01(\tR\rtargetAddress\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x1a\n" +
 	"\bpriority\x18\x03 \x01(\rR\bpriority\x12F\n" +
-	"\bmetadata\x18\x04 \x03(\v2*.kwik.control.AddPathRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\x04 \x03(\v2*.kwik.control.AddPathRequest.MetadataEntryR\bmetadata\x12\x17\n" +
+	"\apath_id\x18\x05 \x01(\tR\x06pathId\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb6\x01\n" +
@@ -1258,7 +1411,19 @@ const file_proto_control_proto_rawDesc = "" +
 	"\x0etarget_path_id\x18\x02 \x01(\tR\ftargetPathId\x12(\n" +
 	"\x10source_server_id\x18\x03 \x01(\tR\x0esourceServerId\x12#\n" +
 	"\rprotocol_hint\x18\x04 \x01(\tR\fprotocolHint\x12%\n" +
-	"\x0epreserve_order\x18\x05 \x01(\bR\rpreserveOrder\"\xb3\x01\n" +
+	"\x0epreserve_order\x18\x05 \x01(\bR\rpreserveOrder\"\x9f\x01\n" +
+	"\x11RawMessageRequest\x12%\n" +
+	"\x0etarget_address\x18\x01 \x01(\tR\rtargetAddress\x12!\n" +
+	"\fmessage_data\x18\x02 \x01(\fR\vmessageData\x12\x1d\n" +
+	"\n" +
+	"message_id\x18\x03 \x01(\tR\tmessageId\x12!\n" +
+	"\fmessage_type\x18\x04 \x01(\tR\vmessageType\"\x97\x01\n" +
+	"\x12RawMessageResponse\x12\x1d\n" +
+	"\n" +
+	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x18\n" +
+	"\asuccess\x18\x02 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\x12#\n" +
+	"\rresponse_data\x18\x04 \x01(\fR\fresponseData\"\xb3\x01\n" +
 	"\tHeartbeat\x12'\n" +
 	"\x0fsequence_number\x18\x01 \x01(\x04R\x0esequenceNumber\x12\x1c\n" +
 	"\ttimestamp\x18\x02 \x01(\x04R\ttimestamp\x12\x1b\n" +
@@ -1268,7 +1433,7 @@ const file_proto_control_proto_rawDesc = "" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\x12\x1d\n" +
 	"\n" +
 	"timeout_ms\x18\x02 \x01(\rR\ttimeoutMs\x12'\n" +
-	"\x0fmigrate_streams\x18\x03 \x01(\bR\x0emigrateStreams*\xa8\x02\n" +
+	"\x0fmigrate_streams\x18\x03 \x01(\bR\x0emigrateStreams*\xdb\x02\n" +
 	"\x10ControlFrameType\x12\x14\n" +
 	"\x10ADD_PATH_REQUEST\x10\x00\x12\x15\n" +
 	"\x11ADD_PATH_RESPONSE\x10\x01\x12\x17\n" +
@@ -1278,10 +1443,12 @@ const file_proto_control_proto_rawDesc = "" +
 	"\x16AUTHENTICATION_REQUEST\x10\x05\x12\x1b\n" +
 	"\x17AUTHENTICATION_RESPONSE\x10\x06\x12\x1e\n" +
 	"\x1aSTREAM_CREATE_NOTIFICATION\x10\a\x12\x1b\n" +
-	"\x17RAW_PACKET_TRANSMISSION\x10\b\x12\r\n" +
-	"\tHEARTBEAT\x10\t\x12\x11\n" +
-	"\rSESSION_CLOSE\x10\n" +
-	"*\xb1\x01\n" +
+	"\x17RAW_PACKET_TRANSMISSION\x10\b\x12\x17\n" +
+	"\x13RAW_MESSAGE_REQUEST\x10\t\x12\x18\n" +
+	"\x14RAW_MESSAGE_RESPONSE\x10\n" +
+	"\x12\r\n" +
+	"\tHEARTBEAT\x10\v\x12\x11\n" +
+	"\rSESSION_CLOSE\x10\f*\xb1\x01\n" +
 	"\n" +
 	"PathStatus\x12\x17\n" +
 	"\x13CONTROL_PATH_ACTIVE\x10\x00\x12\x15\n" +
@@ -1298,20 +1465,20 @@ const file_proto_control_proto_rawDesc = "" +
 	"\x13CONTROL_STREAM_DATA\x10\x03B\x14Z\x12kwik/proto/controlb\x06proto3"
 
 var (
-	file_proto_control_proto_rawDescOnce sync.Once
-	file_proto_control_proto_rawDescData []byte
+	file_proto_control_control_proto_rawDescOnce sync.Once
+	file_proto_control_control_proto_rawDescData []byte
 )
 
-func file_proto_control_proto_rawDescGZIP() []byte {
-	file_proto_control_proto_rawDescOnce.Do(func() {
-		file_proto_control_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_control_proto_rawDesc), len(file_proto_control_proto_rawDesc)))
+func file_proto_control_control_proto_rawDescGZIP() []byte {
+	file_proto_control_control_proto_rawDescOnce.Do(func() {
+		file_proto_control_control_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_control_control_proto_rawDesc), len(file_proto_control_control_proto_rawDesc)))
 	})
-	return file_proto_control_proto_rawDescData
+	return file_proto_control_control_proto_rawDescData
 }
 
-var file_proto_control_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_proto_control_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
-var file_proto_control_proto_goTypes = []any{
+var file_proto_control_control_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_proto_control_control_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_proto_control_control_proto_goTypes = []any{
 	(ControlFrameType)(0),            // 0: kwik.control.ControlFrameType
 	(PathStatus)(0),                  // 1: kwik.control.PathStatus
 	(StreamType)(0),                  // 2: kwik.control.StreamType
@@ -1326,18 +1493,20 @@ var file_proto_control_proto_goTypes = []any{
 	(*AuthenticationResponse)(nil),   // 11: kwik.control.AuthenticationResponse
 	(*StreamCreateNotification)(nil), // 12: kwik.control.StreamCreateNotification
 	(*RawPacketTransmission)(nil),    // 13: kwik.control.RawPacketTransmission
-	(*Heartbeat)(nil),                // 14: kwik.control.Heartbeat
-	(*SessionClose)(nil),             // 15: kwik.control.SessionClose
-	nil,                              // 16: kwik.control.AddPathRequest.MetadataEntry
-	nil,                              // 17: kwik.control.StreamCreateNotification.MetadataEntry
+	(*RawMessageRequest)(nil),        // 14: kwik.control.RawMessageRequest
+	(*RawMessageResponse)(nil),       // 15: kwik.control.RawMessageResponse
+	(*Heartbeat)(nil),                // 16: kwik.control.Heartbeat
+	(*SessionClose)(nil),             // 17: kwik.control.SessionClose
+	nil,                              // 18: kwik.control.AddPathRequest.MetadataEntry
+	nil,                              // 19: kwik.control.StreamCreateNotification.MetadataEntry
 }
-var file_proto_control_proto_depIdxs = []int32{
+var file_proto_control_control_proto_depIdxs = []int32{
 	0,  // 0: kwik.control.ControlFrame.type:type_name -> kwik.control.ControlFrameType
-	16, // 1: kwik.control.AddPathRequest.metadata:type_name -> kwik.control.AddPathRequest.MetadataEntry
+	18, // 1: kwik.control.AddPathRequest.metadata:type_name -> kwik.control.AddPathRequest.MetadataEntry
 	1,  // 2: kwik.control.PathStatusNotification.status:type_name -> kwik.control.PathStatus
 	9,  // 3: kwik.control.PathStatusNotification.metrics:type_name -> kwik.control.PathMetrics
 	2,  // 4: kwik.control.StreamCreateNotification.stream_type:type_name -> kwik.control.StreamType
-	17, // 5: kwik.control.StreamCreateNotification.metadata:type_name -> kwik.control.StreamCreateNotification.MetadataEntry
+	19, // 5: kwik.control.StreamCreateNotification.metadata:type_name -> kwik.control.StreamCreateNotification.MetadataEntry
 	9,  // 6: kwik.control.Heartbeat.current_metrics:type_name -> kwik.control.PathMetrics
 	7,  // [7:7] is the sub-list for method output_type
 	7,  // [7:7] is the sub-list for method input_type
@@ -1346,27 +1515,27 @@ var file_proto_control_proto_depIdxs = []int32{
 	0,  // [0:7] is the sub-list for field type_name
 }
 
-func init() { file_proto_control_proto_init() }
-func file_proto_control_proto_init() {
-	if File_proto_control_proto != nil {
+func init() { file_proto_control_control_proto_init() }
+func file_proto_control_control_proto_init() {
+	if File_proto_control_control_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_control_proto_rawDesc), len(file_proto_control_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_control_control_proto_rawDesc), len(file_proto_control_control_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   15,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_proto_control_proto_goTypes,
-		DependencyIndexes: file_proto_control_proto_depIdxs,
-		EnumInfos:         file_proto_control_proto_enumTypes,
-		MessageInfos:      file_proto_control_proto_msgTypes,
+		GoTypes:           file_proto_control_control_proto_goTypes,
+		DependencyIndexes: file_proto_control_control_proto_depIdxs,
+		EnumInfos:         file_proto_control_control_proto_enumTypes,
+		MessageInfos:      file_proto_control_control_proto_msgTypes,
 	}.Build()
-	File_proto_control_proto = out.File
-	file_proto_control_proto_goTypes = nil
-	file_proto_control_proto_depIdxs = nil
+	File_proto_control_control_proto = out.File
+	file_proto_control_control_proto_goTypes = nil
+	file_proto_control_control_proto_depIdxs = nil
 }

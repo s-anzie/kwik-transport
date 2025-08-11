@@ -32,6 +32,7 @@ const (
 	MaxPaths              = 16
 	PathHealthCheckInterval = 5 * time.Second
 	DeadPathTimeout       = 30 * time.Second
+	GracefulCloseTimeout  = 5 * time.Second
 )
 
 // Frame type constants
@@ -88,4 +89,9 @@ func IsFeatureSupported(feature string) bool {
 		}
 	}
 	return false
+}
+
+// GetCurrentTimestamp returns the current Unix timestamp in nanoseconds
+func GetCurrentTimestamp() int64 {
+	return time.Now().UnixNano()
 }
