@@ -1,7 +1,7 @@
 package transport
 
 import (
-	"fmt"
+	
 	"sync"
 	"time"
 
@@ -171,8 +171,6 @@ func (p *path) CreateControlStreamAsClient() (quic.Stream, error) {
 			"failed to create control stream as client", err)
 	}
 	
-	fmt.Printf("DEBUG: Client created control stream with ID: %d\n", stream.StreamID())
-	
 	// Set as control stream for the path
 	p.controlStream = stream
 	
@@ -194,8 +192,6 @@ func (p *path) AcceptControlStreamAsServer() (quic.Stream, error) {
 		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed, 
 			"failed to accept control stream as server", err)
 	}
-	
-	fmt.Printf("DEBUG: Server accepted control stream with ID: %d\n", stream.StreamID())
 	
 	// Set as control stream for the path
 	p.controlStream = stream

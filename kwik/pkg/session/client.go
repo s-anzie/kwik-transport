@@ -112,20 +112,17 @@ func Dial(ctx context.Context, address string, config *SessionConfig) (Session, 
 	session := NewClientSession(pathManager, config)
 
 	// Establish primary path with QUIC connection
-	fmt.Printf("DEBUG: Client about to create primary path to %s\n", address)
 	primaryPath, err := pathManager.CreatePath(address)
 	if err != nil {
 		session.Close() // Clean up session if path creation fails
 		return nil, utils.NewKwikError(utils.ErrConnectionLost,
 			fmt.Sprintf("failed to create primary path to %s", address), err)
 	}
-	fmt.Printf("DEBUG: Client successfully created primary path\n")
 
 	session.primaryPath = primaryPath
 
 	// CLIENT CREATES THE CONTROL STREAM (OpenStreamSync)
 	// This MUST be the very first stream (ID 0)
-	fmt.Printf("DEBUG: Client about to create control stream (should be ID 0)...\n")
 	_, err = primaryPath.CreateControlStreamAsClient()
 	if err != nil {
 		fmt.Printf("DEBUG: Client FAILED to create control stream: %v\n", err)
@@ -133,9 +130,6 @@ func Dial(ctx context.Context, address string, config *SessionConfig) (Session, 
 		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
 			"failed to create control stream as client", err)
 	}
-	fmt.Printf("DEBUG: Client successfully created control stream\n")
-
-	fmt.Printf("DEBUG: Client about to start authentication...\n")
 
 	// IMMEDIATELY send authentication after control stream creation
 	// This ensures the server can read the authentication request right away
@@ -147,7 +141,6 @@ func Dial(ctx context.Context, address string, config *SessionConfig) (Session, 
 			"authentication failed during primary path establishment", err)
 	}
 
-	fmt.Printf("DEBUG: Client authentication SUCCESSFUL!\n")
 
 	// Mark primary path as default for operations (Requirement 2.5)
 	err = session.markPrimaryPathAsDefault()
@@ -475,7 +468,6 @@ func (s *ClientSession) handleIncomingStreams() {
 		time.Sleep(10 * time.Millisecond) // Small delay to avoid busy waiting
 	}
 
-	fmt.Printf("DEBUG: Client session is now active, starting control frame handler\n")
 
 	// Start control frame processing loop
 	go s.handleControlFrames()
@@ -487,16 +479,12 @@ func (s *ClientSession) handleIncomingStreams() {
 
 // handleControlFrames processes incoming control frames from the server
 func (s *ClientSession) handleControlFrames() {
-	fmt.Printf("DEBUG: Client starting control frame handler\n")
 
 	// Get control stream from primary path
 	controlStream, err := s.primaryPath.GetControlStream()
 	if err != nil {
-		fmt.Printf("DEBUG: Client failed to get control stream: %v\n", err)
 		return
 	}
-
-	fmt.Printf("DEBUG: Client control frame handler ready, listening for server frames...\n")
 
 	// Buffer for reading control frames
 	buffer := make([]byte, 4096)
@@ -504,11 +492,9 @@ func (s *ClientSession) handleControlFrames() {
 	for {
 		select {
 		case <-s.ctx.Done():
-			fmt.Printf("DEBUG: Client control frame handler stopping (session closed)\n")
 			return // Session is closing
 		default:
 			// Read control frame from stream
-			fmt.Printf("DEBUG: Client waiting for control frame from server...\n")
 			n, err := controlStream.Read(buffer)
 			if err != nil {
 				fmt.Printf("DEBUG: Client control frame read error: %v\n", err)
@@ -519,18 +505,12 @@ func (s *ClientSession) handleControlFrames() {
 			if n == 0 {
 				continue // No data available
 			}
-
-			fmt.Printf("DEBUG: Client received control frame (%d bytes)\n", n)
-
 			// Parse control frame
 			var frame control.ControlFrame
 			err = proto.Unmarshal(buffer[:n], &frame)
 			if err != nil {
-				fmt.Printf("DEBUG: Client failed to parse control frame: %v\n", err)
 				continue
 			}
-
-			fmt.Printf("DEBUG: Client processing control frame type: %v\n", frame.Type)
 
 			// Process frame based on type
 			s.processControlFrame(&frame)
@@ -563,49 +543,37 @@ func (s *ClientSession) processControlFrame(frame *control.ControlFrame) {
 
 // handleAddPathRequest processes AddPathRequest frames from server
 func (s *ClientSession) handleAddPathRequest(frame *control.ControlFrame) {
-	fmt.Printf("DEBUG: Client received AddPathRequest from server!\n")
-
 	// Deserialize AddPathRequest
 	var addPathReq control.AddPathRequest
 	err := proto.Unmarshal(frame.Payload, &addPathReq)
 	if err != nil {
-		fmt.Printf("DEBUG: Client failed to deserialize AddPathRequest: %v\n", err)
 		s.sendAddPathResponse("", false, "failed to deserialize AddPathRequest", "DESERIALIZATION_ERROR")
 		return
 	}
 
-	fmt.Printf("DEBUG: Client processing AddPathRequest for address: %s with path ID: %s\n", addPathReq.TargetAddress, addPathReq.PathId)
-
 	// Validate session ID matches
 	if addPathReq.SessionId != s.sessionID {
-		fmt.Printf("DEBUG: Client session ID mismatch: expected %s, got %s\n", s.sessionID, addPathReq.SessionId)
 		s.sendAddPathResponse("", false, "session ID mismatch", "SESSION_MISMATCH")
 		return
 	}
 
 	// Validate target address
 	if addPathReq.TargetAddress == "" {
-		fmt.Printf("DEBUG: Client received empty target address\n")
 		s.sendAddPathResponse("", false, "target address is empty", "INVALID_ADDRESS")
 		return
 	}
 
 	// Validate path ID
 	if addPathReq.PathId == "" {
-		fmt.Printf("DEBUG: Client received empty path ID\n")
 		s.sendAddPathResponse("", false, "path ID is empty", "INVALID_PATH_ID")
 		return
 	}
-
-	fmt.Printf("DEBUG: Client attempting to create secondary path to %s with server-provided ID %s\n", addPathReq.TargetAddress, addPathReq.PathId)
-
 	// Attempt to create secondary path
 	startTime := time.Now()
 	secondaryPath, err := s.pathManager.CreatePath(addPathReq.TargetAddress)
 	connectionTime := time.Since(startTime)
 
 	if err != nil {
-		fmt.Printf("DEBUG: Client failed to create secondary path: %v\n", err)
 		s.sendAddPathResponse("", false,
 			fmt.Sprintf("failed to create path to %s: %v", addPathReq.TargetAddress, err),
 			"CONNECTION_FAILED")
@@ -618,16 +586,10 @@ func (s *ClientSession) handleAddPathRequest(frame *control.ControlFrame) {
 	// IMPORTANT: Use the server-provided path ID for the path object
 	secondaryPath.SetID(addPathReq.PathId)
 	
-	// Note: The path manager still uses the original ID as the key
-	// This is correct - the path object has the server ID, but the manager uses the original ID
-	
-	fmt.Printf("DEBUG: Client successfully created secondary path %s in %v (using server-provided ID)\n", secondaryPath.ID(), connectionTime)
-
 	// CLIENT CREATES THE CONTROL STREAM FOR SECONDARY PATH (OpenStreamSync)
 	// This ensures proper communication with the secondary server
 	_, err = secondaryPath.CreateControlStreamAsClient()
 	if err != nil {
-		fmt.Printf("DEBUG: Client failed to create control stream for secondary path: %v\n", err)
 		s.pathManager.RemovePath(secondaryPath.ID())
 		s.sendAddPathResponse("", false,
 			fmt.Sprintf("failed to create control stream for secondary path: %v", err),
@@ -636,10 +598,8 @@ func (s *ClientSession) handleAddPathRequest(frame *control.ControlFrame) {
 	}
 
 	// Perform authentication on secondary path using existing session ID
-	fmt.Printf("DEBUG: Client authenticating secondary path...\n")
 	err = s.performSecondaryPathAuthentication(context.Background(), secondaryPath)
 	if err != nil {
-		fmt.Printf("DEBUG: Client secondary path authentication failed: %v\n", err)
 		// Authentication failed, remove the path and send failure response
 		s.pathManager.RemovePath(secondaryPath.ID())
 		s.sendAddPathResponse("", false,
@@ -648,13 +608,9 @@ func (s *ClientSession) handleAddPathRequest(frame *control.ControlFrame) {
 		return
 	}
 
-	fmt.Printf("DEBUG: Client secondary path authentication successful\n")
-
 	// Integrate secondary path into session aggregate (Requirement 3.7)
-	fmt.Printf("DEBUG: Client integrating secondary path into session...\n")
 	err = s.integrateSecondaryPath(secondaryPath, originalPathID)
 	if err != nil {
-		fmt.Printf("DEBUG: Client failed to integrate secondary path: %v\n", err)
 		// Integration failed, remove the path using the original ID
 		s.pathManager.RemovePath(originalPathID)
 		s.sendAddPathResponse("", false,
@@ -663,13 +619,9 @@ func (s *ClientSession) handleAddPathRequest(frame *control.ControlFrame) {
 		return
 	}
 
-	fmt.Printf("DEBUG: Client successfully integrated secondary path\n")
-
 	// Send success response with actual connection time
-	fmt.Printf("DEBUG: Client sending AddPathResponse (success) to server\n")
 	s.sendAddPathResponseWithTime(secondaryPath.ID(), true, "", "", connectionTime)
 
-	fmt.Printf("DEBUG: Client now has %d active paths\n", len(s.pathManager.GetActivePaths()))
 }
 
 // sendAddPathResponse sends an AddPathResponse back to the server
@@ -798,28 +750,20 @@ func (s *ClientSession) handleStreamCreateNotification(frame *control.ControlFra
 }
 
 func (s *ClientSession) handleRawPacketTransmission(frame *control.ControlFrame) {
-	fmt.Println("DEBUG: Client received RAW_PACKET_TRANSMISSION frame")
-	
 	// Deserialize RawPacketTransmission
 	var rawPacketReq control.RawPacketTransmission
 	err := proto.Unmarshal(frame.Payload, &rawPacketReq)
 	if err != nil {
-		fmt.Printf("DEBUG: Client failed to deserialize RawPacketTransmission: %v\n", err)
 		return
 	}
 
-	fmt.Printf("DEBUG: Client processing raw packet for target path ID: %s\n", rawPacketReq.TargetPathId)
-	fmt.Printf("DEBUG: Client raw packet data length: %d bytes\n", len(rawPacketReq.Data))
-
 	// Validate raw packet data
 	if len(rawPacketReq.Data) == 0 {
-		fmt.Println("DEBUG: Client received empty raw packet data")
 		return
 	}
 
 	// Validate target path ID
 	if rawPacketReq.TargetPathId == "" {
-		fmt.Println("DEBUG: Client received raw packet with empty target path ID")
 		return
 	}
 
@@ -837,17 +781,8 @@ func (s *ClientSession) handleRawPacketTransmission(frame *control.ControlFrame)
 	}
 	
 	if targetPath == nil {
-		fmt.Printf("DEBUG: Client could not find target path %s in path manager\n", rawPacketReq.TargetPathId)
-		
-		// List all available paths for debugging
-		fmt.Printf("DEBUG: Client has %d active paths:\n", len(activePaths))
-		for i, path := range activePaths {
-			fmt.Printf("DEBUG: Path %d: ID=%s, Address=%s, Primary=%t\n", i+1, path.ID(), path.Address(), path.IsPrimary())
-		}
 		return
 	}
-
-	fmt.Printf("DEBUG: Client found target path %s, checking if active\n", rawPacketReq.TargetPathId)
 
 	// Verify target path is active
 	if !targetPath.IsActive() {
@@ -855,16 +790,12 @@ func (s *ClientSession) handleRawPacketTransmission(frame *control.ControlFrame)
 		return
 	}
 
-	fmt.Printf("DEBUG: Client routing raw packet to data plane of path %s\n", rawPacketReq.TargetPathId)
-
 	// Route raw packet to data plane of target path
 	err = s.routeRawPacketToDataPlane(rawPacketReq.Data, targetPath, rawPacketReq.ProtocolHint, rawPacketReq.PreserveOrder)
 	if err != nil {
-		fmt.Printf("DEBUG: Client failed to route raw packet to data plane: %v\n", err)
 		return
 	}
 	
-	fmt.Println("DEBUG: Client successfully routed raw packet to data plane")
 }
 
 func (s *ClientSession) handleHeartbeat(frame *control.ControlFrame) {
@@ -918,22 +849,17 @@ func (s *ClientSession) OnPathRecovered(pathID string, metrics *transport.PathHe
 
 // PerformAuthentication performs authentication over the control plane stream
 func (s *ClientSession) PerformAuthentication(ctx context.Context) error {
-	fmt.Printf("DEBUG: Client starting authentication process...\n")
-
 	// Get control stream from primary path
 	controlStream, err := s.primaryPath.GetControlStream()
 	if err != nil {
-		fmt.Printf("DEBUG: Client failed to get control stream: %v\n", err)
 		return utils.NewKwikError(utils.ErrStreamCreationFailed,
 			"failed to get control stream for authentication", err)
 	}
 
-	fmt.Printf("DEBUG: Client got control stream, creating authentication request...\n")
 
 	// Create authentication request
 	authFrame, err := s.authManager.CreateAuthenticationRequest()
 	if err != nil {
-		fmt.Printf("DEBUG: Client failed to create authentication request: %v\n", err)
 		return utils.NewKwikError(utils.ErrInvalidFrame,
 			"failed to create authentication request", err)
 	}
@@ -941,29 +867,21 @@ func (s *ClientSession) PerformAuthentication(ctx context.Context) error {
 	// Serialize and send authentication request
 	frameData, err := proto.Marshal(authFrame)
 	if err != nil {
-		fmt.Printf("DEBUG: Client failed to serialize authentication frame: %v\n", err)
 		return utils.NewKwikError(utils.ErrInvalidFrame,
 			"failed to serialize authentication frame", err)
 	}
 
-	fmt.Printf("DEBUG: Client sending authentication request (%d bytes)...\n", len(frameData))
-
 	_, err = controlStream.Write(frameData)
 	if err != nil {
-		fmt.Printf("DEBUG: Client failed to send authentication request: %v\n", err)
 		return utils.NewKwikError(utils.ErrConnectionLost,
 			"failed to send authentication request", err)
 	}
-
-	fmt.Printf("DEBUG: Client sent authentication request, waiting for response...\n")
 
 	// Read authentication response with timeout
 	responseCtx, cancel := context.WithTimeout(ctx, utils.DefaultHandshakeTimeout)
 	defer cancel()
 
 	responseBuf := make([]byte, 4096)
-
-	fmt.Printf("DEBUG: Client waiting for authentication response with timeout %v...\n", utils.DefaultHandshakeTimeout)
 
 	// Use a goroutine to handle the read with context cancellation
 	type readResult struct {

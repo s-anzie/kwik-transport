@@ -1454,7 +1454,6 @@ func (s *ServerSession) GetPrimaryPath() transport.Path {
 
 // handleAuthenticationWithSessionID handles server-side authentication and returns client's session ID
 func (s *ServerSession) handleAuthenticationWithSessionID(ctx context.Context) (string, error) {
-	fmt.Printf("DEBUG: Server starting authentication process...\n")
 
 	// Get control stream from primary path
 	controlStream, err := s.primaryPath.GetControlStream()
@@ -1464,8 +1463,6 @@ func (s *ServerSession) handleAuthenticationWithSessionID(ctx context.Context) (
 			"failed to get control stream for authentication", err)
 	}
 
-	fmt.Printf("DEBUG: Server got control stream, waiting for client authentication...\n")
-	fmt.Printf("DEBUG: Server control stream details: %+v\n", controlStream)
 
 	// Read authentication request from client with timeout
 	buffer := make([]byte, 4096)
@@ -1478,9 +1475,7 @@ func (s *ServerSession) handleAuthenticationWithSessionID(ctx context.Context) (
 
 	readChan := make(chan readResult, 1)
 	go func() {
-		fmt.Printf("DEBUG: Server starting Read() on control stream...\n")
 		n, err := controlStream.Read(buffer)
-		fmt.Printf("DEBUG: Server Read() completed: n=%d, err=%v\n", n, err)
 		readChan <- readResult{n: n, err: err}
 	}()
 
@@ -1488,25 +1483,18 @@ func (s *ServerSession) handleAuthenticationWithSessionID(ctx context.Context) (
 	authCtx, cancel := context.WithTimeout(ctx, utils.DefaultHandshakeTimeout)
 	defer cancel()
 
-	fmt.Printf("DEBUG: Server waiting for authentication with timeout %v...\n", utils.DefaultHandshakeTimeout)
-
 	var n int
 	select {
 	case result := <-readChan:
 		n, err = result.n, result.err
-		fmt.Printf("DEBUG: Server received read result: n=%d, err=%v\n", n, err)
 		if err != nil {
-			fmt.Printf("DEBUG: Server failed to read authentication request: %v\n", err)
 			return "", utils.NewKwikError(utils.ErrAuthenticationFailed,
 				"failed to read authentication request", err)
 		}
 	case <-authCtx.Done():
-		fmt.Printf("DEBUG: Server authentication timeout after %v\n", utils.DefaultHandshakeTimeout)
 		return "", utils.NewKwikError(utils.ErrAuthenticationFailed,
 			"authentication timeout", authCtx.Err())
 	}
-
-	fmt.Printf("DEBUG: Server received authentication data (%d bytes)\n", n)
 
 	// Parse control frame
 	var frame control.ControlFrame

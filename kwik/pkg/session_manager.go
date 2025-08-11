@@ -113,7 +113,6 @@ func (sm *SessionManager) CreateClientSession(ctx context.Context, address strin
 	}
 
 	// Use the centralized Dial method to avoid duplication
-	fmt.Printf("DEBUG: SessionManager - Using session.Dial for proper authentication\n")
 
 	// Create session config for Dial
 	sessionConfigForDial := config
