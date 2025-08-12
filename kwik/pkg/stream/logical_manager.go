@@ -13,13 +13,18 @@ import (
 )
 
 // LogicalStreamManager manages logical KWIK streams without requiring new QUIC streams
-// Implements Requirements 7.1, 7.2
+// Implements Requirements 7.1, 7.2 and secondary stream isolation (Requirements 5.4, 5.5)
 type LogicalStreamManager struct {
 	// Stream management
 	streams       map[uint64]*LogicalStreamInfo
 	streamCounter uint64
 	frameCounter  uint64
 	mutex         sync.RWMutex
+
+	// Secondary stream isolation (Requirements 5.4, 5.5)
+	isolator           SecondaryStreamIsolator
+	mappingManager     *StreamMappingManager
+	secondaryMappings  map[uint64][]uint64 // kwikStreamID -> []secondaryStreamID
 
 	// Control plane for notifications
 	controlPlane control.ControlPlane
@@ -98,13 +103,43 @@ func NewLogicalStreamManager(controlPlane control.ControlPlane, pathValidator Pa
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &LogicalStreamManager{
-		streams:       make(map[uint64]*LogicalStreamInfo),
-		streamCounter: 0,
-		controlPlane:  controlPlane,
-		pathValidator: pathValidator,
-		config:        config,
-		ctx:           ctx,
-		cancel:        cancel,
+		streams:           make(map[uint64]*LogicalStreamInfo),
+		streamCounter:     0,
+		secondaryMappings: make(map[uint64][]uint64),
+		controlPlane:      controlPlane,
+		pathValidator:     pathValidator,
+		config:            config,
+		ctx:               ctx,
+		cancel:            cancel,
+	}
+}
+
+// NewLogicalStreamManagerWithIsolation creates a new logical stream manager with secondary stream isolation support
+// Implements Requirements 5.4, 5.5: secondary stream mapping and logical stream creation from secondary streams
+func NewLogicalStreamManagerWithIsolation(
+	controlPlane control.ControlPlane,
+	pathValidator PathValidator,
+	isolator SecondaryStreamIsolator,
+	mappingManager *StreamMappingManager,
+	config *LogicalStreamConfig,
+) *LogicalStreamManager {
+	if config == nil {
+		config = DefaultLogicalStreamConfig()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	return &LogicalStreamManager{
+		streams:           make(map[uint64]*LogicalStreamInfo),
+		streamCounter:     0,
+		isolator:          isolator,
+		mappingManager:    mappingManager,
+		secondaryMappings: make(map[uint64][]uint64),
+		controlPlane:      controlPlane,
+		pathValidator:     pathValidator,
+		config:            config,
+		ctx:               ctx,
+		cancel:            cancel,
 	}
 }
 
@@ -363,6 +398,281 @@ func (lsm *LogicalStreamManager) cleanupIdleStreams() {
 	}
 }
 
+// CreateLogicalStreamFromSecondary creates a logical KWIK stream from secondary stream data
+// Implements Requirement 5.5: logical stream creation from secondary streams
+func (lsm *LogicalStreamManager) CreateLogicalStreamFromSecondary(secondaryStreamID uint64, pathID string, metadata *StreamMetadata) (*LogicalStreamInfo, error) {
+	if lsm.isolator == nil {
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"secondary stream isolation not configured", nil)
+	}
+
+	lsm.mutex.Lock()
+	defer lsm.mutex.Unlock()
+
+	// Validate that this is a secondary stream
+	if !lsm.isolator.IsStreamSecondary(secondaryStreamID) {
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"stream is not a secondary stream", nil)
+	}
+
+	// Validate path for stream creation
+	if pathID == "" {
+		var err error
+		pathID, err = lsm.pathValidator.GetDefaultPathForStreams()
+		if err != nil {
+			return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
+				"failed to get default path for stream creation", err)
+		}
+	}
+
+	err := lsm.pathValidator.ValidatePathForStreamCreation(pathID)
+	if err != nil {
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"path validation failed for stream creation", err)
+	}
+
+	// Check concurrent stream limit
+	if len(lsm.streams) >= lsm.config.MaxConcurrentStreams {
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"maximum concurrent streams limit reached", nil)
+	}
+
+	// Generate unique logical stream ID
+	streamID := atomic.AddUint64(&lsm.streamCounter, 1)
+
+	// Create logical stream info
+	streamInfo := &LogicalStreamInfo{
+		ID:           streamID,
+		PathID:       pathID,
+		State:        LogicalStreamStateCreating,
+		CreatedAt:    time.Now(),
+		LastActivity: time.Now(),
+		BytesRead:    0,
+		BytesWritten: 0,
+		RealStreamID: 0, // Will be assigned by multiplexer
+		readBuffer:   make([]byte, 0, lsm.config.DefaultReadBufferSize),
+		writeBuffer:  make([]byte, 0, lsm.config.DefaultWriteBufferSize),
+		offset:       0,
+	}
+
+	// Store stream info
+	lsm.streams[streamID] = streamInfo
+
+	// Create mapping between secondary stream and logical stream
+	if err := lsm.addSecondaryMapping(streamID, secondaryStreamID); err != nil {
+		delete(lsm.streams, streamID)
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"failed to create secondary stream mapping", err)
+	}
+
+	// Send control plane notification for logical stream creation
+	err = lsm.sendStreamCreateNotification(streamInfo)
+	if err != nil {
+		// Clean up on notification failure
+		delete(lsm.streams, streamID)
+		lsm.removeSecondaryMapping(streamID, secondaryStreamID)
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"failed to send stream creation notification", err)
+	}
+
+	// Mark stream as active after successful notification
+	streamInfo.State = LogicalStreamStateActive
+
+	return streamInfo, nil
+}
+
+// AddSecondaryStreamMapping adds a mapping between a KWIK logical stream and a secondary stream
+// Implements Requirement 5.4: secondary stream mapping management
+func (lsm *LogicalStreamManager) AddSecondaryStreamMapping(kwikStreamID uint64, secondaryStreamID uint64) error {
+	if lsm.isolator == nil {
+		return utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"secondary stream isolation not configured", nil)
+	}
+
+	lsm.mutex.Lock()
+	defer lsm.mutex.Unlock()
+
+	// Validate that the KWIK stream exists
+	if _, exists := lsm.streams[kwikStreamID]; !exists {
+		return utils.NewKwikError(utils.ErrStreamCreationFailed,
+			fmt.Sprintf("KWIK stream %d not found", kwikStreamID), nil)
+	}
+
+	// Validate that this is a secondary stream
+	if !lsm.isolator.IsStreamSecondary(secondaryStreamID) {
+		return utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"stream is not a secondary stream", nil)
+	}
+
+	// Add the mapping
+	return lsm.addSecondaryMapping(kwikStreamID, secondaryStreamID)
+}
+
+// RemoveSecondaryStreamMapping removes a mapping between a KWIK logical stream and a secondary stream
+// Implements Requirement 5.4: secondary stream mapping management
+func (lsm *LogicalStreamManager) RemoveSecondaryStreamMapping(kwikStreamID uint64, secondaryStreamID uint64) error {
+	if lsm.isolator == nil {
+		return utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"secondary stream isolation not configured", nil)
+	}
+
+	lsm.mutex.Lock()
+	defer lsm.mutex.Unlock()
+
+	return lsm.removeSecondaryMapping(kwikStreamID, secondaryStreamID)
+}
+
+// GetSecondaryStreamMappings returns all secondary streams mapped to a KWIK logical stream
+// Implements Requirement 5.4: secondary stream mapping queries
+func (lsm *LogicalStreamManager) GetSecondaryStreamMappings(kwikStreamID uint64) ([]uint64, error) {
+	lsm.mutex.RLock()
+	defer lsm.mutex.RUnlock()
+
+	// Validate that the KWIK stream exists
+	if _, exists := lsm.streams[kwikStreamID]; !exists {
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
+			fmt.Sprintf("KWIK stream %d not found", kwikStreamID), nil)
+	}
+
+	// Return copy of secondary stream IDs
+	if secondaryStreams, exists := lsm.secondaryMappings[kwikStreamID]; exists {
+		result := make([]uint64, len(secondaryStreams))
+		copy(result, secondaryStreams)
+		return result, nil
+	}
+
+	return []uint64{}, nil
+}
+
+// GetAllSecondaryMappings returns all secondary stream mappings
+// Provides visibility into the mapping state for monitoring and debugging
+func (lsm *LogicalStreamManager) GetAllSecondaryMappings() map[uint64][]uint64 {
+	lsm.mutex.RLock()
+	defer lsm.mutex.RUnlock()
+
+	// Create a deep copy of the mappings
+	result := make(map[uint64][]uint64)
+	for kwikStreamID, secondaryStreams := range lsm.secondaryMappings {
+		result[kwikStreamID] = make([]uint64, len(secondaryStreams))
+		copy(result[kwikStreamID], secondaryStreams)
+	}
+
+	return result
+}
+
+// IsStreamMappedToSecondary checks if a KWIK logical stream has any secondary stream mappings
+// Useful for determining if a stream receives data from secondary sources
+func (lsm *LogicalStreamManager) IsStreamMappedToSecondary(kwikStreamID uint64) bool {
+	lsm.mutex.RLock()
+	defer lsm.mutex.RUnlock()
+
+	secondaryStreams, exists := lsm.secondaryMappings[kwikStreamID]
+	return exists && len(secondaryStreams) > 0
+}
+
+// addSecondaryMapping adds a secondary stream mapping (internal method)
+func (lsm *LogicalStreamManager) addSecondaryMapping(kwikStreamID uint64, secondaryStreamID uint64) error {
+	// Check if secondary stream is already mapped to this KWIK stream
+	if secondaryStreams, exists := lsm.secondaryMappings[kwikStreamID]; exists {
+		for _, existingSecondaryID := range secondaryStreams {
+			if existingSecondaryID == secondaryStreamID {
+				return utils.NewKwikError(utils.ErrStreamCreationFailed,
+					"secondary stream already mapped to this KWIK stream", nil)
+			}
+		}
+		// Add to existing mapping
+		lsm.secondaryMappings[kwikStreamID] = append(secondaryStreams, secondaryStreamID)
+	} else {
+		// Create new mapping
+		lsm.secondaryMappings[kwikStreamID] = []uint64{secondaryStreamID}
+	}
+
+	// Update mapping manager if available
+	if lsm.mappingManager != nil {
+		if err := lsm.mappingManager.CreateMapping(secondaryStreamID, kwikStreamID, ""); err != nil {
+			// Remove the mapping we just added on error
+			lsm.removeSecondaryMapping(kwikStreamID, secondaryStreamID)
+			return utils.NewKwikError(utils.ErrStreamCreationFailed,
+				"failed to update mapping manager", err)
+		}
+	}
+
+	return nil
+}
+
+// removeSecondaryMapping removes a secondary stream mapping (internal method)
+func (lsm *LogicalStreamManager) removeSecondaryMapping(kwikStreamID uint64, secondaryStreamID uint64) error {
+	secondaryStreams, exists := lsm.secondaryMappings[kwikStreamID]
+	if !exists {
+		return utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"no secondary mappings found for KWIK stream", nil)
+	}
+
+	// Find and remove the secondary stream ID
+	for i, existingSecondaryID := range secondaryStreams {
+		if existingSecondaryID == secondaryStreamID {
+			// Remove from slice
+			lsm.secondaryMappings[kwikStreamID] = append(secondaryStreams[:i], secondaryStreams[i+1:]...)
+			
+			// Clean up empty mapping
+			if len(lsm.secondaryMappings[kwikStreamID]) == 0 {
+				delete(lsm.secondaryMappings, kwikStreamID)
+			}
+
+			// Update mapping manager if available
+			if lsm.mappingManager != nil {
+				if err := lsm.mappingManager.RemoveMapping(secondaryStreamID); err != nil {
+					// Log error but don't fail the operation
+					// The mapping manager error is not critical for the logical stream manager
+				}
+			}
+
+			return nil
+		}
+	}
+
+	return utils.NewKwikError(utils.ErrStreamCreationFailed,
+		"secondary stream not found in mapping", nil)
+}
+
+// CloseLogicalStreamWithSecondaryCleanup closes a logical stream and cleans up secondary mappings
+// Extends the base CloseLogicalStream to handle secondary stream cleanup
+func (lsm *LogicalStreamManager) CloseLogicalStreamWithSecondaryCleanup(streamID uint64) error {
+	lsm.mutex.Lock()
+	defer lsm.mutex.Unlock()
+
+	streamInfo, exists := lsm.streams[streamID]
+	if !exists {
+		return utils.NewKwikError(utils.ErrStreamCreationFailed,
+			fmt.Sprintf("logical stream %d not found", streamID), nil)
+	}
+
+	streamInfo.mutex.Lock()
+	defer streamInfo.mutex.Unlock()
+
+	// Update state
+	streamInfo.State = LogicalStreamStateClosing
+
+	// Clean up secondary mappings
+	if secondaryStreams, exists := lsm.secondaryMappings[streamID]; exists {
+		for _, secondaryStreamID := range secondaryStreams {
+			// Update mapping manager if available
+			if lsm.mappingManager != nil {
+				lsm.mappingManager.RemoveMapping(secondaryStreamID)
+			}
+		}
+		delete(lsm.secondaryMappings, streamID)
+	}
+
+	// Mark as closed
+	streamInfo.State = LogicalStreamStateClosed
+
+	// Remove from active streams
+	delete(lsm.streams, streamID)
+
+	return nil
+}
+
 // Close shuts down the logical stream manager
 func (lsm *LogicalStreamManager) Close() error {
 	lsm.cancel()
@@ -381,8 +691,9 @@ func (lsm *LogicalStreamManager) Close() error {
 		}
 	}
 
-	// Clear streams map
+	// Clear streams map and secondary mappings
 	lsm.streams = make(map[uint64]*LogicalStreamInfo)
+	lsm.secondaryMappings = make(map[uint64][]uint64)
 
 	return nil
 }

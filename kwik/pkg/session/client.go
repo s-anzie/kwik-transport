@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"kwik/internal/utils"
+	"kwik/pkg/data"
 	"kwik/pkg/stream"
 	"kwik/pkg/transport"
 	"kwik/proto/control"
@@ -33,6 +34,10 @@ type ClientSession struct {
 	nextStreamID uint64
 	streams      map[uint64]*stream.ClientStream
 	streamsMutex sync.RWMutex
+
+	// Secondary stream management
+	secondaryStreamHandler stream.SecondaryStreamHandler
+	streamAggregator       data.DataAggregator
 
 	// Channel for accepting incoming streams
 	acceptChan chan *stream.ClientStream
@@ -82,18 +87,20 @@ func NewClientSession(pathManager transport.PathManager, config *SessionConfig) 
 	sessionID := generateSessionID()
 
 	session := &ClientSession{
-		sessionID:    sessionID,
-		pathManager:  pathManager,
-		isClient:     true,
-		state:        SessionStateConnecting,
-		createdAt:    time.Now(),
-		authManager:  NewAuthenticationManager(sessionID, true), // true = isClient
-		nextStreamID: 1,                                         // Start stream IDs from 1 (QUIC-compatible)
-		streams:      make(map[uint64]*stream.ClientStream),
-		acceptChan:   make(chan *stream.ClientStream, 100), // Buffered channel
-		ctx:          ctx,
-		cancel:       cancel,
-		config:       config,
+		sessionID:              sessionID,
+		pathManager:            pathManager,
+		isClient:               true,
+		state:                  SessionStateConnecting,
+		createdAt:              time.Now(),
+		authManager:            NewAuthenticationManager(sessionID, true), // true = isClient
+		nextStreamID:           1,                                         // Start stream IDs from 1 (QUIC-compatible)
+		streams:                make(map[uint64]*stream.ClientStream),
+		secondaryStreamHandler: stream.NewSecondaryStreamHandler(nil), // Use default config
+		streamAggregator:       data.NewDataAggregator(),
+		acceptChan:             make(chan *stream.ClientStream, 100), // Buffered channel
+		ctx:                    ctx,
+		cancel:                 cancel,
+		config:                 config,
 	}
 
 	return session
@@ -221,6 +228,7 @@ func (s *ClientSession) OpenStream() (Stream, error) {
 }
 
 // AcceptStream accepts an incoming stream (QUIC-compatible)
+// Only returns streams from the primary server, secondary streams are handled internally
 func (s *ClientSession) AcceptStream(ctx context.Context) (Stream, error) {
 	// First check if there are any streams in the accept channel
 	select {
@@ -248,7 +256,14 @@ func (s *ClientSession) AcceptStream(ctx context.Context) (Stream, error) {
 			continue // Try next path
 		}
 		
-		// Create KWIK ClientStream wrapper
+		// Check if this is a secondary path - if so, handle internally
+		if !path.IsPrimary() {
+			// Handle secondary stream internally, don't expose to public interface
+			go s.handleSecondaryStreamOpen(path.ID(), quicStream)
+			continue // Don't return this stream to the application
+		}
+		
+		// Create KWIK ClientStream wrapper for primary path streams only
 		s.mutex.Lock()
 		streamID := s.nextStreamID
 		s.nextStreamID++
@@ -1387,6 +1402,67 @@ func (rpf *RawPacketFrame) Deserialize(data []byte) error {
 	rpf.Timestamp = time.Unix(0, int64(timestamp))
 
 	return nil
+}
+
+// getSecondaryStreamHandler returns the secondary stream handler (internal method)
+func (s *ClientSession) getSecondaryStreamHandler() stream.SecondaryStreamHandler {
+	return s.secondaryStreamHandler
+}
+
+// getStreamAggregator returns the stream aggregator (internal method)
+func (s *ClientSession) getStreamAggregator() data.DataAggregator {
+	return s.streamAggregator
+}
+
+// handleSecondaryStreamOpen handles a new secondary stream from a secondary server
+// This method processes streams internally without exposing them to the public interface
+func (s *ClientSession) handleSecondaryStreamOpen(pathID string, quicStream quic.Stream) error {
+	// Handle the secondary stream using the secondary stream handler
+	err := s.secondaryStreamHandler.HandleSecondaryStream(pathID, quicStream)
+	if err != nil {
+		// Log error and close the stream
+		quicStream.Close()
+		return utils.NewKwikError(utils.ErrStreamCreationFailed,
+			fmt.Sprintf("failed to handle secondary stream from path %s", pathID), err)
+	}
+
+	// Start processing the secondary stream data in a goroutine
+	go s.processSecondaryStreamData(pathID, quicStream)
+
+	return nil
+}
+
+// processSecondaryStreamData processes data from a secondary stream
+func (s *ClientSession) processSecondaryStreamData(pathID string, quicStream quic.Stream) {
+	defer quicStream.Close()
+
+	buffer := make([]byte, 4096)
+	for {
+		select {
+		case <-s.ctx.Done():
+			return // Session is closing
+		default:
+			// Read data from the secondary stream
+			n, err := quicStream.Read(buffer)
+			if err != nil {
+				// Stream closed or error occurred
+				return
+			}
+
+			if n == 0 {
+				continue // No data available
+			}
+
+			// TODO: Process the data according to the metadata protocol
+			// This would involve:
+			// 1. Decapsulating metadata to get KWIK stream ID and offset
+			// 2. Creating SecondaryStreamData structure
+			// 3. Calling streamAggregator.AggregateSecondaryData()
+			
+			// For now, we just acknowledge that we received the data
+			// The actual metadata processing will be implemented in future tasks
+		}
+	}
 }
 
 // generateSessionID generates a unique session identifier

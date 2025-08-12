@@ -1,0 +1,103 @@
+syntax = "proto3";
+package kwik.secondary;
+
+option go_package = "kwik/proto/secondary_stream";
+
+// Secondary stream open message - sent when a secondary server opens a stream
+message SecondaryStreamOpen {
+    uint64 secondary_stream_id = 1;    // ID of the secondary stream on QUIC connection
+    uint64 target_kwik_stream_id = 2;  // Target KWIK logical stream ID
+    uint64 initial_offset = 3;         // Initial offset in the KWIK stream
+    string source_path_id = 4;         // Path ID of the secondary server
+    uint64 timestamp = 5;              // Timestamp when stream was opened
+    map<string, string> metadata = 6;  // Additional stream metadata
+}
+
+// Secondary stream data message - carries data from secondary stream to KWIK stream
+message SecondaryStreamData {
+    uint64 secondary_stream_id = 1;    // ID of the secondary stream
+    uint64 kwik_stream_id = 2;         // Target KWIK logical stream ID
+    uint64 offset = 3;                 // Offset in the KWIK stream where data should be placed
+    bytes data = 4;                    // Application data payload
+    bool fin = 5;                      // Whether this is the final frame for this secondary stream
+    uint64 timestamp = 6;              // Timestamp when data was sent
+    string source_path_id = 7;         // Path ID of the secondary server
+    uint32 data_length = 8;            // Length of data payload
+    uint32 checksum = 9;               // Data checksum for integrity verification
+}
+
+// Secondary stream close message - sent when a secondary server closes a stream
+message SecondaryStreamClose {
+    uint64 secondary_stream_id = 1;    // ID of the secondary stream being closed
+    uint64 kwik_stream_id = 2;         // Associated KWIK logical stream ID
+    string reason = 3;                 // Reason for closing the stream
+    uint64 final_offset = 4;           // Final offset written to the KWIK stream
+    uint64 timestamp = 5;              // Timestamp when stream was closed
+    string source_path_id = 6;         // Path ID of the secondary server
+    bool error_close = 7;              // Whether this was closed due to an error
+    uint64 error_code = 8;             // Error code if error_close is true
+}
+
+// Offset synchronization request - request current offset state for a KWIK stream
+message OffsetSyncRequest {
+    uint64 kwik_stream_id = 1;         // KWIK stream ID to synchronize
+    uint64 current_offset = 2;         // Current offset known by the requesting server
+    string requesting_path_id = 3;     // Path ID of the requesting server
+    uint64 timestamp = 4;              // Request timestamp
+    string sync_reason = 5;            // Reason for synchronization request
+}
+
+// Offset synchronization response - response with current offset state
+message OffsetSyncResponse {
+    uint64 kwik_stream_id = 1;         // KWIK stream ID being synchronized
+    uint64 expected_offset = 2;        // Expected next offset for this stream
+    bool sync_required = 3;            // Whether synchronization is required
+    uint64 timestamp = 4;              // Response timestamp
+    repeated OffsetRange pending_ranges = 5; // Ranges of offsets with pending data
+    string authoritative_path_id = 6;  // Path ID of the authoritative source for offsets
+}
+
+// Offset range - represents a range of offsets
+message OffsetRange {
+    uint64 start_offset = 1;           // Start of the offset range (inclusive)
+    uint64 end_offset = 2;             // End of the offset range (inclusive)
+    string source_path_id = 3;         // Path ID that owns this range
+    uint64 timestamp = 4;              // When this range was established
+}
+
+// Secondary stream error - error information for secondary stream operations
+message SecondaryStreamError {
+    uint64 secondary_stream_id = 1;    // Secondary stream ID where error occurred
+    uint64 kwik_stream_id = 2;         // Associated KWIK stream ID
+    string error_code = 3;             // Structured error code
+    string error_message = 4;          // Human-readable error message
+    uint64 timestamp = 5;              // Error timestamp
+    string source_path_id = 6;         // Path ID where error occurred
+    ErrorSeverity severity = 7;        // Error severity level
+    map<string, string> context = 8;   // Additional error context
+}
+
+// Error severity levels
+enum ErrorSeverity {
+    SEVERITY_INFO = 0;
+    SEVERITY_WARNING = 1;
+    SEVERITY_ERROR = 2;
+    SEVERITY_CRITICAL = 3;
+    SEVERITY_FATAL = 4;
+}
+
+// Secondary stream statistics - performance and usage statistics
+message SecondaryStreamStats {
+    string path_id = 1;                // Path ID these stats apply to
+    uint64 active_streams = 2;         // Number of currently active secondary streams
+    uint64 total_streams_created = 3;  // Total secondary streams created
+    uint64 total_streams_closed = 4;   // Total secondary streams closed
+    uint64 total_bytes_sent = 5;       // Total bytes sent through secondary streams
+    uint64 total_bytes_received = 6;   // Total bytes received from secondary streams
+    uint64 aggregation_events = 7;     // Number of data aggregation events
+    uint64 offset_conflicts = 8;       // Number of offset conflicts resolved
+    uint64 sync_requests = 9;          // Number of offset sync requests sent
+    uint64 sync_responses = 10;        // Number of offset sync responses received
+    float aggregation_efficiency = 11; // Efficiency of data aggregation (0.0 to 1.0)
+    uint64 last_activity = 12;         // Timestamp of last activity
+}

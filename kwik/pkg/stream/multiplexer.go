@@ -9,29 +9,34 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"kwik/internal/utils"
+	"kwik/pkg/data"
 )
 
 // KwikStreamMultiplexer manages logical KWIK streams over real QUIC streams
-// Implements Requirements 7.3, 7.4, 7.5
+// Implements Requirements 7.3, 7.4, 7.5 and secondary stream isolation (Requirements 2.4, 2.5)
 type KwikStreamMultiplexer struct {
 	// Real QUIC streams management
 	realStreams     map[uint64]*RealStreamInfo
 	realStreamPool  map[string][]*RealStreamInfo // Pool per path
 	realStreamCount uint64
-	
+
 	// Logical streams mapping
-	logicalStreams  map[uint64]*LogicalStreamMapping
-	logicalCounter  uint64
-	
+	logicalStreams map[uint64]*LogicalStreamMapping
+	logicalCounter uint64
+
+	// Secondary stream isolation (Requirements 2.4, 2.5)
+	isolator   SecondaryStreamIsolator
+	aggregator data.DataAggregator
+
 	// Configuration
 	config *MultiplexerConfig
-	
+
 	// Path management
 	pathValidator PathValidator
-	
+
 	// Synchronization
 	mutex sync.RWMutex
-	
+
 	// Context for cancellation
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -46,7 +51,7 @@ type RealStreamInfo struct {
 	CreatedAt        time.Time
 	LastActivity     time.Time
 	BytesTransmitted uint64
-	
+
 	// Stream state
 	mutex  sync.RWMutex
 	closed bool
@@ -64,17 +69,17 @@ type LogicalStreamMapping struct {
 // MultiplexerConfig contains configuration for stream multiplexing
 type MultiplexerConfig struct {
 	// Optimal ratios (Requirements 7.3, 7.4)
-	OptimalLogicalPerReal    int           // 3-4 logical streams per real stream
-	MaxLogicalPerReal        int           // Maximum before creating new real stream
-	MinLogicalPerReal        int           // Minimum to maintain efficiency
-	
+	OptimalLogicalPerReal int // 3-4 logical streams per real stream
+	MaxLogicalPerReal     int // Maximum before creating new real stream
+	MinLogicalPerReal     int // Minimum to maintain efficiency
+
 	// Stream management
-	RealStreamIdleTimeout    time.Duration // When to close unused real streams
-	RealStreamPoolSize       int           // Max real streams to keep in pool per path
-	
+	RealStreamIdleTimeout time.Duration // When to close unused real streams
+	RealStreamPoolSize    int           // Max real streams to keep in pool per path
+
 	// Performance tuning
-	StreamCreationTimeout    time.Duration
-	StreamAllocationRetries  int
+	StreamCreationTimeout   time.Duration
+	StreamAllocationRetries int
 }
 
 // NewKwikStreamMultiplexer creates a new stream multiplexer
@@ -82,9 +87,9 @@ func NewKwikStreamMultiplexer(pathValidator PathValidator, config *MultiplexerCo
 	if config == nil {
 		config = DefaultMultiplexerConfig()
 	}
-	
+
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	return &KwikStreamMultiplexer{
 		realStreams:     make(map[uint64]*RealStreamInfo),
 		realStreamPool:  make(map[string][]*RealStreamInfo),
@@ -98,16 +103,45 @@ func NewKwikStreamMultiplexer(pathValidator PathValidator, config *MultiplexerCo
 	}
 }
 
+// NewKwikStreamMultiplexerWithIsolation creates a new stream multiplexer with secondary stream isolation support
+// Implements Requirements 2.4, 2.5: secondary stream isolation and routing
+func NewKwikStreamMultiplexerWithIsolation(
+	pathValidator PathValidator,
+	isolator SecondaryStreamIsolator,
+	aggregator data.DataAggregator,
+	config *MultiplexerConfig,
+) *KwikStreamMultiplexer {
+	if config == nil {
+		config = DefaultMultiplexerConfig()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	return &KwikStreamMultiplexer{
+		realStreams:     make(map[uint64]*RealStreamInfo),
+		realStreamPool:  make(map[string][]*RealStreamInfo),
+		logicalStreams:  make(map[uint64]*LogicalStreamMapping),
+		realStreamCount: 0,
+		logicalCounter:  0,
+		isolator:        isolator,
+		aggregator:      aggregator,
+		config:          config,
+		pathValidator:   pathValidator,
+		ctx:             ctx,
+		cancel:          cancel,
+	}
+}
+
 // DefaultMultiplexerConfig returns default multiplexer configuration
 func DefaultMultiplexerConfig() *MultiplexerConfig {
 	return &MultiplexerConfig{
-		OptimalLogicalPerReal:    4,  // Target 4 logical streams per real stream
-		MaxLogicalPerReal:        6,  // Create new real stream after 6 logical streams
-		MinLogicalPerReal:        1,  // Keep real stream if it has at least 1 logical stream
-		RealStreamIdleTimeout:    2 * time.Minute,
-		RealStreamPoolSize:       10, // Keep up to 10 real streams per path
-		StreamCreationTimeout:    30 * time.Second,
-		StreamAllocationRetries:  3,
+		OptimalLogicalPerReal:   4, // Target 4 logical streams per real stream
+		MaxLogicalPerReal:       6, // Create new real stream after 6 logical streams
+		MinLogicalPerReal:       1, // Keep real stream if it has at least 1 logical stream
+		RealStreamIdleTimeout:   2 * time.Minute,
+		RealStreamPoolSize:      10, // Keep up to 10 real streams per path
+		StreamCreationTimeout:   30 * time.Second,
+		StreamAllocationRetries: 3,
 	}
 }
 
@@ -116,24 +150,24 @@ func DefaultMultiplexerConfig() *MultiplexerConfig {
 func (sm *KwikStreamMultiplexer) CreateLogicalStream(pathID string) (*LogicalStream, error) {
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
-	
+
 	// Validate path
 	err := sm.pathValidator.ValidatePathForStreamCreation(pathID)
 	if err != nil {
 		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
 			"path validation failed", err)
 	}
-	
+
 	// Generate logical stream ID
 	logicalStreamID := atomic.AddUint64(&sm.logicalCounter, 1)
-	
+
 	// Find or create optimal real stream for this logical stream
 	realStreamInfo, err := sm.findOrCreateOptimalRealStream(pathID)
 	if err != nil {
 		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
 			"failed to allocate real stream", err)
 	}
-	
+
 	// Create logical stream mapping
 	mapping := &LogicalStreamMapping{
 		LogicalStreamID: logicalStreamID,
@@ -142,16 +176,16 @@ func (sm *KwikStreamMultiplexer) CreateLogicalStream(pathID string) (*LogicalStr
 		Offset:          0,
 		CreatedAt:       time.Now(),
 	}
-	
+
 	// Store mapping
 	sm.logicalStreams[logicalStreamID] = mapping
-	
+
 	// Add logical stream to real stream's tracking
 	realStreamInfo.mutex.Lock()
 	realStreamInfo.LogicalStreams[logicalStreamID] = true
 	realStreamInfo.LastActivity = time.Now()
 	realStreamInfo.mutex.Unlock()
-	
+
 	// Create logical stream object
 	logicalStream := &LogicalStream{
 		ID:           logicalStreamID,
@@ -160,7 +194,7 @@ func (sm *KwikStreamMultiplexer) CreateLogicalStream(pathID string) (*LogicalStr
 		Offset:       0,
 		Closed:       false,
 	}
-	
+
 	return logicalStream, nil
 }
 
@@ -172,33 +206,33 @@ func (sm *KwikStreamMultiplexer) findOrCreateOptimalRealStream(pathID string) (*
 		if realStreamInfo.PathID != pathID || realStreamInfo.closed {
 			continue
 		}
-		
+
 		realStreamInfo.mutex.RLock()
 		logicalCount := len(realStreamInfo.LogicalStreams)
 		realStreamInfo.mutex.RUnlock()
-		
+
 		// Check if this real stream has optimal load (less than optimal ratio)
 		if logicalCount < sm.config.OptimalLogicalPerReal {
 			return realStreamInfo, nil
 		}
 	}
-	
+
 	// If no optimal real stream found, try to find one below max capacity
 	for _, realStreamInfo := range sm.realStreams {
 		if realStreamInfo.PathID != pathID || realStreamInfo.closed {
 			continue
 		}
-		
+
 		realStreamInfo.mutex.RLock()
 		logicalCount := len(realStreamInfo.LogicalStreams)
 		realStreamInfo.mutex.RUnlock()
-		
+
 		// Check if this real stream is below max capacity
 		if logicalCount < sm.config.MaxLogicalPerReal {
 			return realStreamInfo, nil
 		}
 	}
-	
+
 	// No suitable existing real stream found, create a new one
 	return sm.createNewRealStream(pathID)
 }
@@ -210,12 +244,12 @@ func (sm *KwikStreamMultiplexer) createNewRealStream(pathID string) (*RealStream
 	if pooledStream := sm.getFromPool(pathID); pooledStream != nil {
 		return pooledStream, nil
 	}
-	
+
 	// Create new real QUIC stream
 	// Note: In a real implementation, this would use the QUIC connection for the path
 	// For now, we'll create a placeholder that would be replaced with actual QUIC stream
 	realStreamID := atomic.AddUint64(&sm.realStreamCount, 1)
-	
+
 	realStreamInfo := &RealStreamInfo{
 		ID:               realStreamID,
 		QuicStream:       nil, // Would be actual QUIC stream in real implementation
@@ -226,10 +260,10 @@ func (sm *KwikStreamMultiplexer) createNewRealStream(pathID string) (*RealStream
 		BytesTransmitted: 0,
 		closed:           false,
 	}
-	
+
 	// Store real stream info
 	sm.realStreams[realStreamID] = realStreamInfo
-	
+
 	return realStreamInfo, nil
 }
 
@@ -239,21 +273,21 @@ func (sm *KwikStreamMultiplexer) getFromPool(pathID string) *RealStreamInfo {
 	if !exists || len(pool) == 0 {
 		return nil
 	}
-	
+
 	// Get the most recently used stream from the pool
 	streamInfo := pool[len(pool)-1]
 	sm.realStreamPool[pathID] = pool[:len(pool)-1]
-	
+
 	// Reset stream for reuse
 	streamInfo.mutex.Lock()
 	streamInfo.LogicalStreams = make(map[uint64]bool)
 	streamInfo.LastActivity = time.Now()
 	streamInfo.closed = false
 	streamInfo.mutex.Unlock()
-	
+
 	// Add back to active streams
 	sm.realStreams[streamInfo.ID] = streamInfo
-	
+
 	return streamInfo
 }
 
@@ -261,20 +295,20 @@ func (sm *KwikStreamMultiplexer) getFromPool(pathID string) *RealStreamInfo {
 func (sm *KwikStreamMultiplexer) GetLogicalStream(streamID uint64) (*LogicalStream, error) {
 	sm.mutex.RLock()
 	defer sm.mutex.RUnlock()
-	
+
 	mapping, exists := sm.logicalStreams[streamID]
 	if !exists {
 		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
 			fmt.Sprintf("logical stream %d not found", streamID), nil)
 	}
-	
+
 	// Update activity on the real stream
 	if realStreamInfo, exists := sm.realStreams[mapping.RealStreamID]; exists {
 		realStreamInfo.mutex.Lock()
 		realStreamInfo.LastActivity = time.Now()
 		realStreamInfo.mutex.Unlock()
 	}
-	
+
 	logicalStream := &LogicalStream{
 		ID:           mapping.LogicalStreamID,
 		PathID:       mapping.PathID,
@@ -282,7 +316,7 @@ func (sm *KwikStreamMultiplexer) GetLogicalStream(streamID uint64) (*LogicalStre
 		Offset:       mapping.Offset,
 		Closed:       false,
 	}
-	
+
 	return logicalStream, nil
 }
 
@@ -290,29 +324,29 @@ func (sm *KwikStreamMultiplexer) GetLogicalStream(streamID uint64) (*LogicalStre
 func (sm *KwikStreamMultiplexer) CloseLogicalStream(streamID uint64) error {
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
-	
+
 	mapping, exists := sm.logicalStreams[streamID]
 	if !exists {
 		return utils.NewKwikError(utils.ErrStreamCreationFailed,
 			fmt.Sprintf("logical stream %d not found", streamID), nil)
 	}
-	
+
 	// Remove logical stream mapping
 	delete(sm.logicalStreams, streamID)
-	
+
 	// Update real stream tracking
 	if realStreamInfo, exists := sm.realStreams[mapping.RealStreamID]; exists {
 		realStreamInfo.mutex.Lock()
 		delete(realStreamInfo.LogicalStreams, streamID)
 		logicalCount := len(realStreamInfo.LogicalStreams)
 		realStreamInfo.mutex.Unlock()
-		
+
 		// If real stream has no more logical streams, consider pooling or closing it
 		if logicalCount == 0 {
 			sm.handleEmptyRealStream(realStreamInfo)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -320,7 +354,7 @@ func (sm *KwikStreamMultiplexer) CloseLogicalStream(streamID uint64) error {
 func (sm *KwikStreamMultiplexer) handleEmptyRealStream(realStreamInfo *RealStreamInfo) {
 	// Remove from active streams
 	delete(sm.realStreams, realStreamInfo.ID)
-	
+
 	// Add to pool if pool has space
 	pathPool := sm.realStreamPool[realStreamInfo.PathID]
 	if len(pathPool) < sm.config.RealStreamPoolSize {
@@ -335,16 +369,16 @@ func (sm *KwikStreamMultiplexer) handleEmptyRealStream(realStreamInfo *RealStrea
 func (sm *KwikStreamMultiplexer) closeRealStream(realStreamInfo *RealStreamInfo) {
 	realStreamInfo.mutex.Lock()
 	defer realStreamInfo.mutex.Unlock()
-	
+
 	if realStreamInfo.closed {
 		return
 	}
-	
+
 	// Close the actual QUIC stream
 	if realStreamInfo.QuicStream != nil {
 		realStreamInfo.QuicStream.Close()
 	}
-	
+
 	realStreamInfo.closed = true
 }
 
@@ -354,40 +388,160 @@ func (sm *KwikStreamMultiplexer) GetOptimalRatio() int {
 	return sm.config.OptimalLogicalPerReal
 }
 
+// CreatePublicLogicalStream creates a logical stream that is exposed to the public interface
+// Only primary servers should use this method (Requirement 2.4)
+func (sm *KwikStreamMultiplexer) CreatePublicLogicalStream(pathID string, serverRole ServerRole) (*LogicalStream, error) {
+	// Validate server role for public stream creation
+	if sm.isolator != nil {
+		if err := sm.isolator.ValidateStreamCreation(pathID, serverRole); err != nil {
+			return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
+				"stream creation validation failed", err)
+		}
+
+		if serverRole != ServerRolePrimary {
+			return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
+				"only primary servers can create public streams", nil)
+		}
+	}
+
+	// Create the logical stream using existing logic
+	logicalStream, err := sm.CreateLogicalStream(pathID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Mark as public stream if isolator is available
+	if sm.isolator != nil {
+		// The stream is public by default when created by primary server
+		// No additional action needed as isolation prevents secondary exposure
+	}
+
+	return logicalStream, nil
+}
+
+// HandleSecondaryStream processes a secondary stream and routes it internally
+// Implements Requirement 2.4: secondary streams are handled internally
+func (sm *KwikStreamMultiplexer) HandleSecondaryStream(pathID string, stream quic.Stream, metadata *StreamMetadata) error {
+	if sm.isolator == nil {
+		return utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"secondary stream isolation not configured", nil)
+	}
+
+	// Route the secondary stream through the isolator
+	if err := sm.isolator.RouteSecondaryStream(pathID, stream, metadata); err != nil {
+		return utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"failed to route secondary stream", err)
+	}
+
+	return nil
+}
+
+// RouteSecondaryDataToAggregator routes data from secondary streams to the appropriate KWIK stream
+// Implements Requirement 2.5: transparent aggregation of secondary stream data
+func (sm *KwikStreamMultiplexer) RouteSecondaryDataToAggregator(kwikStreamID uint64, secondaryData *SecondaryStreamData) error {
+	if sm.isolator == nil {
+		return utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"secondary stream isolation not configured", nil)
+	}
+
+	// Validate that the target KWIK stream exists and is public
+	sm.mutex.RLock()
+	mapping, exists := sm.logicalStreams[kwikStreamID]
+	sm.mutex.RUnlock()
+
+	if !exists {
+		return utils.NewKwikError(utils.ErrStreamCreationFailed,
+			fmt.Sprintf("target KWIK stream %d not found", kwikStreamID), nil)
+	}
+
+	// Ensure the secondary stream is properly isolated
+	if sm.isolator.IsStreamPublic(secondaryData.StreamID) {
+		return utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"attempting to route public stream as secondary data", nil)
+	}
+
+	// Route through the isolator to the aggregator
+	if err := sm.isolator.RouteToAggregator(kwikStreamID, secondaryData); err != nil {
+		return utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"failed to route secondary data to aggregator", err)
+	}
+
+	// Update activity on the target logical stream
+	if realStreamInfo, exists := sm.realStreams[mapping.RealStreamID]; exists {
+		realStreamInfo.mutex.Lock()
+		realStreamInfo.LastActivity = time.Now()
+		realStreamInfo.BytesTransmitted += uint64(len(secondaryData.Data))
+		realStreamInfo.mutex.Unlock()
+	}
+
+	return nil
+}
+
+// IsStreamPublic checks if a logical stream is exposed to the public interface
+// Implements Requirement 2.1: isolation of secondary streams from public interface
+func (sm *KwikStreamMultiplexer) IsStreamPublic(streamID uint64) bool {
+	if sm.isolator == nil {
+		// Without isolator, all streams are considered public (backward compatibility)
+		return true
+	}
+
+	return sm.isolator.IsStreamPublic(streamID)
+}
+
+// IsStreamSecondary checks if a stream is a secondary (internal) stream
+// Implements Requirement 2.2: internal handling of secondary streams
+func (sm *KwikStreamMultiplexer) IsStreamSecondary(streamID uint64) bool {
+	if sm.isolator == nil {
+		return false
+	}
+
+	return sm.isolator.IsStreamSecondary(streamID)
+}
+
+// GetIsolationStats returns statistics about stream isolation
+// Provides monitoring capabilities for secondary stream isolation
+func (sm *KwikStreamMultiplexer) GetIsolationStats() *SecondaryIsolationStats {
+	if sm.isolator == nil {
+		return &SecondaryIsolationStats{}
+	}
+
+	return sm.isolator.GetIsolationStats()
+}
+
 // GetMultiplexingStats returns statistics about stream multiplexing
 func (sm *KwikStreamMultiplexer) GetMultiplexingStats() *MultiplexingStats {
 	sm.mutex.RLock()
 	defer sm.mutex.RUnlock()
-	
+
 	stats := &MultiplexingStats{
 		ActiveRealStreams:    len(sm.realStreams),
 		ActiveLogicalStreams: len(sm.logicalStreams),
 		PooledRealStreams:    0,
 		OptimalRatio:         sm.config.OptimalLogicalPerReal,
 	}
-	
+
 	// Count pooled streams
 	for _, pool := range sm.realStreamPool {
 		stats.PooledRealStreams += len(pool)
 	}
-	
+
 	// Calculate efficiency metrics
 	if stats.ActiveRealStreams > 0 {
 		stats.AverageLogicalPerReal = float64(stats.ActiveLogicalStreams) / float64(stats.ActiveRealStreams)
 		stats.EfficiencyRatio = stats.AverageLogicalPerReal / float64(sm.config.OptimalLogicalPerReal)
 	}
-	
+
 	return stats
 }
 
 // MultiplexingStats contains statistics about stream multiplexing
 type MultiplexingStats struct {
-	ActiveRealStreams       int
-	ActiveLogicalStreams    int
-	PooledRealStreams       int
-	OptimalRatio            int
-	AverageLogicalPerReal   float64
-	EfficiencyRatio         float64
+	ActiveRealStreams     int
+	ActiveLogicalStreams  int
+	PooledRealStreams     int
+	OptimalRatio          int
+	AverageLogicalPerReal float64
+	EfficiencyRatio       float64
 }
 
 // StartCleanupRoutine starts background cleanup of idle real streams
@@ -395,7 +549,7 @@ func (sm *KwikStreamMultiplexer) StartCleanupRoutine() {
 	go func() {
 		ticker := time.NewTicker(sm.config.RealStreamIdleTimeout / 2)
 		defer ticker.Stop()
-		
+
 		for {
 			select {
 			case <-sm.ctx.Done():
@@ -411,40 +565,40 @@ func (sm *KwikStreamMultiplexer) StartCleanupRoutine() {
 func (sm *KwikStreamMultiplexer) cleanupIdleRealStreams() {
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
-	
+
 	now := time.Now()
 	idleThreshold := now.Add(-sm.config.RealStreamIdleTimeout)
-	
+
 	// Clean up idle real streams
 	for streamID, realStreamInfo := range sm.realStreams {
 		realStreamInfo.mutex.RLock()
 		lastActivity := realStreamInfo.LastActivity
 		logicalCount := len(realStreamInfo.LogicalStreams)
 		realStreamInfo.mutex.RUnlock()
-		
+
 		// Close real streams that are idle and have no logical streams
 		if logicalCount == 0 && lastActivity.Before(idleThreshold) {
 			delete(sm.realStreams, streamID)
 			sm.closeRealStream(realStreamInfo)
 		}
 	}
-	
+
 	// Clean up idle pooled streams
 	for pathID, pool := range sm.realStreamPool {
 		activePool := make([]*RealStreamInfo, 0, len(pool))
-		
+
 		for _, realStreamInfo := range pool {
 			realStreamInfo.mutex.RLock()
 			lastActivity := realStreamInfo.LastActivity
 			realStreamInfo.mutex.RUnlock()
-			
+
 			if lastActivity.After(idleThreshold) {
 				activePool = append(activePool, realStreamInfo)
 			} else {
 				sm.closeRealStream(realStreamInfo)
 			}
 		}
-		
+
 		sm.realStreamPool[pathID] = activePool
 	}
 }
@@ -452,26 +606,26 @@ func (sm *KwikStreamMultiplexer) cleanupIdleRealStreams() {
 // Close shuts down the stream multiplexer
 func (sm *KwikStreamMultiplexer) Close() error {
 	sm.cancel()
-	
+
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
-	
+
 	// Close all active real streams
 	for _, realStreamInfo := range sm.realStreams {
 		sm.closeRealStream(realStreamInfo)
 	}
-	
+
 	// Close all pooled real streams
 	for _, pool := range sm.realStreamPool {
 		for _, realStreamInfo := range pool {
 			sm.closeRealStream(realStreamInfo)
 		}
 	}
-	
+
 	// Clear all maps
 	sm.realStreams = make(map[uint64]*RealStreamInfo)
 	sm.realStreamPool = make(map[string][]*RealStreamInfo)
 	sm.logicalStreams = make(map[uint64]*LogicalStreamMapping)
-	
+
 	return nil
 }

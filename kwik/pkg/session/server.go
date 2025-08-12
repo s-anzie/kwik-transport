@@ -15,6 +15,26 @@ import (
 	"kwik/proto/control"
 )
 
+// ServerRole defines the role of a server in the KWIK architecture
+type ServerRole int
+
+const (
+	ServerRolePrimary ServerRole = iota
+	ServerRoleSecondary
+)
+
+// String returns a string representation of the server role
+func (r ServerRole) String() string {
+	switch r {
+	case ServerRolePrimary:
+		return "PRIMARY"
+	case ServerRoleSecondary:
+		return "SECONDARY"
+	default:
+		return "UNKNOWN"
+	}
+}
+
 // ServerSession implements the Session interface for KWIK servers
 // It provides full path management capabilities including AddPath/RemovePath
 type ServerSession struct {
@@ -27,6 +47,9 @@ type ServerSession struct {
 
 	// Authentication management
 	authManager *AuthenticationManager
+
+	// Server role for stream isolation
+	serverRole ServerRole
 
 	// Stream management
 	nextStreamID uint64
@@ -81,6 +104,7 @@ func NewServerSession(sessionID string, pathManager transport.PathManager, confi
 		state:                SessionStateActive,
 		createdAt:            time.Now(),
 		authManager:          NewAuthenticationManager(sessionID, false), // false = isServer
+		serverRole:           ServerRolePrimary,                           // Default to primary role
 		streams:              make(map[uint64]*ServerStream),
 		acceptChan:           make(chan *ServerStream, 100),
 		ctx:                  ctx,
@@ -315,12 +339,19 @@ func AcceptSession(listener *quic.Listener) (Session, error) {
 }
 
 // OpenStreamSync opens a new stream synchronously (QUIC-compatible)
+// Only primary servers can open streams on the public client session
 func (s *ServerSession) OpenStreamSync(ctx context.Context) (Stream, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
 	if s.state != SessionStateActive {
 		return nil, utils.NewKwikError(utils.ErrConnectionLost, "session is not active", nil)
+	}
+
+	// Restrict stream opening to primary servers only (Requirement 1.1, 1.2, 1.3)
+	if s.serverRole != ServerRolePrimary {
+		return nil, utils.NewKwikError(utils.ErrInvalidFrame, 
+			"only primary servers can open streams on the public client session", nil)
 	}
 
 	// Generate new stream ID
@@ -1583,4 +1614,78 @@ func (s *ServerSession) handleAuthenticationWithSessionID(ctx context.Context) (
 	// No need to manually mark as authenticated
 
 	return clientSessionID, nil
+}
+
+// openSecondaryStream opens a secondary stream for secondary servers
+// This creates a stream on the internal QUIC connection, not the public client session
+func (s *ServerSession) openSecondaryStream(ctx context.Context) (stream.SecondaryStream, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	if s.state != SessionStateActive {
+		return nil, utils.NewKwikError(utils.ErrConnectionLost, "session is not active", nil)
+	}
+
+	// Only secondary servers can use this method
+	if s.serverRole != ServerRoleSecondary {
+		return nil, utils.NewKwikError(utils.ErrInvalidFrame, 
+			"openSecondaryStream is only available for secondary servers", nil)
+	}
+
+	// Generate new stream ID
+	streamID := s.nextStreamID
+	s.nextStreamID++
+
+	// Ensure primary path is available and active
+	if s.primaryPath == nil {
+		return nil, utils.NewKwikError(utils.ErrConnectionLost, "no primary path available", nil)
+	}
+
+	if !s.primaryPath.IsActive() {
+		return nil, utils.NewKwikError(utils.ErrPathDead, "primary path is not active", nil)
+	}
+
+	// Create actual QUIC stream on the internal connection
+	conn := s.primaryPath.GetConnection()
+	if conn == nil {
+		return nil, utils.NewKwikError(utils.ErrConnectionLost, "no QUIC connection available", nil)
+	}
+
+	quicStream, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed, "failed to create QUIC stream", err)
+	}
+
+	// Create secondary stream wrapper
+	secondaryStream := stream.NewSecondaryStream(streamID, s.primaryPath.ID(), quicStream, s)
+
+	// Store in streams map (using a wrapper to satisfy the interface)
+	serverStream := &ServerStream{
+		id:         streamID,
+		pathID:     s.primaryPath.ID(),
+		session:    s,
+		created:    time.Now(),
+		state:      stream.StreamStateOpen,
+		quicStream: quicStream,
+	}
+
+	s.streamsMutex.Lock()
+	s.streams[streamID] = serverStream
+	s.streamsMutex.Unlock()
+
+	return secondaryStream, nil
+}
+
+// getServerRole returns the role of this server session
+func (s *ServerSession) getServerRole() ServerRole {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return s.serverRole
+}
+
+// SetServerRole sets the role of this server session
+func (s *ServerSession) SetServerRole(role ServerRole) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.serverRole = role
 }

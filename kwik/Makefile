@@ -126,7 +126,9 @@ proto:
 		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
 		proto/common/common.proto \
 		proto/control/control.proto \
-		proto/data/data.proto
+		proto/data/data.proto \
+		proto/secondary_stream/secondary_stream.proto \
+		proto/stream_metadata/stream_metadata.proto
 
 # Install dependencies
 deps:

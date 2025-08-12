@@ -1,6 +1,8 @@
 package data
 
 import (
+	"time"
+	
 	"kwik/proto/data"
 )
 
@@ -61,8 +63,19 @@ type DataAggregator interface {
 	CreateAggregatedStream(streamID uint64) error
 	CloseAggregatedStream(streamID uint64) error
 	
+	// Secondary stream aggregation (new methods)
+	AggregateSecondaryData(kwikStreamID uint64, secondaryData *SecondaryStreamData) error
+	SetStreamMapping(kwikStreamID uint64, secondaryStreamID uint64, pathID string) error
+	RemoveStreamMapping(secondaryStreamID uint64) error
+	
+	// Offset validation and management
+	ValidateOffset(kwikStreamID uint64, offset uint64, sourcePathID string) error
+	GetNextExpectedOffset(kwikStreamID uint64) uint64
+	
 	// Statistics
 	GetAggregationStats(streamID uint64) (*AggregationStats, error)
+	GetSecondaryStreamStats() *SecondaryAggregationStats
+	GetOffsetManagerStats() *OffsetManagerStats
 }
 
 // DataScheduler handles scheduling of data transmission across paths
@@ -90,6 +103,44 @@ type AggregationStats struct {
 	FramesPerPath      map[string]uint64
 	LastActivity       int64
 	AggregationRatio   float64
+}
+
+// SecondaryStreamData represents data from a secondary stream (forward declaration)
+// Full definition is in secondary_aggregator.go
+type SecondaryStreamData struct {
+	StreamID     uint64
+	PathID       string
+	Data         []byte
+	Offset       uint64
+	KwikStreamID uint64
+	Timestamp    time.Time
+	SequenceNum  uint64
+}
+
+// SecondaryAggregationStats contains statistics for secondary stream aggregation (forward declaration)
+// Full definition is in secondary_aggregator.go
+type SecondaryAggregationStats struct {
+	ActiveSecondaryStreams int
+	ActiveKwikStreams      int
+	TotalBytesAggregated   uint64
+	TotalDataFrames        uint64
+	AggregationLatency     time.Duration
+	ReorderingEvents       uint64
+	DroppedFrames          uint64
+	LastUpdate             time.Time
+}
+
+// OffsetManagerStats contains statistics for offset management (forward declaration)
+// Full definition is in multi_source_offset_manager.go
+type OffsetManagerStats struct {
+	ActiveStreams        int
+	TotalConflicts       uint64
+	ResolvedConflicts    uint64
+	PendingDataBytes     uint64
+	ReorderingEvents     uint64
+	SyncRequests         uint64
+	SyncFailures         uint64
+	LastUpdate           time.Time
 }
 
 // PathMetrics contains performance metrics for a path

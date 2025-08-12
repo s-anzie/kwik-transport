@@ -515,4 +515,72 @@ func (ca *ClientDataAggregator) FlushReorderBuffer(streamID uint64) ([]byte, err
 	ca.statsMutex.Unlock()
 
 	return flushedData, nil
+}// AggregateSecondaryData aggregates data from a secondary stream (stub implementation for interface compliance)
+func (ca *ClientDataAggregator) AggregateSecondaryData(kwikStreamID uint64, secondaryData *SecondaryStreamData) error {
+	// ClientDataAggregator doesn't support secondary streams, return error
+	return utils.NewKwikError(utils.ErrInvalidFrame, "secondary stream aggregation not supported by ClientDataAggregator", nil)
+}
+
+// SetStreamMapping sets the mapping between a secondary stream and a KWIK stream (stub implementation)
+func (ca *ClientDataAggregator) SetStreamMapping(kwikStreamID uint64, secondaryStreamID uint64, pathID string) error {
+	// ClientDataAggregator doesn't support secondary streams, return error
+	return utils.NewKwikError(utils.ErrInvalidFrame, "stream mapping not supported by ClientDataAggregator", nil)
+}
+
+// RemoveStreamMapping removes the mapping for a secondary stream (stub implementation)
+func (ca *ClientDataAggregator) RemoveStreamMapping(secondaryStreamID uint64) error {
+	// ClientDataAggregator doesn't support secondary streams, return error
+	return utils.NewKwikError(utils.ErrInvalidFrame, "stream mapping not supported by ClientDataAggregator", nil)
+}
+
+// ValidateOffset validates an offset for a KWIK stream from a specific source (stub implementation)
+func (ca *ClientDataAggregator) ValidateOffset(kwikStreamID uint64, offset uint64, sourcePathID string) error {
+	// ClientDataAggregator doesn't support offset validation, return success
+	return nil
+}
+
+// GetNextExpectedOffset returns the next expected offset for a KWIK stream (stub implementation)
+func (ca *ClientDataAggregator) GetNextExpectedOffset(kwikStreamID uint64) uint64 {
+	ca.streamsMutex.RLock()
+	defer ca.streamsMutex.RUnlock()
+
+	aggregatedStream, exists := ca.aggregatedStreams[kwikStreamID]
+	if !exists {
+		return 0
+	}
+
+	aggregatedStream.mutex.RLock()
+	defer aggregatedStream.mutex.RUnlock()
+
+	return aggregatedStream.ExpectedOffset
+}
+
+// GetSecondaryStreamStats returns statistics for secondary stream aggregation (stub implementation)
+func (ca *ClientDataAggregator) GetSecondaryStreamStats() *SecondaryAggregationStats {
+	// ClientDataAggregator doesn't support secondary streams, return empty stats
+	return &SecondaryAggregationStats{
+		ActiveSecondaryStreams: 0,
+		ActiveKwikStreams:      0,
+		TotalBytesAggregated:   0,
+		TotalDataFrames:        0,
+		AggregationLatency:     0,
+		ReorderingEvents:       0,
+		DroppedFrames:          0,
+		LastUpdate:             time.Now(),
+	}
+}
+
+// GetOffsetManagerStats returns statistics for the offset manager (stub implementation)
+func (ca *ClientDataAggregator) GetOffsetManagerStats() *OffsetManagerStats {
+	// ClientDataAggregator doesn't support offset management, return empty stats
+	return &OffsetManagerStats{
+		ActiveStreams:     0,
+		TotalConflicts:    0,
+		ResolvedConflicts: 0,
+		PendingDataBytes:  0,
+		ReorderingEvents:  0,
+		SyncRequests:      0,
+		SyncFailures:      0,
+		LastUpdate:        time.Now(),
+	}
 }

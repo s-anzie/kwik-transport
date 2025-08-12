@@ -1,0 +1,212 @@
+syntax = "proto3";
+package kwik.metadata;
+
+option go_package = "kwik/proto/stream_metadata";
+
+// Stream metadata frame - wrapper for all metadata communication
+message StreamMetadataFrame {
+    uint64 frame_id = 1;               // Unique frame identifier
+    MetadataFrameType type = 2;        // Type of metadata frame
+    bytes payload = 3;                 // Serialized payload based on frame type
+    uint64 timestamp = 4;              // Frame creation timestamp
+    string source_path_id = 5;         // Path ID of the sender
+    string target_path_id = 6;         // Path ID of the intended recipient (optional)
+    uint32 payload_length = 7;         // Length of payload for validation
+    uint32 checksum = 8;               // Frame checksum for integrity
+}
+
+// Metadata frame types - all possible metadata operations
+enum MetadataFrameType {
+    SECONDARY_STREAM_OPEN = 0;         // Secondary stream opening notification
+    SECONDARY_STREAM_DATA = 1;         // Secondary stream data with metadata
+    SECONDARY_STREAM_CLOSE = 2;        // Secondary stream closing notification
+    OFFSET_SYNC_REQUEST = 3;           // Request for offset synchronization
+    OFFSET_SYNC_RESPONSE = 4;          // Response to offset synchronization
+    STREAM_MAPPING_UPDATE = 5;         // Stream mapping update notification
+    STREAM_MAPPING_QUERY = 6;          // Query for stream mapping information
+    STREAM_MAPPING_RESPONSE = 7;       // Response to mapping query
+    AGGREGATION_STATUS = 8;            // Aggregation status update
+    ERROR_NOTIFICATION = 9;            // Error notification
+}
+
+// Stream mapping update - notify about changes in stream mappings
+message StreamMappingUpdate {
+    uint64 secondary_stream_id = 1;    // Secondary stream ID
+    uint64 kwik_stream_id = 2;         // KWIK logical stream ID
+    string path_id = 3;                // Path ID where mapping applies
+    MappingOperation operation = 4;     // Type of mapping operation
+    uint64 timestamp = 5;              // Operation timestamp
+    uint64 initial_offset = 6;         // Initial offset for CREATE operations
+    uint64 current_offset = 7;         // Current offset for UPDATE operations
+    string reason = 8;                 // Reason for the operation (optional)
+    map<string, string> metadata = 9;  // Additional mapping metadata
+}
+
+// Mapping operations - types of mapping changes
+enum MappingOperation {
+    MAPPING_CREATE = 0;                // Create a new mapping
+    MAPPING_UPDATE = 1;                // Update an existing mapping
+    MAPPING_DELETE = 2;                // Delete a mapping
+    MAPPING_SUSPEND = 3;               // Temporarily suspend a mapping
+    MAPPING_RESUME = 4;                // Resume a suspended mapping
+}
+
+// Stream mapping query - request information about stream mappings
+message StreamMappingQuery {
+    QueryType query_type = 1;          // Type of query
+    uint64 stream_id = 2;              // Stream ID to query (secondary or KWIK)
+    string path_id = 3;                // Path ID to query (optional)
+    uint64 timestamp = 4;              // Query timestamp
+    string requesting_component = 5;    // Component making the query
+}
+
+// Query types for mapping queries
+enum QueryType {
+    QUERY_BY_SECONDARY_STREAM = 0;     // Query by secondary stream ID
+    QUERY_BY_KWIK_STREAM = 1;          // Query by KWIK stream ID
+    QUERY_BY_PATH = 2;                 // Query all mappings for a path
+    QUERY_ALL_ACTIVE = 3;              // Query all active mappings
+}
+
+// Stream mapping response - response to mapping query
+message StreamMappingResponse {
+    bool success = 1;                  // Whether query was successful
+    string error_message = 2;          // Error message if not successful
+    repeated MappingInfo mappings = 3; // List of matching mappings
+    uint64 timestamp = 4;              // Response timestamp
+    uint64 total_mappings = 5;         // Total number of mappings found
+}
+
+// Mapping information - details about a stream mapping
+message MappingInfo {
+    uint64 secondary_stream_id = 1;    // Secondary stream ID
+    uint64 kwik_stream_id = 2;         // KWIK logical stream ID
+    string path_id = 3;                // Path ID
+    MappingState state = 4;            // Current mapping state
+    uint64 created_at = 5;             // Mapping creation timestamp
+    uint64 last_activity = 6;          // Last activity timestamp
+    uint64 current_offset = 7;         // Current offset in KWIK stream
+    uint64 bytes_transferred = 8;      // Total bytes transferred through mapping
+    map<string, string> metadata = 9;  // Additional mapping metadata
+}
+
+// Mapping states
+enum MappingState {
+    MAPPING_ACTIVE = 0;                // Mapping is active and processing data
+    MAPPING_SUSPENDED = 1;             // Mapping is temporarily suspended
+    MAPPING_CLOSING = 2;               // Mapping is being closed
+    MAPPING_CLOSED = 3;                // Mapping is closed
+    MAPPING_ERROR = 4;                 // Mapping is in error state
+}
+
+// Aggregation status - status of data aggregation operations
+message AggregationStatus {
+    uint64 kwik_stream_id = 1;         // KWIK stream ID being aggregated
+    AggregationState state = 2;        // Current aggregation state
+    uint64 total_sources = 3;          // Total number of data sources
+    uint64 active_sources = 4;         // Number of active data sources
+    uint64 next_expected_offset = 5;   // Next expected offset in KWIK stream
+    repeated SourceStatus sources = 6; // Status of individual sources
+    uint64 timestamp = 7;              // Status timestamp
+    AggregationMetrics metrics = 8;    // Aggregation performance metrics
+}
+
+// Aggregation states
+enum AggregationState {
+    AGGREGATION_IDLE = 0;              // No active aggregation
+    AGGREGATION_ACTIVE = 1;            // Actively aggregating data
+    AGGREGATION_WAITING = 2;           // Waiting for data from sources
+    AGGREGATION_ERROR = 3;             // Error in aggregation process
+    AGGREGATION_COMPLETE = 4;          // Aggregation completed
+}
+
+// Source status - status of individual data sources
+message SourceStatus {
+    string source_path_id = 1;         // Path ID of the source
+    uint64 secondary_stream_id = 2;    // Secondary stream ID
+    SourceState state = 3;             // Current source state
+    uint64 current_offset = 4;         // Current offset from this source
+    uint64 bytes_contributed = 5;      // Bytes contributed by this source
+    uint64 last_activity = 6;          // Last activity timestamp
+    uint32 error_count = 7;            // Number of errors from this source
+}
+
+// Source states
+enum SourceState {
+    SOURCE_ACTIVE = 0;                 // Source is actively sending data
+    SOURCE_IDLE = 1;                   // Source is idle but available
+    SOURCE_STALLED = 2;                // Source is stalled/blocked
+    SOURCE_ERROR = 3;                  // Source is in error state
+    SOURCE_CLOSED = 4;                 // Source is closed
+}
+
+// Aggregation metrics - performance metrics for aggregation
+message AggregationMetrics {
+    uint64 total_frames_processed = 1; // Total frames processed
+    uint64 total_bytes_aggregated = 2; // Total bytes aggregated
+    uint64 reorder_events = 3;         // Number of reordering events
+    uint64 duplicate_frames = 4;       // Number of duplicate frames detected
+    uint64 offset_conflicts = 5;       // Number of offset conflicts resolved
+    float aggregation_efficiency = 6;  // Aggregation efficiency (0.0 to 1.0)
+    uint64 average_latency_us = 7;     // Average aggregation latency in microseconds
+    uint64 max_latency_us = 8;         // Maximum aggregation latency in microseconds
+}
+
+// Error notification - notify about errors in metadata processing
+message ErrorNotification {
+    string error_code = 1;             // Structured error code
+    string error_message = 2;          // Human-readable error message
+    ErrorSeverity severity = 3;        // Error severity level
+    string component = 4;              // Component that generated the error
+    uint64 timestamp = 5;              // Error timestamp
+    uint64 affected_stream_id = 6;     // Stream ID affected by error (optional)
+    string affected_path_id = 7;       // Path ID affected by error (optional)
+    map<string, string> context = 8;   // Additional error context
+    string recovery_suggestion = 9;    // Suggested recovery action
+}
+
+// Error severity levels
+enum ErrorSeverity {
+    SEVERITY_INFO = 0;
+    SEVERITY_WARNING = 1;
+    SEVERITY_ERROR = 2;
+    SEVERITY_CRITICAL = 3;
+    SEVERITY_FATAL = 4;
+}
+
+// Metadata protocol configuration - configuration for metadata protocol
+message MetadataProtocolConfig {
+    uint32 max_frame_size = 1;         // Maximum metadata frame size
+    uint32 frame_timeout_ms = 2;       // Timeout for frame processing
+    uint32 max_pending_frames = 3;     // Maximum pending frames per stream
+    bool enable_checksums = 4;         // Whether to enable frame checksums
+    bool enable_compression = 5;       // Whether to enable payload compression
+    CompressionType compression_type = 6; // Type of compression to use
+    uint32 batch_size = 7;             // Batch size for frame processing
+    uint32 retry_attempts = 8;         // Number of retry attempts for failed frames
+}
+
+// Compression types for metadata payloads
+enum CompressionType {
+    COMPRESSION_NONE = 0;
+    COMPRESSION_GZIP = 1;
+    COMPRESSION_LZ4 = 2;
+    COMPRESSION_ZSTD = 3;
+}
+
+// Metadata protocol statistics - statistics for metadata protocol operations
+message MetadataProtocolStats {
+    string path_id = 1;                // Path ID these stats apply to
+    uint64 frames_sent = 2;            // Total metadata frames sent
+    uint64 frames_received = 3;        // Total metadata frames received
+    uint64 frames_processed = 4;       // Total frames successfully processed
+    uint64 frames_failed = 5;          // Total frames that failed processing
+    uint64 bytes_sent = 6;             // Total metadata bytes sent
+    uint64 bytes_received = 7;         // Total metadata bytes received
+    uint64 checksum_errors = 8;        // Number of checksum validation errors
+    uint64 timeout_errors = 9;         // Number of timeout errors
+    uint64 protocol_violations = 10;   // Number of protocol violations detected
+    float compression_ratio = 11;      // Average compression ratio achieved
+    uint64 average_processing_time_us = 12; // Average frame processing time
+    uint64 last_activity = 13;         // Timestamp of last activity
+}
