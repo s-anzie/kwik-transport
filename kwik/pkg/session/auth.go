@@ -19,6 +19,7 @@ type AuthenticationManager struct {
 	enabledFeatures []string
 	sessionTimeout  time.Duration
 	createdAt     time.Time
+	sessionRole   control.SessionRole  // Role of this session (PRIMARY or SECONDARY)
 }
 
 // NewAuthenticationManager creates a new authentication manager
@@ -37,13 +38,14 @@ func NewAuthenticationManager(sessionID string, isClient bool) *AuthenticationMa
 }
 
 // CreateAuthenticationRequest creates an authentication request frame
-func (am *AuthenticationManager) CreateAuthenticationRequest() (*control.ControlFrame, error) {
+func (am *AuthenticationManager) CreateAuthenticationRequest(role control.SessionRole) (*control.ControlFrame, error) {
 	// Create authentication request
 	authReq := &control.AuthenticationRequest{
 		SessionId:         am.sessionID,
 		Credentials:       am.credentials,
 		ClientVersion:     am.clientVersion,
 		SupportedFeatures: utils.GetSupportedFeatures(),
+		Role:              role,
 	}
 
 	// Serialize request
@@ -117,20 +119,37 @@ func (am *AuthenticationManager) HandleAuthenticationRequest(frame *control.Cont
 			"failed to deserialize authentication request", err)
 	}
 
-	// Validate session ID (for secondary path authentication)
+	// Validate session role and ID based on authentication type
 	success := true
 	errorMessage := ""
 	
-	if authReq.SessionId != am.sessionID {
-		// For primary path, accept the session ID from client
-		// For secondary path, validate it matches existing session
+	// Handle role-based authentication logic
+	if authReq.Role == control.SessionRole_PRIMARY {
+		// Primary path authentication - this is the main session
 		if am.isAuthenticated {
+			// Already authenticated, this shouldn't happen for primary
 			success = false
-			errorMessage = "session ID mismatch"
+			errorMessage = "primary session already authenticated"
 		} else {
-			// Primary path authentication - accept the session ID
+			// Accept the session ID from client for primary authentication
 			am.sessionID = authReq.SessionId
+			am.sessionRole = control.SessionRole_PRIMARY
 		}
+	} else if authReq.Role == control.SessionRole_SECONDARY {
+		// Secondary path authentication - validate against existing session
+		if !am.isAuthenticated {
+			success = false
+			errorMessage = "secondary authentication requires existing primary session"
+		} else if authReq.SessionId != am.sessionID {
+			success = false
+			errorMessage = "session ID mismatch for secondary path"
+		} else {
+			// Valid secondary path authentication
+			am.sessionRole = control.SessionRole_SECONDARY
+		}
+	} else {
+		success = false
+		errorMessage = "invalid session role"
 	}
 
 	// Validate client version compatibility
@@ -197,6 +216,26 @@ func (am *AuthenticationManager) GetEnabledFeatures() []string {
 // GetSessionTimeout returns the session timeout
 func (am *AuthenticationManager) GetSessionTimeout() time.Duration {
 	return am.sessionTimeout
+}
+
+// GetSessionRole returns the role of this session
+func (am *AuthenticationManager) GetSessionRole() control.SessionRole {
+	return am.sessionRole
+}
+
+// SetSessionRole sets the role of this session
+func (am *AuthenticationManager) SetSessionRole(role control.SessionRole) {
+	am.sessionRole = role
+}
+
+// IsPrimarySession returns true if this is a primary session
+func (am *AuthenticationManager) IsPrimarySession() bool {
+	return am.sessionRole == control.SessionRole_PRIMARY
+}
+
+// IsSecondarySession returns true if this is a secondary session
+func (am *AuthenticationManager) IsSecondarySession() bool {
+	return am.sessionRole == control.SessionRole_SECONDARY
 }
 
 // isVersionCompatible checks if the client/server versions are compatible

@@ -937,6 +937,30 @@ func (s *ServerSession) GetDeadPaths() []PathInfo {
 	return pathInfos
 }
 
+// GetSessionRole returns the role of this session (PRIMARY or SECONDARY)
+func (s *ServerSession) GetSessionRole() control.SessionRole {
+	if s.authManager != nil {
+		return s.authManager.GetSessionRole()
+	}
+	return control.SessionRole_PRIMARY // Default to PRIMARY if no auth manager
+}
+
+// IsPrimarySession returns true if this is a primary session
+func (s *ServerSession) IsPrimarySession() bool {
+	if s.authManager != nil {
+		return s.authManager.IsPrimarySession()
+	}
+	return true // Default to primary if no auth manager
+}
+
+// IsSecondarySession returns true if this is a secondary session
+func (s *ServerSession) IsSecondarySession() bool {
+	if s.authManager != nil {
+		return s.authManager.IsSecondarySession()
+	}
+	return false // Default to not secondary if no auth manager
+}
+
 // GetAllPaths returns all paths (active and dead) with proper PathInfo structures
 // Requirements: 6.6 - server can query all paths (complete history)
 func (s *ServerSession) GetAllPaths() []PathInfo {
@@ -1518,41 +1542,29 @@ func (s *ServerSession) handleAuthenticationWithSessionID(ctx context.Context) (
 			"failed to parse authentication request", err)
 	}
 
-	// Extract client's session ID
+	// Use AuthenticationManager to handle the authentication request with role support
+	responseFrame, err := s.authManager.HandleAuthenticationRequest(&frame)
+	if err != nil {
+		return "", utils.NewKwikError(utils.ErrAuthenticationFailed,
+			"authentication failed", err)
+	}
+
+	// Extract client's session ID from the authentication request
 	clientSessionID := authReq.SessionId
 	if clientSessionID == "" {
 		return "", utils.NewKwikError(utils.ErrAuthenticationFailed,
 			"client session ID is empty", nil)
 	}
 
-	// For demo purposes, we'll accept any authentication
-	// In production, this would validate credentials
-
-	// Create authentication response
-	authResp := &control.AuthenticationResponse{
-		Success:        true,
-		SessionId:      clientSessionID, // Use client's session ID
-		ErrorMessage:   "",              // No error message for successful auth
-		ServerVersion:  "kwik-1.0",      // Server version
-		SessionTimeout: 3600,            // Session timeout in seconds
+	// The role is now stored in the AuthenticationManager and can be accessed via GetSessionRole()
+	// Log the role information for debugging
+	roleStr := "UNKNOWN"
+	if s.authManager.GetSessionRole() == control.SessionRole_PRIMARY {
+		roleStr = "PRIMARY"
+	} else if s.authManager.GetSessionRole() == control.SessionRole_SECONDARY {
+		roleStr = "SECONDARY"
 	}
-
-	// Serialize authentication response
-	payload, err := proto.Marshal(authResp)
-	if err != nil {
-		return "", utils.NewKwikError(utils.ErrInvalidFrame,
-			"failed to serialize authentication response", err)
-	}
-
-	// Create response control frame
-	responseFrame := &control.ControlFrame{
-		FrameId:      generateFrameID(),
-		Type:         control.ControlFrameType_AUTHENTICATION_RESPONSE,
-		Payload:      payload,
-		Timestamp:    uint64(time.Now().UnixNano()),
-		SourcePathId: s.primaryPath.ID(),
-		TargetPathId: "",
-	}
+	fmt.Printf("DEBUG: Server authenticated client with role: %s, session ID: %s\n", roleStr, clientSessionID)
 
 	// Serialize and send response
 	frameData, err := proto.Marshal(responseFrame)
@@ -1567,10 +1579,8 @@ func (s *ServerSession) handleAuthenticationWithSessionID(ctx context.Context) (
 			"failed to send authentication response", err)
 	}
 
-	// Mark session as authenticated
-	if s.authManager != nil {
-		s.authManager.MarkAuthenticated()
-	}
+	// Authentication state is now managed by AuthenticationManager.HandleAuthenticationRequest()
+	// No need to manually mark as authenticated
 
 	return clientSessionID, nil
 }

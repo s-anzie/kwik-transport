@@ -857,8 +857,8 @@ func (s *ClientSession) PerformAuthentication(ctx context.Context) error {
 	}
 
 
-	// Create authentication request
-	authFrame, err := s.authManager.CreateAuthenticationRequest()
+	// Create authentication request with PRIMARY role
+	authFrame, err := s.authManager.CreateAuthenticationRequest(control.SessionRole_PRIMARY)
 	if err != nil {
 		return utils.NewKwikError(utils.ErrInvalidFrame,
 			"failed to create authentication request", err)
@@ -1058,9 +1058,9 @@ func (s *ClientSession) performSecondaryPathAuthentication(ctx context.Context, 
 			"failed to get control stream for secondary path authentication", err)
 	}
 
-	// Create authentication request using existing session ID
+	// Create authentication request using existing session ID with SECONDARY role
 	// This is the key difference from primary path authentication
-	authFrame, err := s.authManager.CreateAuthenticationRequest()
+	authFrame, err := s.authManager.CreateAuthenticationRequest(control.SessionRole_SECONDARY)
 	if err != nil {
 		return utils.NewKwikError(utils.ErrInvalidFrame,
 			"failed to create authentication request for secondary path", err)

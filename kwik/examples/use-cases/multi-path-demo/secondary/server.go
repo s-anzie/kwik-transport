@@ -23,17 +23,17 @@ func main() {
 	}
 	defer listener.Close()
 
-	log.Println("Multi-path SECONDARY server listening on localhost:4434")
-	log.Println("Waiting for secondary path connections from clients...")
+	log.Println("[2S->]: listening on localhost:4434")
+	log.Println("[2S->]: Waiting for connections...")
 
 	for {
 		session, err := listener.Accept(context.Background())
 		if err != nil {
-			log.Printf("Accept error: %v", err)
+			log.Printf("[2S->]: Session Accept error: %v", err)
 			continue
 		}
 
-		log.Printf("Secondary path connection accepted from client")
+		log.Printf("[2S->] New connection accepted from [C]")
 		go handleSecondaryPathSession(session)
 	}
 }
@@ -41,7 +41,7 @@ func main() {
 func handleSecondaryPathSession(sess session.Session) {
 	defer sess.Close()
 
-	log.Printf("Secondary server handling session with %d paths", len(sess.GetActivePaths()))
+	log.Printf("[2S->]: handling session with %d paths", len(sess.GetActivePaths()))
 
 	// Create a channel for triggering proactive responses
 	proactiveDataChan := make(chan string, 10)
@@ -54,14 +54,14 @@ func handleSecondaryPathSession(sess session.Session) {
 		stream, err := sess.AcceptStream(context.Background())
 		if err != nil {
 			if err == io.EOF {
-				log.Println("Secondary path session ended")
+				log.Println("[2S->]: session ended")
 				return
 			}
-			log.Printf("Secondary server stream error: %v", err)
+			log.Printf("[2S->]: stream error: %v", err)
 			return
 		}
 
-		log.Printf("Secondary server received stream %d", stream.StreamID())
+		log.Printf("[2S->]: received stream %d", stream.StreamID())
 		go handleSecondaryStream(stream, sess, proactiveDataChan)
 	}
 }
@@ -72,12 +72,12 @@ func handleSecondaryStream(stream session.Stream, sess session.Session, proactiv
 	buffer := make([]byte, 1024)
 	n, err := stream.Read(buffer)
 	if err != nil {
-		log.Printf("Secondary server read error: %v", err)
+		log.Printf("[2S->]: Stream read error: %v", err)
 		return
 	}
 
 	message := string(buffer[:n])
-	log.Printf("Secondary server received: %s", message)
+	log.Printf("[2S->]: received message: %s", message)
 
 	// Process the received message and generate a proactive response
 	processedResponse := processRawMessage([]byte(message))
@@ -85,31 +85,31 @@ func handleSecondaryStream(stream session.Stream, sess session.Session, proactiv
 	// Trigger proactive response by sending data to the channel
 	select {
 	case proactiveDataChan <- processedResponse:
-		log.Printf("Secondary server triggered proactive response: %s", processedResponse)
+		log.Printf("[2S->]: triggered Response: %s", processedResponse)
 	default:
-		log.Printf("Secondary server proactive channel full, skipping response")
+		log.Printf("[2S->] proactive channel full, skipping response")
 	}
 
 	// Show path information from secondary server perspective
 	paths := sess.GetActivePaths()
-	response := fmt.Sprintf("Secondary server echo from %d paths: %s", len(paths), message)
+	response := fmt.Sprintf("Message de [2S] à [C] avec %d chemin en reponse à ': %s'", len(paths), message)
 
 	_, err = stream.Write([]byte(response))
 	if err != nil {
-		log.Printf("Secondary server write error: %v", err)
+		log.Printf("[2S->] Stream write error: %v", err)
 		return
 	}
 
-	log.Printf("Secondary server sent response: %s", response)
+	log.Printf("[2S->] sent response: %s", response)
 }
 
 // processRawMessage processes the raw message and returns a response
 func processRawMessage(messageData []byte) string {
 	message := string(messageData)
-	fmt.Printf("DEBUG: Secondary server processing message: %s\n", message)
+	fmt.Printf("[2S->]: Processing message: %s\n", message)
 
 	// Create a response based on the received message
-	response := fmt.Sprintf("Secondary server response to: %s [processed at %s]",
+	response := fmt.Sprintf("[2S->]: response to: %s [processed at %s]",
 		message, time.Now().Format("15:04:05"))
 
 	return response
@@ -117,40 +117,40 @@ func processRawMessage(messageData []byte) string {
 
 // sendProactiveDataResponses sends proactive data responses to the client only when triggered
 func sendProactiveDataResponses(sess session.Session, proactiveDataChan chan string) {
-	fmt.Println("DEBUG: Secondary server starting proactive data response sender")
-	fmt.Println("DEBUG: Secondary server will only send messages when there's data to process")
+	fmt.Println("[2S->]: Starting proactive data response sender")
+	fmt.Println("[2S->]: Will only send messages when there's data to process")
 
 	counter := 1
 	for {
 		select {
 		case responseData := <-proactiveDataChan:
-			fmt.Printf("DEBUG: Secondary server received data to send proactively: %s\n", responseData)
+			fmt.Printf("[2S->]: Received data to send proactively: %s\n", responseData)
 
 			// Debug: Check session state and paths
 			paths := sess.GetActivePaths()
-			fmt.Printf("DEBUG: Secondary server has %d active paths\n", len(paths))
+			fmt.Printf("[2S->]: Has %d active paths\n", len(paths))
 			for i, path := range paths {
-				fmt.Printf("DEBUG: Path %d: ID=%s, Address=%s, Primary=%v\n", i+1, path.PathID, path.Address, path.IsPrimary)
+				fmt.Printf("[2S->]: Path %d: ID=%s, Address=%s, Primary=%v\n", i+1, path.PathID, path.Address, path.IsPrimary)
 			}
 
 			// Create a new data stream to send proactive message
 			stream, err := sess.OpenStreamSync(context.Background())
 			if err != nil {
-				fmt.Printf("DEBUG: Secondary server failed to open proactive stream: %v\n", err)
+				fmt.Printf("[2S->]: Failed to open proactive stream: %v\n", err)
 				continue
 			}
 
-			fmt.Printf("DEBUG: Secondary server successfully created stream %d for proactive response\n", stream.StreamID())
+			fmt.Printf("[2S->]: Successfully created stream %d for proactive response\n", stream.StreamID())
 
 			// Send the processed response data
 			_, err = stream.Write([]byte(responseData))
 			if err != nil {
-				fmt.Printf("DEBUG: Secondary server failed to send proactive response: %v\n", err)
+				fmt.Printf("[2S->]: Failed to send proactive response: %v\n", err)
 				stream.Close()
 				continue
 			}
 
-			fmt.Printf("DEBUG: Secondary server sent proactive response #%d: %s\n", counter, responseData)
+			fmt.Printf("[2S->]: Sent proactive response #%d: %s\n", counter, responseData)
 			stream.Close()
 			counter++
 

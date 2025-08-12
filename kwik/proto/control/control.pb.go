@@ -160,6 +160,53 @@ func (PathStatus) EnumDescriptor() ([]byte, []int) {
 	return file_proto_control_control_proto_rawDescGZIP(), []int{1}
 }
 
+// Session role enum - indicates whether this is a primary or secondary session
+type SessionRole int32
+
+const (
+	SessionRole_PRIMARY   SessionRole = 0 // Primary session - main connection with full control capabilities
+	SessionRole_SECONDARY SessionRole = 1 // Secondary session - auxiliary connection for data aggregation
+)
+
+// Enum value maps for SessionRole.
+var (
+	SessionRole_name = map[int32]string{
+		0: "PRIMARY",
+		1: "SECONDARY",
+	}
+	SessionRole_value = map[string]int32{
+		"PRIMARY":   0,
+		"SECONDARY": 1,
+	}
+)
+
+func (x SessionRole) Enum() *SessionRole {
+	p := new(SessionRole)
+	*p = x
+	return p
+}
+
+func (x SessionRole) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SessionRole) Descriptor() protoreflect.EnumDescriptor {
+	return file_proto_control_control_proto_enumTypes[2].Descriptor()
+}
+
+func (SessionRole) Type() protoreflect.EnumType {
+	return &file_proto_control_control_proto_enumTypes[2]
+}
+
+func (x SessionRole) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SessionRole.Descriptor instead.
+func (SessionRole) EnumDescriptor() ([]byte, []int) {
+	return file_proto_control_control_proto_rawDescGZIP(), []int{2}
+}
+
 // Stream types
 type StreamType int32
 
@@ -197,11 +244,11 @@ func (x StreamType) String() string {
 }
 
 func (StreamType) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_control_control_proto_enumTypes[2].Descriptor()
+	return file_proto_control_control_proto_enumTypes[3].Descriptor()
 }
 
 func (StreamType) Type() protoreflect.EnumType {
-	return &file_proto_control_control_proto_enumTypes[2]
+	return &file_proto_control_control_proto_enumTypes[3]
 }
 
 func (x StreamType) Number() protoreflect.EnumNumber {
@@ -210,7 +257,7 @@ func (x StreamType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use StreamType.Descriptor instead.
 func (StreamType) EnumDescriptor() ([]byte, []int) {
-	return file_proto_control_control_proto_rawDescGZIP(), []int{2}
+	return file_proto_control_control_proto_rawDescGZIP(), []int{3}
 }
 
 // Control frame wrapper - main container for all control messages
@@ -759,6 +806,7 @@ type AuthenticationRequest struct {
 	Credentials       []byte                 `protobuf:"bytes,2,opt,name=credentials,proto3" json:"credentials,omitempty"`                                      // Authentication credentials
 	ClientVersion     string                 `protobuf:"bytes,3,opt,name=client_version,json=clientVersion,proto3" json:"client_version,omitempty"`             // Client KWIK version
 	SupportedFeatures []string               `protobuf:"bytes,4,rep,name=supported_features,json=supportedFeatures,proto3" json:"supported_features,omitempty"` // Supported KWIK features
+	Role              SessionRole            `protobuf:"varint,5,opt,name=role,proto3,enum=kwik.control.SessionRole" json:"role,omitempty"`                     // Role of this session (PRIMARY or SECONDARY)
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -819,6 +867,13 @@ func (x *AuthenticationRequest) GetSupportedFeatures() []string {
 		return x.SupportedFeatures
 	}
 	return nil
+}
+
+func (x *AuthenticationRequest) GetRole() SessionRole {
+	if x != nil {
+		return x.Role
+	}
+	return SessionRole_PRIMARY
 }
 
 // Authentication response - server responds to authentication
@@ -1381,13 +1436,14 @@ const file_proto_control_control_proto_rawDesc = "" +
 	"\n" +
 	"bytes_sent\x18\x04 \x01(\x04R\tbytesSent\x12%\n" +
 	"\x0ebytes_received\x18\x05 \x01(\x04R\rbytesReceived\x12#\n" +
-	"\rlast_activity\x18\x06 \x01(\x04R\flastActivity\"\xae\x01\n" +
+	"\rlast_activity\x18\x06 \x01(\x04R\flastActivity\"\xdd\x01\n" +
 	"\x15AuthenticationRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12 \n" +
 	"\vcredentials\x18\x02 \x01(\fR\vcredentials\x12%\n" +
 	"\x0eclient_version\x18\x03 \x01(\tR\rclientVersion\x12-\n" +
-	"\x12supported_features\x18\x04 \x03(\tR\x11supportedFeatures\"\xf1\x01\n" +
+	"\x12supported_features\x18\x04 \x03(\tR\x11supportedFeatures\x12-\n" +
+	"\x04role\x18\x05 \x01(\x0e2\x19.kwik.control.SessionRoleR\x04role\"\xf1\x01\n" +
 	"\x16AuthenticationResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1d\n" +
 	"\n" +
@@ -1456,7 +1512,10 @@ const file_proto_control_control_proto_rawDesc = "" +
 	"\x17CONTROL_PATH_CONNECTING\x10\x02\x12\x1e\n" +
 	"\x1aCONTROL_PATH_DISCONNECTING\x10\x03\x12\x19\n" +
 	"\x15CONTROL_PATH_DEGRADED\x10\x04\x12\x1b\n" +
-	"\x17CONTROL_PATH_RECOVERING\x10\x05*\x86\x01\n" +
+	"\x17CONTROL_PATH_RECOVERING\x10\x05*)\n" +
+	"\vSessionRole\x12\v\n" +
+	"\aPRIMARY\x10\x00\x12\r\n" +
+	"\tSECONDARY\x10\x01*\x86\x01\n" +
 	"\n" +
 	"StreamType\x12 \n" +
 	"\x1cCONTROL_STREAM_BIDIRECTIONAL\x10\x00\x12!\n" +
@@ -1476,43 +1535,45 @@ func file_proto_control_control_proto_rawDescGZIP() []byte {
 	return file_proto_control_control_proto_rawDescData
 }
 
-var file_proto_control_control_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_proto_control_control_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
 var file_proto_control_control_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_proto_control_control_proto_goTypes = []any{
 	(ControlFrameType)(0),            // 0: kwik.control.ControlFrameType
 	(PathStatus)(0),                  // 1: kwik.control.PathStatus
-	(StreamType)(0),                  // 2: kwik.control.StreamType
-	(*ControlFrame)(nil),             // 3: kwik.control.ControlFrame
-	(*AddPathRequest)(nil),           // 4: kwik.control.AddPathRequest
-	(*AddPathResponse)(nil),          // 5: kwik.control.AddPathResponse
-	(*RemovePathRequest)(nil),        // 6: kwik.control.RemovePathRequest
-	(*RemovePathResponse)(nil),       // 7: kwik.control.RemovePathResponse
-	(*PathStatusNotification)(nil),   // 8: kwik.control.PathStatusNotification
-	(*PathMetrics)(nil),              // 9: kwik.control.PathMetrics
-	(*AuthenticationRequest)(nil),    // 10: kwik.control.AuthenticationRequest
-	(*AuthenticationResponse)(nil),   // 11: kwik.control.AuthenticationResponse
-	(*StreamCreateNotification)(nil), // 12: kwik.control.StreamCreateNotification
-	(*RawPacketTransmission)(nil),    // 13: kwik.control.RawPacketTransmission
-	(*RawMessageRequest)(nil),        // 14: kwik.control.RawMessageRequest
-	(*RawMessageResponse)(nil),       // 15: kwik.control.RawMessageResponse
-	(*Heartbeat)(nil),                // 16: kwik.control.Heartbeat
-	(*SessionClose)(nil),             // 17: kwik.control.SessionClose
-	nil,                              // 18: kwik.control.AddPathRequest.MetadataEntry
-	nil,                              // 19: kwik.control.StreamCreateNotification.MetadataEntry
+	(SessionRole)(0),                 // 2: kwik.control.SessionRole
+	(StreamType)(0),                  // 3: kwik.control.StreamType
+	(*ControlFrame)(nil),             // 4: kwik.control.ControlFrame
+	(*AddPathRequest)(nil),           // 5: kwik.control.AddPathRequest
+	(*AddPathResponse)(nil),          // 6: kwik.control.AddPathResponse
+	(*RemovePathRequest)(nil),        // 7: kwik.control.RemovePathRequest
+	(*RemovePathResponse)(nil),       // 8: kwik.control.RemovePathResponse
+	(*PathStatusNotification)(nil),   // 9: kwik.control.PathStatusNotification
+	(*PathMetrics)(nil),              // 10: kwik.control.PathMetrics
+	(*AuthenticationRequest)(nil),    // 11: kwik.control.AuthenticationRequest
+	(*AuthenticationResponse)(nil),   // 12: kwik.control.AuthenticationResponse
+	(*StreamCreateNotification)(nil), // 13: kwik.control.StreamCreateNotification
+	(*RawPacketTransmission)(nil),    // 14: kwik.control.RawPacketTransmission
+	(*RawMessageRequest)(nil),        // 15: kwik.control.RawMessageRequest
+	(*RawMessageResponse)(nil),       // 16: kwik.control.RawMessageResponse
+	(*Heartbeat)(nil),                // 17: kwik.control.Heartbeat
+	(*SessionClose)(nil),             // 18: kwik.control.SessionClose
+	nil,                              // 19: kwik.control.AddPathRequest.MetadataEntry
+	nil,                              // 20: kwik.control.StreamCreateNotification.MetadataEntry
 }
 var file_proto_control_control_proto_depIdxs = []int32{
 	0,  // 0: kwik.control.ControlFrame.type:type_name -> kwik.control.ControlFrameType
-	18, // 1: kwik.control.AddPathRequest.metadata:type_name -> kwik.control.AddPathRequest.MetadataEntry
+	19, // 1: kwik.control.AddPathRequest.metadata:type_name -> kwik.control.AddPathRequest.MetadataEntry
 	1,  // 2: kwik.control.PathStatusNotification.status:type_name -> kwik.control.PathStatus
-	9,  // 3: kwik.control.PathStatusNotification.metrics:type_name -> kwik.control.PathMetrics
-	2,  // 4: kwik.control.StreamCreateNotification.stream_type:type_name -> kwik.control.StreamType
-	19, // 5: kwik.control.StreamCreateNotification.metadata:type_name -> kwik.control.StreamCreateNotification.MetadataEntry
-	9,  // 6: kwik.control.Heartbeat.current_metrics:type_name -> kwik.control.PathMetrics
-	7,  // [7:7] is the sub-list for method output_type
-	7,  // [7:7] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	10, // 3: kwik.control.PathStatusNotification.metrics:type_name -> kwik.control.PathMetrics
+	2,  // 4: kwik.control.AuthenticationRequest.role:type_name -> kwik.control.SessionRole
+	3,  // 5: kwik.control.StreamCreateNotification.stream_type:type_name -> kwik.control.StreamType
+	20, // 6: kwik.control.StreamCreateNotification.metadata:type_name -> kwik.control.StreamCreateNotification.MetadataEntry
+	10, // 7: kwik.control.Heartbeat.current_metrics:type_name -> kwik.control.PathMetrics
+	8,  // [8:8] is the sub-list for method output_type
+	8,  // [8:8] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_proto_control_control_proto_init() }
@@ -1525,7 +1586,7 @@ func file_proto_control_control_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_control_control_proto_rawDesc), len(file_proto_control_control_proto_rawDesc)),
-			NumEnums:      3,
+			NumEnums:      4,
 			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   0,

@@ -93,12 +93,19 @@ message PathMetrics {
     uint64 last_activity = 6;      // Timestamp of last activity
 }
 
+// Session role enum - indicates whether this is a primary or secondary session
+enum SessionRole {
+    PRIMARY = 0;    // Primary session - main connection with full control capabilities
+    SECONDARY = 1;  // Secondary session - auxiliary connection for data aggregation
+}
+
 // Authentication request - authenticate on new path using existing session
 message AuthenticationRequest {
     string session_id = 1;
     bytes credentials = 2;         // Authentication credentials
     string client_version = 3;     // Client KWIK version
     repeated string supported_features = 4;  // Supported KWIK features
+    SessionRole role = 5;          // Role of this session (PRIMARY or SECONDARY)
 }
 
 // Authentication response - server responds to authentication

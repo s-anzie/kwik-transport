@@ -39,10 +39,10 @@ func main() {
 func handleMultiPathSession(sess session.Session) {
 	defer sess.Close()
 
-	log.Printf("Client connected with %d paths", len(sess.GetActivePaths()))
+	log.Printf("[PS->]: [C] connected with %d paths", len(sess.GetActivePaths()))
 
 	// Add secondary path after connection (with small delay to ensure client is ready)
-	log.Println("DEBUG: Server requesting client to add secondary path to localhost:4434...")
+	log.Println("[PS->]: Add secondary path to localhost:4434...")
 
 	// Give the client a moment to set up its control frame handler
 	time.Sleep(500 * time.Millisecond)
@@ -51,13 +51,13 @@ func handleMultiPathSession(sess session.Session) {
 	if err != nil {
 		log.Printf("ERROR: Failed to add path: %v", err)
 	} else {
-		log.Println("DEBUG: AddPath request sent successfully to client")
+		log.Println("[PS->]: AddPath request sent successfully to [C]")
 	}
 
 	// Wait for secondary path to be established on client side
 	time.Sleep(2 * time.Second)
 	
-	log.Println("DEBUG: Server sending raw data to secondary server...")
+	log.Println("[PS->]: Sending raw data to [2S]...")
 	
 	// Use the stored path ID from AddPath request
 	// The server generated this ID and sent it to the client, so it should know it
@@ -67,19 +67,19 @@ func handleMultiPathSession(sess session.Session) {
 	if serverSession, ok := sess.(*session.ServerSession); ok {
 		pathID := serverSession.GetPendingPathID(secondaryAddress)
 		if pathID != "" {
-			rawMessage := []byte("Hello from primary server via SendRawData!")
-			log.Printf("DEBUG: Sending raw data to secondary path %s (address: %s)", pathID, secondaryAddress)
+			rawMessage := []byte("Message en direction de [2S] par SendRawData! depuis [PS]")
+			// log.Printf("DEBUG: Sending raw data to secondary path %s (address: %s)", pathID, secondaryAddress)
 			err = sess.SendRawData(rawMessage, pathID)
 			if err != nil {
-				log.Printf("Failed to send raw data: %v", err)
+				log.Printf("[PS->]: Failed to send raw data: %v", err)
 			} else {
-				log.Println("DEBUG: Raw data sent successfully using SendRawData API!")
+				log.Println("[PS->]: Raw data sent successfully using SendRawData API!")
 			}
 		} else {
-			log.Printf("DEBUG: No pending path ID found for address %s", secondaryAddress)
+			log.Printf("[PS->]: No pending path ID found for address %s", secondaryAddress)
 		}
 	} else {
-		log.Println("DEBUG: Could not cast session to ServerSession")
+		log.Println("[PS->]: Could not cast session to ServerSession")
 	}
 
 	// Handle streams
@@ -108,7 +108,7 @@ func handleStream(stream session.Stream, sess session.Session) {
 
 	// Show path information
 	paths := sess.GetActivePaths()
-	response := fmt.Sprintf("Echo from %d paths: %s", len(paths), string(buffer[:n]))
+	response := fmt.Sprintf("Reponse du [PS] au [C] avec %d chemins pour: %s", len(paths), string(buffer[:n]))
 
 	stream.Write([]byte(response))
 }
