@@ -18,16 +18,16 @@ import (
 
 // FileTransferServer manages file transfer requests and coordinates chunk distribution
 type FileTransferServer struct {
-	config            *config.ServerConfiguration // Server configuration
-	session           session.Session             // KWIK session for communication
-	listener          session.Listener            // KWIK listener for accepting connections
-	chunkCoordinator  *ChunkCoordinator           // Coordinates chunk distribution
-	activeRequests    map[string]*RequestState    // Active file requests by client address
-	requestsMutex     sync.RWMutex                // Protects activeRequests map
-	ctx               context.Context             // Context for cancellation
-	cancel            context.CancelFunc          // Cancel function
-	isRunning         bool                        // Whether the server is running
-	runningMutex      sync.RWMutex                // Protects isRunning flag
+	config           *config.ServerConfiguration // Server configuration
+	session          session.Session             // KWIK session for communication
+	listener         session.Listener            // KWIK listener for accepting connections
+	chunkCoordinator *ChunkCoordinator           // Coordinates chunk distribution
+	activeRequests   map[string]*RequestState    // Active file requests by client address
+	requestsMutex    sync.RWMutex                // Protects activeRequests map
+	ctx              context.Context             // Context for cancellation
+	cancel           context.CancelFunc          // Cancel function
+	isRunning        bool                        // Whether the server is running
+	runningMutex     sync.RWMutex                // Protects isRunning flag
 }
 
 // RequestState tracks the state of a file transfer request
@@ -155,19 +155,19 @@ func (fts *FileTransferServer) createKwikServer() error {
 	// Configure KWIK for multi-path support
 	kwikConfig := kwik.DefaultConfig()
 	kwikConfig.MaxPathsPerSession = 10 // Allow multiple paths per session
-	
+
 	// Create KWIK listener
 	listener, err := kwik.Listen(fts.config.Server.Address, kwikConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create KWIK listener: %w", err)
 	}
-	
+
 	// Store listener for cleanup
 	fts.listener = listener
-	
+
 	// Start accepting connections in background
 	go fts.acceptConnections(listener)
-	
+
 	// Return nil as we handle sessions in acceptConnections
 	// This is different from the original design but follows KWIK patterns
 	return nil
@@ -176,7 +176,7 @@ func (fts *FileTransferServer) createKwikServer() error {
 // acceptConnections accepts incoming KWIK connections
 func (fts *FileTransferServer) acceptConnections(listener session.Listener) {
 	fmt.Printf("DEBUG: Primary server accepting connections on %s\n", fts.config.Server.Address)
-	
+
 	for {
 		select {
 		case <-fts.ctx.Done():
@@ -192,9 +192,9 @@ func (fts *FileTransferServer) acceptConnections(listener session.Listener) {
 				fmt.Printf("Accept error: %v\n", err)
 				continue
 			}
-			
+
 			fmt.Printf("DEBUG: Primary server accepted client session with %d paths\n", len(clientSession.GetActivePaths()))
-			
+
 			// Handle client session in goroutine
 			go fts.handleClientSession(clientSession)
 		}
@@ -204,18 +204,18 @@ func (fts *FileTransferServer) acceptConnections(listener session.Listener) {
 // handleClientSession handles a single client session
 func (fts *FileTransferServer) handleClientSession(clientSession session.Session) {
 	defer clientSession.Close()
-	
-	clientID := fmt.Sprintf("client_%d", clientSession.GetActivePaths()[0].PathID)
+
+	clientID := fmt.Sprintf("client_%s", clientSession.GetActivePaths()[0].PathID)
 	fmt.Printf("DEBUG: Primary server handling client session %s\n", clientID)
-	
+
 	// Setup multi-path if secondary address is configured
 	if fts.config.Server.SecondaryAddress != "" {
 		fts.setupMultiPath(clientSession, clientID)
 	}
-	
+
 	// Assign session to server for this client
 	fts.session = clientSession
-	
+
 	// Create chunk coordinator for this client session
 	chunkCoordinator, err := NewChunkCoordinator(
 		clientSession,
@@ -229,12 +229,12 @@ func (fts *FileTransferServer) handleClientSession(clientSession session.Session
 		return
 	}
 	defer chunkCoordinator.Close()
-	
+
 	// Assign chunk coordinator to server for this client
 	fts.chunkCoordinator = chunkCoordinator
-	
+
 	fmt.Printf("✅ [%s] Chunk coordinator created successfully\n", clientID)
-	
+
 	// Handle streams from this client
 	for {
 		select {
@@ -249,7 +249,7 @@ func (fts *FileTransferServer) handleClientSession(clientSession session.Session
 				fmt.Printf("Stream error for client %s: %v\n", clientID, err)
 				return
 			}
-			
+
 			fmt.Printf("DEBUG: Primary server accepted stream %d from client %s\n", stream.StreamID(), clientID)
 			go fts.handleRequestStream(stream)
 		}
@@ -261,23 +261,23 @@ func (fts *FileTransferServer) setupMultiPath(clientSession session.Session, cli
 	if fts.config.Server.SecondaryAddress == "" {
 		return
 	}
-	
+
 	fmt.Printf("🛤️  [%s] Setting up secondary path to %s...\n", clientID, fts.config.Server.SecondaryAddress)
-	
+
 	// Give the client a moment to set up its control frame handler
 	time.Sleep(500 * time.Millisecond)
-	
+
 	err := clientSession.AddPath(fts.config.Server.SecondaryAddress)
 	if err != nil {
 		fmt.Printf("❌ [%s] Failed to add secondary path: %v\n", clientID, err)
 		return
 	}
-	
+
 	fmt.Printf("✅ [%s] AddPath request sent successfully\n", clientID)
-	
+
 	// Wait for secondary path to be established
 	time.Sleep(2 * time.Second)
-	
+
 	// Update config with path ID if available
 	if serverSession, ok := clientSession.(*session.ServerSession); ok {
 		pathID := serverSession.GetPendingPathID(fts.config.Server.SecondaryAddress)

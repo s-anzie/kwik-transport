@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	kwik "kwik/pkg"
 	"kwik/pkg/session"
 )
 
@@ -22,29 +23,39 @@ type FileTransferClient interface {
 
 // KwikFileTransferClient implements FileTransferClient using KWIK sessions
 type KwikFileTransferClient struct {
+	config          *ClientConfiguration      // Client configuration
 	session         session.Session           // KWIK session interface
-	chunkManager    *ChunkManager              // Manages chunk reception and reconstruction
-	activeDownloads map[string]*DownloadState  // Active downloads by filename
-	downloadsMutex  sync.RWMutex               // Protects activeDownloads map
-	outputDir       string                     // Directory to save downloaded files
-	chunkTimeout    time.Duration              // Timeout for chunk reception
-	maxRetries      int                        // Maximum retry attempts per chunk
-	ctx             context.Context            // Context for cancellation
-	cancel          context.CancelFunc         // Cancel function
+	chunkManager    *ChunkManager             // Manages chunk reception and reconstruction
+	activeDownloads map[string]*DownloadState // Active downloads by filename
+	downloadsMutex  sync.RWMutex              // Protects activeDownloads map
+	ctx             context.Context           // Context for cancellation
+	cancel          context.CancelFunc        // Cancel function
+	isConnected     bool                      // Whether client is connected
+	connectedMutex  sync.RWMutex              // Protects isConnected flag
+}
+
+// ClientConfiguration contains configuration for the file transfer client
+type ClientConfiguration struct {
+	ServerAddress   string        // Address of the primary server
+	OutputDirectory string        // Directory to save downloaded files
+	ChunkTimeout    time.Duration // Timeout for chunk reception
+	MaxRetries      int           // Maximum retry attempts per chunk
+	ConnectTimeout  time.Duration // Timeout for initial connection
+	TLSInsecure     bool          // Skip TLS verification (for testing)
 }
 
 // DownloadState tracks the state of an active download
 type DownloadState struct {
-	Filename         string                    // Name of the file being downloaded
-	RequestedAt      time.Time                 // When the download was requested
-	StartTime        time.Time                 // When the download started
-	EndTime          time.Time                 // When the download ended
-	Metadata         *types.FileMetadata             // File metadata received from server
-	ProgressCallback func(progress float64)    // Progress callback function
-	CancelCtx        context.Context           // Context for cancelling this download
-	CancelFunc       context.CancelFunc        // Cancel function for this download
-	Status           DownloadStatus            // Current download status
-	ErrorMessage     string                    // Error message if download failed
+	Filename         string                 // Name of the file being downloaded
+	RequestedAt      time.Time              // When the download was requested
+	StartTime        time.Time              // When the download started
+	EndTime          time.Time              // When the download ended
+	Metadata         *types.FileMetadata    // File metadata received from server
+	ProgressCallback func(progress float64) // Progress callback function
+	CancelCtx        context.Context        // Context for cancelling this download
+	CancelFunc       context.CancelFunc     // Cancel function for this download
+	Status           DownloadStatus         // Current download status
+	ErrorMessage     string                 // Error message if download failed
 }
 
 // DownloadStatus represents the current status of a download
@@ -60,53 +71,189 @@ const (
 
 // DownloadProgress represents the progress of a file download
 type DownloadProgress struct {
-	Filename       string        `json:"filename"`        // Name of the file being downloaded
-	Status         DownloadStatus `json:"status"`         // Current download status
-	TotalChunks    uint32        `json:"total_chunks"`    // Total number of chunks
-	ReceivedChunks uint32        `json:"received_chunks"` // Number of chunks received
-	TotalBytes     int64         `json:"total_bytes"`     // Total file size in bytes
-	ReceivedBytes  int64         `json:"received_bytes"`  // Number of bytes received
-	StartTime      time.Time     `json:"start_time"`      // When the download started
-	LastUpdate     time.Time     `json:"last_update"`     // Last progress update
-	ErrorMessage   string        `json:"error_message"`   // Error message if failed
+	Filename       string         `json:"filename"`        // Name of the file being downloaded
+	Status         DownloadStatus `json:"status"`          // Current download status
+	TotalChunks    uint32         `json:"total_chunks"`    // Total number of chunks
+	ReceivedChunks uint32         `json:"received_chunks"` // Number of chunks received
+	TotalBytes     int64          `json:"total_bytes"`     // Total file size in bytes
+	ReceivedBytes  int64          `json:"received_bytes"`  // Number of bytes received
+	StartTime      time.Time      `json:"start_time"`      // When the download started
+	LastUpdate     time.Time      `json:"last_update"`     // Last progress update
+	ErrorMessage   string         `json:"error_message"`   // Error message if failed
 }
 
-// NewKwikFileTransferClient creates a new file transfer client
-func NewKwikFileTransferClient(kwikSession session.Session, outputDir string, chunkTimeout time.Duration, maxRetries int) (*KwikFileTransferClient, error) {
-	// Create output directory if it doesn't exist
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create output directory: %w", err)
+// DefaultClientConfiguration returns a default client configuration
+func DefaultClientConfiguration() *ClientConfiguration {
+	return &ClientConfiguration{
+		ServerAddress:   "localhost:8080",
+		OutputDirectory: "./downloads",
+		ChunkTimeout:    30 * time.Second,
+		MaxRetries:      3,
+		ConnectTimeout:  10 * time.Second,
+		TLSInsecure:     false,
+	}
+}
+
+// NewKwikFileTransferClient creates a new file transfer client with the given configuration
+func NewKwikFileTransferClient(clientConfig *ClientConfiguration) (*KwikFileTransferClient, error) {
+	// Validate configuration
+	if clientConfig == nil {
+		return nil, fmt.Errorf("client configuration cannot be nil")
 	}
 
-	// Create temporary directory for chunk storage
-	tempDir := filepath.Join(outputDir, ".tmp")
-	chunkManager, err := NewChunkManager(tempDir, chunkTimeout)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create chunk manager: %w", err)
+	if clientConfig.ServerAddress == "" {
+		return nil, fmt.Errorf("server address cannot be empty")
+	}
+
+	if clientConfig.OutputDirectory == "" {
+		return nil, fmt.Errorf("output directory cannot be empty")
+	}
+
+	// Set defaults
+	if clientConfig.ChunkTimeout <= 0 {
+		clientConfig.ChunkTimeout = 30 * time.Second
+	}
+
+	if clientConfig.MaxRetries <= 0 {
+		clientConfig.MaxRetries = 3
+	}
+
+	if clientConfig.ConnectTimeout <= 0 {
+		clientConfig.ConnectTimeout = 10 * time.Second
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	client := &KwikFileTransferClient{
-		session:         kwikSession,
-		chunkManager:    chunkManager,
+		config:          clientConfig,
 		activeDownloads: make(map[string]*DownloadState),
-		outputDir:       outputDir,
-		chunkTimeout:    chunkTimeout,
-		maxRetries:      maxRetries,
 		ctx:             ctx,
 		cancel:          cancel,
+		isConnected:     false,
 	}
-
-	// Start background goroutines
-	go client.handleIncomingChunks()
-	go client.handleRetryLogic()
 
 	return client, nil
 }
 
+// Connect establishes a connection to the file transfer server
+func (c *KwikFileTransferClient) Connect() error {
+	c.connectedMutex.Lock()
+	defer c.connectedMutex.Unlock()
+
+	if c.isConnected {
+		return fmt.Errorf("client is already connected")
+	}
+
+	// Create output directory if it doesn't exist
+	if err := os.MkdirAll(c.config.OutputDirectory, 0755); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	// Create KWIK session
+	kwikSession, err := c.createKwikSession()
+	if err != nil {
+		return fmt.Errorf("failed to create KWIK session: %w", err)
+	}
+
+	c.session = kwikSession
+
+	// Create temporary directory for chunk storage
+	tempDir := filepath.Join(c.config.OutputDirectory, ".tmp")
+	chunkManager, err := NewChunkManager(tempDir, c.config.ChunkTimeout)
+	if err != nil {
+		return fmt.Errorf("failed to create chunk manager: %w", err)
+	}
+
+	c.chunkManager = chunkManager
+	c.isConnected = true
+
+	// Start background goroutines
+	go c.handleIncomingChunks()
+	go c.handleRetryLogic()
+
+	fmt.Printf("File transfer client connected to %s\n", c.config.ServerAddress)
+	return nil
+}
+
+// Disconnect closes the connection to the file transfer server
+func (c *KwikFileTransferClient) Disconnect() error {
+	c.connectedMutex.Lock()
+	defer c.connectedMutex.Unlock()
+
+	if !c.isConnected {
+		return nil // Already disconnected
+	}
+
+	// Cancel context to stop all goroutines
+	c.cancel()
+
+	// Cancel all active downloads
+	c.downloadsMutex.Lock()
+	for filename, downloadState := range c.activeDownloads {
+		downloadState.CancelFunc()
+		if c.chunkManager != nil {
+			c.chunkManager.CleanupTransfer(filename)
+		}
+	}
+	c.activeDownloads = make(map[string]*DownloadState)
+	c.downloadsMutex.Unlock()
+
+	// Close chunk manager (cleanup all transfers)
+	if c.chunkManager != nil {
+		// Clean up all active transfers
+		for filename := range c.activeDownloads {
+			c.chunkManager.CleanupTransfer(filename)
+		}
+		c.chunkManager = nil
+	}
+
+	// Close KWIK session
+	if c.session != nil {
+		c.session.Close()
+		c.session = nil
+	}
+
+	c.isConnected = false
+
+	fmt.Printf("File transfer client disconnected\n")
+	return nil
+}
+
+// IsConnected returns whether the client is currently connected
+func (c *KwikFileTransferClient) IsConnected() bool {
+	c.connectedMutex.RLock()
+	defer c.connectedMutex.RUnlock()
+	return c.isConnected
+}
+
+// createKwikSession creates and configures a KWIK client session
+func (c *KwikFileTransferClient) createKwikSession() (session.Session, error) {
+	// Configure KWIK for multi-path support
+	kwikConfig := kwik.DefaultConfig()
+	kwikConfig.MaxPathsPerSession = 10 // Allow multiple paths per session
+
+	// Create connection context with timeout
+	ctx, cancel := context.WithTimeout(c.ctx, c.config.ConnectTimeout)
+	defer cancel()
+
+	// Dial server using KWIK
+	kwikSession, err := kwik.Dial(ctx, c.config.ServerAddress, kwikConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial server: %w", err)
+	}
+
+	fmt.Printf("DEBUG: Client connected to %s with %d paths\n", c.config.ServerAddress, len(kwikSession.GetActivePaths()))
+
+	return kwikSession, nil
+}
+
 // DownloadFile initiates a file download with progress callback
 func (c *KwikFileTransferClient) DownloadFile(filename string, progressCallback func(progress float64)) error {
+	// Check if client is connected
+	if !c.IsConnected() {
+		return fmt.Errorf("client is not connected - call Connect() first")
+	}
+
 	c.downloadsMutex.Lock()
 	defer c.downloadsMutex.Unlock()
 
@@ -189,11 +336,11 @@ func (c *KwikFileTransferClient) CancelDownload(filename string) error {
 // requestFile sends a file request to the server
 func (c *KwikFileTransferClient) requestFile(filename string, downloadState *DownloadState) {
 	fmt.Printf("DEBUG: Starting file request for %s\n", filename)
-	
+
 	// Create file request message
 	fileRequest := map[string]interface{}{
-		"type":     "FILE_REQUEST",
-		"filename": filename,
+		"type":      "FILE_REQUEST",
+		"filename":  filename,
 		"timestamp": time.Now().Unix(),
 	}
 
@@ -233,7 +380,7 @@ func (c *KwikFileTransferClient) requestFile(filename string, downloadState *Dow
 func (c *KwikFileTransferClient) waitForMetadataResponse(filename string, stream session.Stream, downloadState *DownloadState) {
 	fmt.Printf("DEBUG: Waiting for metadata response for %s\n", filename)
 	buffer := make([]byte, 4096)
-	
+
 	// Set read timeout
 	ctx, cancel := context.WithTimeout(downloadState.CancelCtx, 30*time.Second)
 	defer cancel()
@@ -380,7 +527,7 @@ func (c *KwikFileTransferClient) handleChunkStream(stream session.Stream) {
 		}
 
 		// Process chunk through chunk manager
-		err = c.chunkManager.ReceiveChunkWithValidation(&chunk, c.maxRetries)
+		err = c.chunkManager.ReceiveChunkWithValidation(&chunk, c.config.MaxRetries)
 		if err != nil {
 			// Handle chunk reception error
 			c.handleChunkError(chunk.Filename, chunk.SequenceNum, err)
@@ -397,7 +544,7 @@ func (c *KwikFileTransferClient) handleChunkStream(stream session.Stream) {
 
 // handleRetryLogic manages chunk retry requests
 func (c *KwikFileTransferClient) handleRetryLogic() {
-	ticker := time.NewTicker(c.chunkTimeout / 2) // Check twice per timeout period
+	ticker := time.NewTicker(c.config.ChunkTimeout / 2) // Check twice per timeout period
 	defer ticker.Stop()
 
 	for {
@@ -420,7 +567,7 @@ func (c *KwikFileTransferClient) processRetryRequests() {
 
 	for _, retryRequest := range timedOutChunks {
 		// Check if we should retry this chunk
-		shouldRetry, err := c.chunkManager.ShouldRetryChunk(retryRequest.Filename, retryRequest.SequenceNum, c.maxRetries)
+		shouldRetry, err := c.chunkManager.ShouldRetryChunk(retryRequest.Filename, retryRequest.SequenceNum, c.config.MaxRetries)
 		if err != nil || !shouldRetry {
 			continue
 		}
@@ -465,7 +612,7 @@ func (c *KwikFileTransferClient) sendChunkRetryRequest(retryRequest types.ChunkR
 
 	if primaryPathID != "" {
 		c.session.SendRawData(requestData, primaryPathID)
-		
+
 		// Mark chunk as requested
 		c.chunkManager.MarkChunkRequested(retryRequest.Filename, retryRequest.SequenceNum)
 	}
@@ -516,7 +663,7 @@ func (c *KwikFileTransferClient) handleTransferComplete(filename string) {
 	}
 
 	// Move file to final destination
-	finalPath := filepath.Join(c.outputDir, filename)
+	finalPath := filepath.Join(c.config.OutputDirectory, filename)
 	err = os.Rename(tempFilePath, finalPath)
 	if err != nil {
 		c.handleDownloadError(filename, fmt.Errorf("failed to move file to final destination: %w", err))
