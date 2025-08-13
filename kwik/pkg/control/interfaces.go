@@ -91,3 +91,51 @@ type Notification interface {
 	Type() string
 	Serialize() ([]byte, error)
 }
+
+// SecondaryStreamNotificationHandler handles secondary stream control messages
+type SecondaryStreamNotificationHandler interface {
+	OnSecondaryStreamMappingUpdate(pathID string, mapping *SecondaryStreamMapping) error
+	OnOffsetSyncRequest(pathID string, request *OffsetSyncRequest) error
+	OnOffsetSyncResponse(pathID string, response *OffsetSyncResponse) error
+	OnSecondaryStreamError(pathID string, error *SecondaryStreamError) error
+}
+
+// Secondary stream control message types
+type SecondaryStreamMapping struct {
+	SecondaryStreamID uint64
+	KwikStreamID      uint64
+	PathID            string
+	Operation         MappingOperation
+	Timestamp         uint64
+}
+
+type OffsetSyncRequest struct {
+	KwikStreamID      uint64
+	CurrentOffset     uint64
+	RequestingPathID  string
+	Timestamp         uint64
+}
+
+type OffsetSyncResponse struct {
+	KwikStreamID   uint64
+	ExpectedOffset uint64
+	SyncRequired   bool
+	Timestamp      uint64
+}
+
+type SecondaryStreamError struct {
+	Code             string
+	Message          string
+	PathID           string
+	StreamID         uint64
+	KwikStreamID     uint64
+	Timestamp        uint64
+}
+
+type MappingOperation int
+
+const (
+	MappingOperationCreate MappingOperation = iota
+	MappingOperationUpdate
+	MappingOperationDelete
+)

@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -11,7 +12,7 @@ import (
 // These streams are isolated from the public client session and handled internally
 type SecondaryStreamHandler interface {
 	// Gestion des streams secondaires
-	HandleSecondaryStream(pathID string, stream quic.Stream) error
+	HandleSecondaryStream(pathID string, stream quic.Stream) (uint64, error)
 	CloseSecondaryStream(pathID string, streamID uint64) error
 	
 	// Mapping vers streams KWIK
@@ -92,6 +93,9 @@ type SecondaryStreamHandlerImpl struct {
 	// Configuration
 	config *SecondaryStreamConfig
 	
+	// Metrics
+	metrics *SecondaryStreamMetrics
+	
 	// Synchronisation
 	mutex sync.RWMutex
 	
@@ -115,19 +119,20 @@ func NewSecondaryStreamHandler(config *SecondaryStreamConfig) *SecondaryStreamHa
 	return &SecondaryStreamHandlerImpl{
 		activeStreams: make(map[string]map[uint64]*SecondaryStreamInfo),
 		config:        config,
+		metrics:       NewSecondaryStreamMetrics(),
 		nextStreamID:  1,
 	}
 }
 
 // HandleSecondaryStream handles a new secondary stream from the specified path
-func (h *SecondaryStreamHandlerImpl) HandleSecondaryStream(pathID string, stream quic.Stream) error {
+func (h *SecondaryStreamHandlerImpl) HandleSecondaryStream(pathID string, stream quic.Stream) (uint64, error) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 	
 	// Check if we have too many streams for this path
 	if pathStreams, exists := h.activeStreams[pathID]; exists {
 		if len(pathStreams) >= h.config.MaxStreamsPerPath {
-			return &SecondaryStreamError{
+			return 0, &SecondaryStreamError{
 				Code:    ErrSecondaryStreamOverflow,
 				Message: "maximum streams per path exceeded",
 				PathID:  pathID,
@@ -160,7 +165,11 @@ func (h *SecondaryStreamHandlerImpl) HandleSecondaryStream(pathID string, stream
 	// Transition to active state
 	streamInfo.State = SecondaryStreamStateActive
 	
-	return nil
+	// Record metrics
+	h.metrics.RecordStreamCreation(true) // true for secondary stream
+	h.updateStreamCountMetrics()
+	
+	return streamID, nil
 }
 
 // CloseSecondaryStream closes a secondary stream
@@ -207,6 +216,10 @@ func (h *SecondaryStreamHandlerImpl) CloseSecondaryStream(pathID string, streamI
 		delete(h.activeStreams, pathID)
 	}
 	
+	// Record metrics
+	h.metrics.RecordStreamClosure(true) // true for secondary stream
+	h.updateStreamCountMetrics()
+	
 	return nil
 }
 
@@ -235,10 +248,16 @@ func (h *SecondaryStreamHandlerImpl) MapToKwikStream(secondaryStreamID uint64, k
 		}
 	}
 	
+	// Record mapping latency
+	startTime := time.Now()
+	
 	// Update mapping
 	streamInfo.KwikStreamID = kwikStreamID
 	streamInfo.CurrentOffset = offset
 	streamInfo.LastActivity = time.Now()
+	
+	// Record metrics
+	h.metrics.RecordMappingLatency(time.Since(startTime))
 	
 	return nil
 }
@@ -349,6 +368,47 @@ func (h *SecondaryStreamHandlerImpl) generateStreamID() uint64 {
 	return id
 }
 
+// updateStreamCountMetrics updates the stream count metrics
+func (h *SecondaryStreamHandlerImpl) updateStreamCountMetrics() {
+	var totalSecondary, totalKwik int
+	kwikStreams := make(map[uint64]bool)
+	
+	for _, pathStreams := range h.activeStreams {
+		totalSecondary += len(pathStreams)
+		for _, streamInfo := range pathStreams {
+			if streamInfo.KwikStreamID != 0 {
+				kwikStreams[streamInfo.KwikStreamID] = true
+			}
+		}
+	}
+	
+	totalKwik = len(kwikStreams)
+	h.metrics.UpdateStreamCounts(totalSecondary, totalKwik)
+}
+
+// GetMetrics returns the metrics instance for external monitoring
+func (h *SecondaryStreamHandlerImpl) GetMetrics() *SecondaryStreamMetrics {
+	return h.metrics
+}
+
+// RecordDataTransfer records data transfer metrics
+func (h *SecondaryStreamHandlerImpl) RecordDataTransfer(streamID uint64, bytes uint64) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+	
+	// Find the stream and update its metrics
+	for _, pathStreams := range h.activeStreams {
+		if streamInfo, exists := pathStreams[streamID]; exists {
+			streamInfo.BytesReceived += bytes
+			streamInfo.LastActivity = time.Now()
+			
+			// Record throughput metrics
+			h.metrics.RecordThroughput(bytes, 1) // 1 frame
+			break
+		}
+	}
+}
+
 // SecondaryStreamError represents an error related to secondary stream operations
 type SecondaryStreamError struct {
 	Code     string
@@ -359,11 +419,11 @@ type SecondaryStreamError struct {
 
 func (e *SecondaryStreamError) Error() string {
 	if e.PathID != "" && e.StreamID != 0 {
-		return e.Code + ": " + e.Message + " (path: " + e.PathID + ", stream: " + string(rune(e.StreamID)) + ")"
+		return fmt.Sprintf("%s: %s (path: %s, stream: %d)", e.Code, e.Message, e.PathID, e.StreamID)
 	} else if e.PathID != "" {
-		return e.Code + ": " + e.Message + " (path: " + e.PathID + ")"
+		return fmt.Sprintf("%s: %s (path: %s)", e.Code, e.Message, e.PathID)
 	} else if e.StreamID != 0 {
-		return e.Code + ": " + e.Message + " (stream: " + string(rune(e.StreamID)) + ")"
+		return fmt.Sprintf("%s: %s (stream: %d)", e.Code, e.Message, e.StreamID)
 	}
 	return e.Code + ": " + e.Message
 }

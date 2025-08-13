@@ -952,6 +952,13 @@ func (s *ClientSession) GetSessionID() string {
 	return s.sessionID
 }
 
+// GetState returns the current session state
+func (s *ClientSession) GetState() SessionState {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return s.state
+}
+
 // IsAuthenticated returns whether the session is authenticated
 func (s *ClientSession) IsAuthenticated() bool {
 	if s.authManager == nil {
@@ -1418,7 +1425,7 @@ func (s *ClientSession) getStreamAggregator() data.DataAggregator {
 // This method processes streams internally without exposing them to the public interface
 func (s *ClientSession) handleSecondaryStreamOpen(pathID string, quicStream quic.Stream) error {
 	// Handle the secondary stream using the secondary stream handler
-	err := s.secondaryStreamHandler.HandleSecondaryStream(pathID, quicStream)
+	_, err := s.secondaryStreamHandler.HandleSecondaryStream(pathID, quicStream)
 	if err != nil {
 		// Log error and close the stream
 		quicStream.Close()

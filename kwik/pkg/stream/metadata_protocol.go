@@ -12,6 +12,10 @@ type MetadataProtocol interface {
 	EncapsulateData(kwikStreamID uint64, offset uint64, data []byte) ([]byte, error)
 	DecapsulateData(encapsulatedData []byte) (*StreamMetadata, []byte, error)
 	
+	// Batch processing des métadonnées
+	EncapsulateDataBatch(items []BatchMetadataItem) ([][]byte, error)
+	DecapsulateDataBatch(encapsulatedFrames [][]byte) ([]*BatchDecapsulationResult, error)
+	
 	// Validation des métadonnées
 	ValidateMetadata(metadata *StreamMetadata) error
 	CreateStreamOpenMetadata(kwikStreamID uint64) (*StreamMetadata, error)
@@ -36,6 +40,22 @@ const (
 	MetadataTypeStreamClose                    // Stream closing notification
 	MetadataTypeOffsetSync                     // Offset synchronization message
 )
+
+// BatchMetadataItem represents an item for batch processing
+type BatchMetadataItem struct {
+	KwikStreamID uint64
+	Offset       uint64
+	Data         []byte
+	SourcePathID string
+	MessageType  MetadataType
+}
+
+// BatchDecapsulationResult represents the result of batch decapsulation
+type BatchDecapsulationResult struct {
+	Metadata *StreamMetadata
+	Data     []byte
+	Error    error
+}
 
 // String returns a string representation of the metadata type
 func (m MetadataType) String() string {
@@ -64,7 +84,7 @@ type MetadataProtocolImpl struct {
 func NewMetadataProtocol() *MetadataProtocolImpl {
 	return &MetadataProtocolImpl{
 		maxDataLength: 1024 * 1024, // 1MB max data length
-		maxPathIDLen:  256,         // 256 chars max path ID
+		maxPathIDLen:  255,         // 255 chars max path ID (1 byte length field)
 	}
 }
 
@@ -189,6 +209,72 @@ func (p *MetadataProtocolImpl) CreateStreamOpenMetadata(kwikStreamID uint64) (*S
 	return metadata, nil
 }
 
+// EncapsulateDataBatch processes multiple metadata items in batch for improved performance
+func (p *MetadataProtocolImpl) EncapsulateDataBatch(items []BatchMetadataItem) ([][]byte, error) {
+	if len(items) == 0 {
+		return nil, &MetadataProtocolError{
+			Code:    ErrMetadataInvalid,
+			Message: "empty batch items",
+		}
+	}
+	
+	results := make([][]byte, len(items))
+	timestamp := uint64(time.Now().UnixNano()) // Use same timestamp for batch
+	
+	for i, item := range items {
+		if len(item.Data) > int(p.maxDataLength) {
+			return nil, &MetadataProtocolError{
+				Code:    ErrMetadataDataTooLarge,
+				Message: fmt.Sprintf("data length %d exceeds maximum %d at item %d", len(item.Data), p.maxDataLength, i),
+			}
+		}
+		
+		metadata := &StreamMetadata{
+			KwikStreamID: item.KwikStreamID,
+			Offset:       item.Offset,
+			DataLength:   uint32(len(item.Data)),
+			Timestamp:    timestamp,
+			SourcePathID: item.SourcePathID,
+			MessageType:  item.MessageType,
+		}
+		
+		frame, err := p.encodeFrame(metadata, item.Data)
+		if err != nil {
+			return nil, &MetadataProtocolError{
+				Code:    ErrMetadataProtocolViolation,
+				Message: fmt.Sprintf("failed to encode frame at item %d: %v", i, err),
+			}
+		}
+		
+		results[i] = frame
+	}
+	
+	return results, nil
+}
+
+// DecapsulateDataBatch processes multiple encapsulated frames in batch for improved performance
+func (p *MetadataProtocolImpl) DecapsulateDataBatch(encapsulatedFrames [][]byte) ([]*BatchDecapsulationResult, error) {
+	if len(encapsulatedFrames) == 0 {
+		return nil, &MetadataProtocolError{
+			Code:    ErrMetadataInvalid,
+			Message: "empty encapsulated frames",
+		}
+	}
+	
+	results := make([]*BatchDecapsulationResult, len(encapsulatedFrames))
+	
+	for i, frame := range encapsulatedFrames {
+		metadata, data, err := p.decodeFrame(frame)
+		results[i] = &BatchDecapsulationResult{
+			Metadata: metadata,
+			Data:     data,
+			Error:    err,
+		}
+	}
+	
+	return results, nil
+}
+
 // encodeFrame encodes metadata and data into a binary frame
 func (p *MetadataProtocolImpl) encodeFrame(metadata *StreamMetadata, data []byte) ([]byte, error) {
 	if err := p.ValidateMetadata(metadata); err != nil {
@@ -217,7 +303,7 @@ func (p *MetadataProtocolImpl) encodeFrame(metadata *StreamMetadata, data []byte
 	offset += 8
 	binary.BigEndian.PutUint64(frame[offset:], metadata.Offset)
 	offset += 8
-	binary.BigEndian.PutUint32(frame[offset:], metadata.DataLength)
+	binary.BigEndian.PutUint32(frame[offset:], uint32(len(data)))
 	offset += 4
 	binary.BigEndian.PutUint64(frame[offset:], metadata.Timestamp)
 	offset += 8

@@ -271,7 +271,8 @@ func (i *SecondaryStreamIsolatorImpl) RouteSecondaryStream(pathID string, stream
 	i.stats.ActiveSecondaryStreams++
 	
 	// Route to secondary stream handler
-	if err := i.handler.HandleSecondaryStream(pathID, stream); err != nil {
+	_, err := i.handler.HandleSecondaryStream(pathID, stream)
+	if err != nil {
 		// Clean up on error
 		delete(i.secondaryStreams, streamID)
 		i.stats.ActiveSecondaryStreams--

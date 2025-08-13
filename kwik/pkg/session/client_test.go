@@ -225,6 +225,45 @@ func (m *MockPath) AcceptControlStreamAsServer() (quic.Stream, error) {
 	return args.Get(0).(quic.Stream), args.Error(1)
 }
 
+// Secondary stream support methods
+func (m *MockPath) IsSecondaryPath() bool {
+	args := m.Called()
+	return args.Bool(0)
+}
+
+func (m *MockPath) SetSecondaryPath(isSecondary bool) {
+	m.Called(isSecondary)
+}
+
+func (m *MockPath) AddSecondaryStream(streamID uint64, stream quic.Stream) {
+	m.Called(streamID, stream)
+}
+
+func (m *MockPath) RemoveSecondaryStream(streamID uint64) {
+	m.Called(streamID)
+}
+
+func (m *MockPath) GetSecondaryStream(streamID uint64) (quic.Stream, bool) {
+	args := m.Called(streamID)
+	if args.Get(0) == nil {
+		return nil, args.Bool(1)
+	}
+	return args.Get(0).(quic.Stream), args.Bool(1)
+}
+
+func (m *MockPath) GetSecondaryStreams() map[uint64]quic.Stream {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return make(map[uint64]quic.Stream)
+	}
+	return args.Get(0).(map[uint64]quic.Stream)
+}
+
+func (m *MockPath) GetSecondaryStreamCount() int {
+	args := m.Called()
+	return args.Int(0)
+}
+
 // MockStream is a mock implementation for control streams
 type MockStream struct {
 	mock.Mock
@@ -528,6 +567,7 @@ func TestClientSession_OpenStreamSync_InactivePrimaryPath(t *testing.T) {
 // Test AcceptStream with timeout
 func TestClientSession_AcceptStream_Timeout(t *testing.T) {
 	mockPathManager := &MockPathManager{}
+	mockPathManager.On("GetActivePaths").Return([]transport.Path{})
 	session := NewClientSession(mockPathManager, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)

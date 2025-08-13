@@ -31,6 +31,10 @@ type path struct {
 	controlStream quic.Stream
 	dataStreams   []quic.Stream
 	
+	// Secondary stream support
+	secondaryStreams map[uint64]quic.Stream // streamID -> stream
+	isSecondaryPath  bool                   // true if this path is for secondary servers
+	
 	// Metadata for path management
 	createdAt     time.Time
 	lastActivity  time.Time
@@ -101,6 +105,86 @@ func (p *path) GetDataStreams() []quic.Stream {
 	return streams
 }
 
+// IsSecondaryPath returns whether this path is for secondary servers
+func (p *path) IsSecondaryPath() bool {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	return p.isSecondaryPath
+}
+
+// SetSecondaryPath marks this path as a secondary path
+func (p *path) SetSecondaryPath(isSecondary bool) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	p.isSecondaryPath = isSecondary
+}
+
+// AddSecondaryStream adds a secondary stream to this path
+func (p *path) AddSecondaryStream(streamID uint64, stream quic.Stream) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	
+	if p.secondaryStreams == nil {
+		p.secondaryStreams = make(map[uint64]quic.Stream)
+	}
+	
+	p.secondaryStreams[streamID] = stream
+	p.lastActivity = time.Now()
+}
+
+// RemoveSecondaryStream removes a secondary stream from this path
+func (p *path) RemoveSecondaryStream(streamID uint64) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	
+	if p.secondaryStreams != nil {
+		delete(p.secondaryStreams, streamID)
+		p.lastActivity = time.Now()
+	}
+}
+
+// GetSecondaryStream returns a secondary stream by ID
+func (p *path) GetSecondaryStream(streamID uint64) (quic.Stream, bool) {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	
+	if p.secondaryStreams == nil {
+		return nil, false
+	}
+	
+	stream, exists := p.secondaryStreams[streamID]
+	return stream, exists
+}
+
+// GetSecondaryStreams returns all secondary streams
+func (p *path) GetSecondaryStreams() map[uint64]quic.Stream {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	
+	if p.secondaryStreams == nil {
+		return make(map[uint64]quic.Stream)
+	}
+	
+	// Return copy to prevent external modification
+	streams := make(map[uint64]quic.Stream)
+	for id, stream := range p.secondaryStreams {
+		streams[id] = stream
+	}
+	return streams
+}
+
+// GetSecondaryStreamCount returns the number of secondary streams
+func (p *path) GetSecondaryStreamCount() int {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	
+	if p.secondaryStreams == nil {
+		return 0
+	}
+	
+	return len(p.secondaryStreams)
+}
+
 // Close closes the path and its connection
 func (p *path) Close() error {
 	p.mutex.Lock()
@@ -115,6 +199,13 @@ func (p *path) Close() error {
 	
 	// Close data streams
 	for _, stream := range p.dataStreams {
+		if stream != nil {
+			stream.Close()
+		}
+	}
+	
+	// Close secondary streams
+	for _, stream := range p.secondaryStreams {
 		if stream != nil {
 			stream.Close()
 		}

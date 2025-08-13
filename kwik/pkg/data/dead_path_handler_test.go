@@ -39,6 +39,15 @@ func (mp *MockPath) Close() error                           { return nil }
 func (mp *MockPath) CreateControlStreamAsClient() (quic.Stream, error) { return nil, nil }
 func (mp *MockPath) AcceptControlStreamAsServer() (quic.Stream, error) { return nil, nil }
 
+// Secondary stream support methods
+func (mp *MockPath) IsSecondaryPath() bool                                    { return false }
+func (mp *MockPath) SetSecondaryPath(isSecondary bool)                        {}
+func (mp *MockPath) AddSecondaryStream(streamID uint64, stream quic.Stream)   {}
+func (mp *MockPath) RemoveSecondaryStream(streamID uint64)                    {}
+func (mp *MockPath) GetSecondaryStream(streamID uint64) (quic.Stream, bool)   { return nil, false }
+func (mp *MockPath) GetSecondaryStreams() map[uint64]quic.Stream              { return make(map[uint64]quic.Stream) }
+func (mp *MockPath) GetSecondaryStreamCount() int                             { return 0 }
+
 func NewMockPathManager() *MockPathManager {
 	return &MockPathManager{
 		paths:       make(map[string]*MockPath),

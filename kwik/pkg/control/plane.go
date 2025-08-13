@@ -25,6 +25,10 @@ type ControlPlaneImpl struct {
 	frameHandlers map[control.ControlFrameType]CommandHandler
 	handlersMutex sync.RWMutex
 
+	// Secondary stream support
+	secondaryStreamHandlers map[string]SecondaryStreamNotificationHandler // pathID -> handler
+	secondaryHandlersMutex  sync.RWMutex
+
 	// Notification management
 	notificationSenders map[string]NotificationSender
 	sendersMutex        sync.RWMutex
@@ -73,12 +77,13 @@ func NewControlPlane(config *ControlPlaneConfig) *ControlPlaneImpl {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	cp := &ControlPlaneImpl{
-		pathStreams:         make(map[string]quic.Stream),
-		frameHandlers:       make(map[control.ControlFrameType]CommandHandler),
-		notificationSenders: make(map[string]NotificationSender),
-		ctx:                 ctx,
-		cancel:              cancel,
-		config:              config,
+		pathStreams:             make(map[string]quic.Stream),
+		frameHandlers:           make(map[control.ControlFrameType]CommandHandler),
+		secondaryStreamHandlers: make(map[string]SecondaryStreamNotificationHandler),
+		notificationSenders:     make(map[string]NotificationSender),
+		ctx:                     ctx,
+		cancel:                  cancel,
+		config:                  config,
 	}
 
 	// Register default frame handlers
@@ -392,6 +397,100 @@ func (cp *ControlPlaneImpl) SendPathStatusNotification(pathID string, status Pat
 	return lastError
 }
 
+// RegisterSecondaryStreamHandler registers a handler for secondary stream notifications on a specific path
+func (cp *ControlPlaneImpl) RegisterSecondaryStreamHandler(pathID string, handler SecondaryStreamNotificationHandler) error {
+	if pathID == "" {
+		return utils.NewKwikError(utils.ErrInvalidFrame, "path ID is empty", nil)
+	}
+	
+	if handler == nil {
+		return utils.NewKwikError(utils.ErrInvalidFrame, "handler is nil", nil)
+	}
+	
+	cp.secondaryHandlersMutex.Lock()
+	defer cp.secondaryHandlersMutex.Unlock()
+	
+	cp.secondaryStreamHandlers[pathID] = handler
+	return nil
+}
+
+// UnregisterSecondaryStreamHandler unregisters a secondary stream handler for a path
+func (cp *ControlPlaneImpl) UnregisterSecondaryStreamHandler(pathID string) {
+	cp.secondaryHandlersMutex.Lock()
+	defer cp.secondaryHandlersMutex.Unlock()
+	
+	delete(cp.secondaryStreamHandlers, pathID)
+}
+
+// SendSecondaryStreamMappingUpdate sends a secondary stream mapping update notification
+func (cp *ControlPlaneImpl) SendSecondaryStreamMappingUpdate(pathID string, mapping *SecondaryStreamMapping) error {
+	if pathID == "" {
+		return utils.NewKwikError(utils.ErrInvalidFrame, "path ID is empty", nil)
+	}
+	
+	if mapping == nil {
+		return utils.NewKwikError(utils.ErrInvalidFrame, "mapping is nil", nil)
+	}
+	
+	// For now, just notify the handler directly (simplified implementation)
+	cp.secondaryHandlersMutex.RLock()
+	handler, exists := cp.secondaryStreamHandlers[pathID]
+	cp.secondaryHandlersMutex.RUnlock()
+	
+	if exists && handler != nil {
+		return handler.OnSecondaryStreamMappingUpdate(pathID, mapping)
+	}
+	
+	// If no handler is registered, this is not an error - just log and continue
+	return nil
+}
+
+// SendOffsetSyncRequest sends an offset synchronization request
+func (cp *ControlPlaneImpl) SendOffsetSyncRequest(pathID string, request *OffsetSyncRequest) error {
+	if pathID == "" {
+		return utils.NewKwikError(utils.ErrInvalidFrame, "path ID is empty", nil)
+	}
+	
+	if request == nil {
+		return utils.NewKwikError(utils.ErrInvalidFrame, "request is nil", nil)
+	}
+	
+	// For now, just notify the handler directly (simplified implementation)
+	cp.secondaryHandlersMutex.RLock()
+	handler, exists := cp.secondaryStreamHandlers[pathID]
+	cp.secondaryHandlersMutex.RUnlock()
+	
+	if exists && handler != nil {
+		return handler.OnOffsetSyncRequest(pathID, request)
+	}
+	
+	// If no handler is registered, this is not an error - just log and continue
+	return nil
+}
+
+// SendOffsetSyncResponse sends an offset synchronization response
+func (cp *ControlPlaneImpl) SendOffsetSyncResponse(pathID string, response *OffsetSyncResponse) error {
+	if pathID == "" {
+		return utils.NewKwikError(utils.ErrInvalidFrame, "path ID is empty", nil)
+	}
+	
+	if response == nil {
+		return utils.NewKwikError(utils.ErrInvalidFrame, "response is nil", nil)
+	}
+	
+	// For now, just notify the handler directly (simplified implementation)
+	cp.secondaryHandlersMutex.RLock()
+	handler, exists := cp.secondaryStreamHandlers[pathID]
+	cp.secondaryHandlersMutex.RUnlock()
+	
+	if exists && handler != nil {
+		return handler.OnOffsetSyncResponse(pathID, response)
+	}
+	
+	// If no handler is registered, this is not an error - just log and continue
+	return nil
+}
+
 // RegisterPath registers a control stream for a path
 func (cp *ControlPlaneImpl) RegisterPath(pathID string, stream quic.Stream) error {
 	if pathID == "" {
@@ -666,7 +765,7 @@ func convertToControlPathStatus(status PathStatus) control.PathStatus {
 // registerDefaultHandlers registers default frame handlers
 func (cp *ControlPlaneImpl) registerDefaultHandlers() {
 	// Register raw packet transmission handler
-	rawPacketHandler := NewRawPacketHandler(cp)
+	rawPacketHandler := &DefaultRawPacketHandler{controlPlane: cp}
 	cp.RegisterFrameHandler(control.ControlFrameType_RAW_PACKET_TRANSMISSION, rawPacketHandler)
 
 	// TODO: Register other default handlers as they are implemented
@@ -674,6 +773,33 @@ func (cp *ControlPlaneImpl) registerDefaultHandlers() {
 	// - RemovePathRequest handler
 	// - AuthenticationRequest handler
 	// - PathStatusNotification handler
+}
+
+// DefaultRawPacketHandler handles raw packet transmission frames
+type DefaultRawPacketHandler struct {
+	controlPlane *ControlPlaneImpl
+}
+
+// HandleCommand handles raw packet transmission commands
+func (h *DefaultRawPacketHandler) HandleCommand(frame protocol.Frame) error {
+	// For now, just log that we received a raw packet transmission
+	// In a full implementation, this would process the raw packet data
+	return nil
+}
+
+// convertToControlMappingOperation converts MappingOperation to a simple integer representation
+// This is a simplified implementation until the protobuf definitions are updated
+func convertToControlMappingOperation(operation MappingOperation) int32 {
+	switch operation {
+	case MappingOperationCreate:
+		return 0 // MAPPING_CREATE
+	case MappingOperationUpdate:
+		return 1 // MAPPING_UPDATE
+	case MappingOperationDelete:
+		return 2 // MAPPING_DELETE
+	default:
+		return 0 // Default fallback
+	}
 }
 
 // generateFrameID generates a unique frame identifier

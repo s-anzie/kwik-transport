@@ -2,6 +2,7 @@ package data
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
 
@@ -27,6 +28,13 @@ type SecondaryStreamAggregator struct {
 
 	// Statistics (internal structure with mutex)
 	stats *internalSecondaryAggregationStats
+
+	// Metrics (removed to avoid import cycle)
+
+	// Parallel processing
+	workerPool    *AggregationWorkerPool
+	batchChannel  chan []*SecondaryStreamData
+	resultChannel chan *AggregationResult
 }
 
 // SecondaryStreamData is defined in interfaces.go
@@ -76,6 +84,8 @@ type SecondaryAggregatorConfig struct {
 	AggregationBatchSize int           // Batch size for aggregation
 	BufferSize           int           // Buffer size for aggregated data
 	CleanupInterval      time.Duration // Interval for cleanup of inactive streams
+	ParallelWorkers      int           // Number of parallel workers for aggregation
+	EnableParallelProcessing bool      // Enable parallel processing
 }
 
 // SecondaryAggregationStats is defined in interfaces.go
@@ -93,24 +103,75 @@ type internalSecondaryAggregationStats struct {
 	mutex                  sync.RWMutex
 }
 
+// AggregationWorkerPool manages parallel workers for aggregation
+type AggregationWorkerPool struct {
+	workers     int
+	workChannel chan *AggregationWork
+	resultChannel chan *AggregationResult
+	stopChannel chan struct{}
+	wg          sync.WaitGroup
+	running     bool
+	mutex       sync.RWMutex
+}
+
+// AggregationWork represents work to be done by a worker
+type AggregationWork struct {
+	Data      []*SecondaryStreamData
+	BatchID   uint64
+	Timestamp time.Time
+}
+
+// AggregationResult represents the result of aggregation work
+type AggregationResult struct {
+	BatchID       uint64
+	ProcessedData []*ProcessedSecondaryData
+	Error         error
+	ProcessingTime time.Duration
+}
+
+// ProcessedSecondaryData represents processed secondary stream data
+type ProcessedSecondaryData struct {
+	StreamID     uint64
+	KwikStreamID uint64
+	Data         []byte
+	Offset       uint64
+	PathID       string
+	Processed    bool
+}
+
 // NewSecondaryStreamAggregator creates a new secondary stream aggregator
 func NewSecondaryStreamAggregator() *SecondaryStreamAggregator {
-	return &SecondaryStreamAggregator{
+	config := &SecondaryAggregatorConfig{
+		MaxSecondaryStreams:      1000,
+		MaxPendingData:           100,
+		ReorderTimeout:           100 * time.Millisecond,
+		AggregationBatchSize:     64,
+		BufferSize:               65536,
+		CleanupInterval:          30 * time.Second,
+		ParallelWorkers:          runtime.NumCPU(),
+		EnableParallelProcessing: true,
+	}
+
+	ssa := &SecondaryStreamAggregator{
 		secondaryStreams: make(map[uint64]*SecondaryStreamState),
 		streamMappings:   make(map[uint64]uint64),
 		kwikStreams:      make(map[uint64]*KwikStreamAggregationState),
-		config: &SecondaryAggregatorConfig{
-			MaxSecondaryStreams:  1000,
-			MaxPendingData:       100,
-			ReorderTimeout:       100 * time.Millisecond,
-			AggregationBatchSize: 64,
-			BufferSize:           65536,
-			CleanupInterval:      30 * time.Second,
-		},
+		config:           config,
 		stats: &internalSecondaryAggregationStats{
 			LastUpdate: time.Now(),
 		},
+		// metrics removed to avoid import cycle
+		batchChannel:  make(chan []*SecondaryStreamData, 100),
+		resultChannel: make(chan *AggregationResult, 100),
 	}
+
+	// Initialize worker pool if parallel processing is enabled
+	if config.EnableParallelProcessing {
+		ssa.workerPool = NewAggregationWorkerPool(config.ParallelWorkers)
+		ssa.workerPool.Start()
+	}
+
+	return ssa
 }
 
 // AggregateSecondaryData aggregates data from a secondary stream into the appropriate KWIK stream
@@ -148,6 +209,8 @@ func (ssa *SecondaryStreamAggregator) AggregateSecondaryData(data *SecondaryStre
 
 	// Update statistics
 	ssa.updateAggregationStats(data)
+
+	// Record metrics (removed to avoid import cycle)
 
 	return nil
 }
@@ -228,9 +291,30 @@ func (ssa *SecondaryStreamAggregator) GetAggregatedData(kwikStreamID uint64) ([]
 	kwikState.mutex.RLock()
 	defer kwikState.mutex.RUnlock()
 
-	// Return copy of aggregated buffer
-	data := make([]byte, len(kwikState.AggregatedBuffer))
-	copy(data, kwikState.AggregatedBuffer)
+	// Return only contiguous data (up to first gap)
+	contiguousLength := 0
+	for i, b := range kwikState.AggregatedBuffer {
+		if b == 0 {
+			// Found a gap, check if it's a real gap or just trailing zeros
+			// Look ahead to see if there's more data after this zero
+			hasDataAfter := false
+			for j := i + 1; j < len(kwikState.AggregatedBuffer); j++ {
+				if kwikState.AggregatedBuffer[j] != 0 {
+					hasDataAfter = true
+					break
+				}
+			}
+			if hasDataAfter {
+				// This is a gap in the middle, stop here
+				break
+			}
+		}
+		contiguousLength = i + 1
+	}
+
+	// Return copy of contiguous data only
+	data := make([]byte, contiguousLength)
+	copy(data, kwikState.AggregatedBuffer[:contiguousLength])
 
 	return data, nil
 }
@@ -353,18 +437,37 @@ func (ssa *SecondaryStreamAggregator) aggregateIntoKwikStream(kwikState *KwikStr
 	// Add secondary stream to the set
 	kwikState.SecondaryStreams[data.StreamID] = true
 
-	// Check if this data can be immediately aggregated
-	if data.Offset == kwikState.NextExpectedOffset {
-		// Data is in order, aggregate immediately
-		kwikState.AggregatedBuffer = append(kwikState.AggregatedBuffer, data.Data...)
-		kwikState.NextExpectedOffset += uint64(len(data.Data))
+	// Handle data placement based on offset
+	// Only place data if it's within a reasonable range of current buffer or extends it directly
+	maxReasonableOffset := uint64(len(kwikState.AggregatedBuffer)) + 1024 // Allow reasonable gaps
+	
+	if data.Offset <= maxReasonableOffset {
+		// Data can be placed now
+		endOffset := data.Offset + uint64(len(data.Data))
+		
+		// Extend buffer if necessary
+		if endOffset > uint64(len(kwikState.AggregatedBuffer)) {
+			newSize := int(endOffset)
+			// Extend the buffer with zero bytes
+			extension := make([]byte, newSize-len(kwikState.AggregatedBuffer))
+			kwikState.AggregatedBuffer = append(kwikState.AggregatedBuffer, extension...)
+		}
+		
+		// Copy data at the correct offset
+		copy(kwikState.AggregatedBuffer[data.Offset:], data.Data)
+		
+		// Update next expected offset if this data extends beyond current position
+		if endOffset > kwikState.NextExpectedOffset {
+			kwikState.NextExpectedOffset = endOffset
+		}
+		
 		kwikState.TotalBytesAggregated += uint64(len(data.Data))
 		kwikState.LastActivity = time.Now()
 
 		// Check if we can aggregate any pending data
 		ssa.aggregatePendingData(kwikState)
 	} else {
-		// Data is out of order, store for later
+		// Data is too far out of order, store for later
 		if len(kwikState.PendingData) >= ssa.config.MaxPendingData {
 			return utils.NewKwikError(utils.ErrStreamCreationFailed,
 				"maximum pending data reached for KWIK stream", nil)
@@ -375,21 +478,44 @@ func (ssa *SecondaryStreamAggregator) aggregateIntoKwikStream(kwikState *KwikStr
 	return nil
 }
 
-// aggregatePendingData aggregates any pending data that is now in order
+// aggregatePendingData aggregates any pending data that can now be placed
 func (ssa *SecondaryStreamAggregator) aggregatePendingData(kwikState *KwikStreamAggregationState) {
-	for {
-		data, exists := kwikState.PendingData[kwikState.NextExpectedOffset]
-		if !exists {
-			break
-		}
-
-		// Aggregate this data
-		kwikState.AggregatedBuffer = append(kwikState.AggregatedBuffer, data.Data...)
-		kwikState.NextExpectedOffset += uint64(len(data.Data))
-		kwikState.TotalBytesAggregated += uint64(len(data.Data))
+	// Keep processing until no more changes are made
+	changed := true
+	for changed {
+		changed = false
 		
-		// Remove from pending
-		delete(kwikState.PendingData, data.Offset)
+		// Process all pending data that can now be placed
+		for offset, data := range kwikState.PendingData {
+			// Check if this data can be placed (either within current buffer or extends it reasonably)
+			maxReasonableOffset := kwikState.NextExpectedOffset + 1024 // Allow some reasonable gap
+			if offset <= maxReasonableOffset {
+				// This data can now be placed
+				endOffset := offset + uint64(len(data.Data))
+				
+				// Extend buffer if necessary
+				if endOffset > uint64(len(kwikState.AggregatedBuffer)) {
+					newSize := int(endOffset)
+					// Extend the buffer
+					extension := make([]byte, newSize-len(kwikState.AggregatedBuffer))
+					kwikState.AggregatedBuffer = append(kwikState.AggregatedBuffer, extension...)
+				}
+				
+				// Copy data at the correct offset
+				copy(kwikState.AggregatedBuffer[offset:], data.Data)
+				
+				// Update next expected offset if this data extends beyond current position
+				if endOffset > kwikState.NextExpectedOffset {
+					kwikState.NextExpectedOffset = endOffset
+				}
+				
+				kwikState.TotalBytesAggregated += uint64(len(data.Data))
+				
+				// Remove from pending
+				delete(kwikState.PendingData, offset)
+				changed = true
+			}
+		}
 	}
 }
 
@@ -456,5 +582,220 @@ func (ssa *SecondaryStreamAggregator) CloseKwikStream(streamID uint64) error {
 		ssa.CloseSecondaryStream(secondaryStreamID)
 	}
 
+	return nil
+}
+
+// NewAggregationWorkerPool creates a new worker pool for parallel aggregation
+func NewAggregationWorkerPool(workers int) *AggregationWorkerPool {
+	if workers <= 0 {
+		workers = runtime.NumCPU()
+	}
+	
+	return &AggregationWorkerPool{
+		workers:       workers,
+		workChannel:   make(chan *AggregationWork, workers*2),
+		resultChannel: make(chan *AggregationResult, workers*2),
+		stopChannel:   make(chan struct{}),
+	}
+}
+
+// Start starts the worker pool
+func (pool *AggregationWorkerPool) Start() {
+	pool.mutex.Lock()
+	defer pool.mutex.Unlock()
+	
+	if pool.running {
+		return
+	}
+	
+	pool.running = true
+	
+	for i := 0; i < pool.workers; i++ {
+		pool.wg.Add(1)
+		go pool.worker(i)
+	}
+}
+
+// Stop stops the worker pool
+func (pool *AggregationWorkerPool) Stop() {
+	pool.mutex.Lock()
+	defer pool.mutex.Unlock()
+	
+	if !pool.running {
+		return
+	}
+	
+	pool.running = false
+	close(pool.stopChannel)
+	pool.wg.Wait()
+}
+
+// SubmitWork submits work to the worker pool
+func (pool *AggregationWorkerPool) SubmitWork(work *AggregationWork) error {
+	pool.mutex.RLock()
+	defer pool.mutex.RUnlock()
+	
+	if !pool.running {
+		return fmt.Errorf("worker pool is not running")
+	}
+	
+	select {
+	case pool.workChannel <- work:
+		return nil
+	default:
+		return fmt.Errorf("worker pool is full")
+	}
+}
+
+// GetResult gets a result from the worker pool
+func (pool *AggregationWorkerPool) GetResult() (*AggregationResult, bool) {
+	select {
+	case result := <-pool.resultChannel:
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+// worker is the worker goroutine that processes aggregation work
+func (pool *AggregationWorkerPool) worker(_ int) {
+	defer pool.wg.Done()
+	
+	for {
+		select {
+		case work := <-pool.workChannel:
+			startTime := time.Now()
+			result := pool.processWork(work)
+			result.ProcessingTime = time.Since(startTime)
+			
+			select {
+			case pool.resultChannel <- result:
+			case <-pool.stopChannel:
+				return
+			}
+			
+		case <-pool.stopChannel:
+			return
+		}
+	}
+}
+
+// processWork processes a batch of aggregation work
+func (pool *AggregationWorkerPool) processWork(work *AggregationWork) *AggregationResult {
+	result := &AggregationResult{
+		BatchID:       work.BatchID,
+		ProcessedData: make([]*ProcessedSecondaryData, 0, len(work.Data)),
+	}
+	
+	for _, data := range work.Data {
+		processed := &ProcessedSecondaryData{
+			StreamID:     data.StreamID,
+			KwikStreamID: data.KwikStreamID,
+			Data:         make([]byte, len(data.Data)),
+			Offset:       data.Offset,
+			PathID:       data.PathID,
+			Processed:    true,
+		}
+		
+		// Copy data to avoid race conditions
+		copy(processed.Data, data.Data)
+		
+		result.ProcessedData = append(result.ProcessedData, processed)
+	}
+	
+	return result
+}
+
+// AggregateSecondaryDataBatch processes multiple secondary stream data items in parallel
+func (ssa *SecondaryStreamAggregator) AggregateSecondaryDataBatch(dataItems []*SecondaryStreamData) error {
+	if len(dataItems) == 0 {
+		return nil
+	}
+	
+	// If parallel processing is disabled or batch is small, process sequentially
+	if !ssa.config.EnableParallelProcessing || len(dataItems) < ssa.config.AggregationBatchSize/2 {
+		for _, data := range dataItems {
+			if err := ssa.AggregateSecondaryData(data); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	
+	// Process in parallel using worker pool
+	batchID := uint64(time.Now().UnixNano())
+	work := &AggregationWork{
+		Data:      dataItems,
+		BatchID:   batchID,
+		Timestamp: time.Now(),
+	}
+	
+	if err := ssa.workerPool.SubmitWork(work); err != nil {
+		// Fallback to sequential processing if worker pool is full
+		for _, data := range dataItems {
+			if err := ssa.AggregateSecondaryData(data); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	
+	// Wait for result and process it
+	// Note: In a real implementation, this might be handled asynchronously
+	// For now, we'll wait for the result to maintain consistency
+	for {
+		if result, ok := ssa.workerPool.GetResult(); ok && result.BatchID == batchID {
+			if result.Error != nil {
+				return result.Error
+			}
+			
+			// Process the results sequentially to maintain order
+			for _, processed := range result.ProcessedData {
+				data := &SecondaryStreamData{
+					StreamID:     processed.StreamID,
+					PathID:       processed.PathID,
+					Data:         processed.Data,
+					Offset:       processed.Offset,
+					KwikStreamID: processed.KwikStreamID,
+					Timestamp:    work.Timestamp,
+				}
+				
+				if err := ssa.AggregateSecondaryData(data); err != nil {
+					return err
+				}
+			}
+			
+			// Update latency statistics
+			ssa.stats.mutex.Lock()
+			ssa.stats.AggregationLatency = result.ProcessingTime
+			ssa.stats.mutex.Unlock()
+			
+			break
+		}
+		
+		// Small delay to avoid busy waiting
+		time.Sleep(time.Microsecond * 100)
+	}
+	
+	return nil
+}
+
+// GetMetrics returns the metrics instance for external monitoring
+// Removed to avoid import cycle - metrics should be accessed through other means
+
+// Shutdown gracefully shuts down the aggregator
+func (ssa *SecondaryStreamAggregator) Shutdown() error {
+	if ssa.workerPool != nil {
+		ssa.workerPool.Stop()
+	}
+	
+	// Close channels
+	if ssa.batchChannel != nil {
+		close(ssa.batchChannel)
+	}
+	if ssa.resultChannel != nil {
+		close(ssa.resultChannel)
+	}
+	
 	return nil
 }

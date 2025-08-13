@@ -72,6 +72,15 @@ type Path interface {
 	// New methods for proper control stream management
 	CreateControlStreamAsClient() (quic.Stream, error)
 	AcceptControlStreamAsServer() (quic.Stream, error)
+	
+	// Secondary stream support methods
+	IsSecondaryPath() bool
+	SetSecondaryPath(isSecondary bool)
+	AddSecondaryStream(streamID uint64, stream quic.Stream)
+	RemoveSecondaryStream(streamID uint64)
+	GetSecondaryStream(streamID uint64) (quic.Stream, bool)
+	GetSecondaryStreams() map[uint64]quic.Stream
+	GetSecondaryStreamCount() int
 }
 
 // ConnectionWrapper wraps a QUIC connection with KWIK-specific functionality
