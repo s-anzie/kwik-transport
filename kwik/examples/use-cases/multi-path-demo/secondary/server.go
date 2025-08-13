@@ -47,6 +47,13 @@ func handleSession(sess session.Session) {
 	defer sess.Close()
 	fmt.Println("[SECONDARY] 3. Handling session...")
 
+	// Vérifier que c'est bien un serveur secondaire
+	if serverSession, ok := sess.(*session.ServerSession); ok {
+		fmt.Printf("[SECONDARY] Server role: %s\n", serverSession.GetServerRole().String())
+		serverSession.SetServerRole(session.ServerRoleSecondary)
+		fmt.Printf("[SECONDARY] Server role set to: %s\n", serverSession.GetServerRole().String())
+	}
+
 	// 4. Accepte les stream et les handle
 	for {
 		fmt.Println("[SECONDARY] 4. Waiting for stream...")
@@ -85,35 +92,15 @@ func handleStream(stream session.Stream, sess session.Session) {
 	offset := len(message) //normalement on doit recuperer l'offset dans le message car il sera formaté
 	// Option A: Répondre dans le même stream
 	stream.SetOffset(offset)
-	if stream.StreamID()%2 == 0 {
-		fmt.Printf("[SECONDARY] 6a. Responding in same stream %d...\n", stream.StreamID())
-		response := fmt.Sprintf("Réponse du serveur secondaire dans le même flux pour: %s", message)
-		_, err = stream.Write([]byte(response))
-		if err != nil {
-			log.Printf("[SECONDARY] Write error: %v", err)
-			return
-		}
-		fmt.Printf("[SECONDARY] ✅ Response sent in same stream: %s\n", response)
-	} else {
-		// Option B: Ouvrir un nouveau stream pour la réponse
-		fmt.Printf("[SECONDARY] 6b. Opening new stream for response...\n")
-		newStream, err := sess.OpenStreamSync(context.Background())
-		newStream.SetOffset(offset)
-		newStream.SetRemoteStreamID(stream.StreamID())
-		if err != nil {
-			log.Printf("[SECONDARY] Failed to open new stream: %v", err)
-			return
-		}
-		defer newStream.Close()
-
-		response := fmt.Sprintf("Réponse du serveur secondaire dans un nouveau flux %d pour: %s", newStream.StreamID(), message)
-		_, err = newStream.Write([]byte(response))
-		if err != nil {
-			log.Printf("[SECONDARY] Write error on new stream: %v", err)
-			return
-		}
-		fmt.Printf("[SECONDARY] ✅ Response sent in new stream %d: %s\n", newStream.StreamID(), response)
+	
+	fmt.Printf("[SECONDARY] 6a. Responding in same stream %d...\n", stream.StreamID())
+	response := fmt.Sprintf("Réponse du serveur secondaire dans le même flux pour: %s", message)
+	_, err = stream.Write([]byte(response))
+	if err != nil {
+		log.Printf("[SECONDARY] Write error: %v", err)
+		return
 	}
+	fmt.Printf("[SECONDARY] ✅ Response sent in same stream: %s\n", response)
 
 	// 7. Il attend un peu et se termine
 	fmt.Printf("[SECONDARY] 7. Waiting before stream %d completion...\n", stream.StreamID())

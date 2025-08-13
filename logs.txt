@@ -1,39 +1,59 @@
-make run-multipath-primary-server
+make run-multipath-primary
+-server
 Building multi-path example...
 go build -o bin/multipath-primary-server ./multi-path-demo/primary/server.go
 go build -o bin/multipath-secondary-server ./multi-path-demo/secondary/server.go
 go build -o bin/multipath-client ./multi-path-demo/client.go
 Starting multi-path PRIMARY server on localhost:4433...
 ./bin/multipath-primary-server
-[KWIK] 2025/08/12 15:05:10.546338 [INFO] [comp=KWIK-SYSTEM] Wiring KWIK components together
-[KWIK] 2025/08/12 15:05:10.546515 [INFO] [comp=KWIK-SYSTEM] Setting up message routing between components
-[KWIK] 2025/08/12 15:05:10.546524 [INFO] [comp=KWIK-SYSTEM] All KWIK components wired successfully
-[KWIK] 2025/08/12 15:05:10.546530 [INFO] [comp=KWIK-SYSTEM] Starting KWIK system
-[KWIK] 2025/08/12 15:05:10.546535 [INFO] [comp=KWIK-SYSTEM] Session manager started
-[KWIK] 2025/08/12 15:05:10.546549 [INFO] [comp=KWIK-SYSTEM] KWIK system started successfully
-2025/08/12 15:05:10 failed to sufficiently increase receive buffer size (was: 208 kiB, wanted: 2048 kiB, got: 416 kiB). See https://github.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes for details.
-[KWIK] 2025/08/12 15:05:10.635197 [INFO] [comp=KWIK-SYSTEM] Listener created address=localhost:4433 
-[KWIK] 2025/08/12 15:05:10.635204 [INFO] [comp=KWIK-SYSTEM] Server listener created address=localhost:4433 
-2025/08/12 15:05:10 Multi-path server listening on localhost:4433
+=== PRIMARY SERVER MULTI-PATH DEMO ===
+[PRIMARY] 1. Starting listener on localhost:4433...
+[KWIK] 2025/08/13 23:36:46.226805 [INFO] [comp=KWIK-SYSTEM] Wiring KWIK components together
+[KWIK] 2025/08/13 23:36:46.226949 [INFO] [comp=KWIK-SYSTEM] Setting up message routing between components
+[KWIK] 2025/08/13 23:36:46.226954 [INFO] [comp=KWIK-SYSTEM] All KWIK components wired successfully
+[KWIK] 2025/08/13 23:36:46.226958 [INFO] [comp=KWIK-SYSTEM] Starting KWIK system
+[KWIK] 2025/08/13 23:36:46.226962 [INFO] [comp=KWIK-SYSTEM] Session manager started
+[KWIK] 2025/08/13 23:36:46.226970 [INFO] [comp=KWIK-SYSTEM] KWIK system started successfully
+2025/08/13 23:36:46 failed to sufficiently increase receive buffer size (was: 208 kiB, wanted: 2048 kiB, got: 416 kiB). See https://github.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes for details.
+[KWIK] 2025/08/13 23:36:46.652165 [INFO] [comp=KWIK-SYSTEM] Listener created address=localhost:4433 
+[KWIK] 2025/08/13 23:36:46.652175 [INFO] [comp=KWIK-SYSTEM] Server listener created address=localhost:4433 
+[PRIMARY] ✅ Listening on localhost:4433
+[PRIMARY] 2. Waiting for session...
+DEBUG: Server received authentication request with role: PRIMARY, session ID: kwik-session-d56008b8fc4bc1c2a1799b927147aece
+DEBUG: AuthManager handling authentication request with role: PRIMARY, sessionID: kwik-session-d56008b8fc4bc1c2a1799b927147aece, isAuthenticated: false
+DEBUG: AuthManager authentication result: success=true, errorMessage=, finalRole=PRIMARY
+DEBUG: Server authenticated client with role: PRIMARY, session ID: kwik-session-d56008b8fc4bc1c2a1799b927147aece
+[PRIMARY] ✅ Session accepted
+[PRIMARY] 2. Waiting for session...
+[PRIMARY] 3. Handling session...
+[PRIMARY] 4. Waiting for stream...
 DEBUG: Server control frame handler started, listening for client responses...
-2025/08/12 15:05:20 [PS->]: [C] connected with 1 paths
-2025/08/12 15:05:20 [PS->]: Add secondary path to localhost:4434...
+[PRIMARY] ✅ Stream 0 accepted
+[PRIMARY] 4. Waiting for stream...
+[PRIMARY] Handling stream 0...
+[PRIMARY] 5. Reading message from stream 0...
+[PRIMARY] ✅ Read: Premier message du client
+[PRIMARY] 6. Adding secondary path after reading message...
 DEBUG: Server received control frame (74 bytes)
 DEBUG: Server processing control frame type: ADD_PATH_RESPONSE
-DEBUG: Server received AddPathResponse for path path-0f470ecab6e39afb, success: true
-DEBUG: Server routed AddPathResponse to waiting channel for path path-0f470ecab6e39afb
-2025/08/12 15:05:21 [PS->]: AddPath request sent successfully to [C]
-2025/08/12 15:05:23 [PS->]: Sending raw data to [2S]...
-DEBUG: SendRawData checking for pathID path-0f470ecab6e39afb in pendingPathIDs
-DEBUG: pendingPathIDs[localhost:4434] = path-0f470ecab6e39afb
-DEBUG: Found matching pathID path-0f470ecab6e39afb for address localhost:4434
-DEBUG: PathID path-0f470ecab6e39afb found in pendingPathIDs, proceeding with SendRawData
-2025/08/12 15:05:23 [PS->]: Raw data sent successfully using SendRawData API!
+DEBUG: Server received AddPathResponse for path path-2952cd335a11a57e, success: true
+DEBUG: Server routed AddPathResponse to waiting channel for path path-2952cd335a11a57e
+[PRIMARY] ✅ Secondary path added: localhost:4434
+[PRIMARY] 7. Writing partial response to stream 0...
+[PRIMARY] ✅ Wrote partial response: Partie 1 de la réponse pour: Premier message du client
+[PRIMARY] 8. Sending raw data to secondary path...
+DEBUG: SendRawData checking for pathID path-2952cd335a11a57e in pendingPathIDs
+DEBUG: pendingPathIDs[localhost:4434] = path-2952cd335a11a57e
+DEBUG: Found matching pathID path-2952cd335a11a57e for address localhost:4434
+DEBUG: PathID path-2952cd335a11a57e found in pendingPathIDs, proceeding with SendRawData
+[PRIMARY] ✅ Raw data sent to secondary path: Données brutes pour serveur secondaire concernant: Premier message du client offset=55
+[PRIMARY] 9. Reading second message from stream 0...
+[PRIMARY] ✅ Read second message: Deuxième message du client
+[PRIMARY] 10. Writing final response to stream 0...
+[PRIMARY] ✅ Wrote final response: Réponse finale pour: Deuxième message du client (avec données agrégées)
+[PRIMARY] 11. Stream 0 completed, closing...
 DEBUG: Server control frame read error: EOF
-2025/08/12 15:05:41 Stream error: KWIK_CONNECTION_LOST: failed to accept stream (caused by: Application error 0x0 (remote): path closed)
-^Cmake: *** [Makefile:45: run-multipath-primary-server] Interrompre
-
-
+2025/08/13 23:36:55 [PRIMARY] Stream error: KWIK_CONNECTION_LOST: failed to accept stream (caused by: Application error 0x0 (remote): path closed)
 
 make run-multipath-seconda
 ry-server
@@ -43,36 +63,41 @@ go build -o bin/multipath-secondary-server ./multi-path-demo/secondary/server.go
 go build -o bin/multipath-client ./multi-path-demo/client.go
 Starting multi-path SECONDARY server on localhost:4434...
 ./bin/multipath-secondary-server
-[KWIK] 2025/08/12 15:05:12.397539 [INFO] [comp=KWIK-SYSTEM] Wiring KWIK components together
-[KWIK] 2025/08/12 15:05:12.397717 [INFO] [comp=KWIK-SYSTEM] Setting up message routing between components
-[KWIK] 2025/08/12 15:05:12.397723 [INFO] [comp=KWIK-SYSTEM] All KWIK components wired successfully
-[KWIK] 2025/08/12 15:05:12.397727 [INFO] [comp=KWIK-SYSTEM] Starting KWIK system
-[KWIK] 2025/08/12 15:05:12.397732 [INFO] [comp=KWIK-SYSTEM] Session manager started
-[KWIK] 2025/08/12 15:05:12.397743 [INFO] [comp=KWIK-SYSTEM] KWIK system started successfully
-2025/08/12 15:05:12 failed to sufficiently increase receive buffer size (was: 208 kiB, wanted: 2048 kiB, got: 416 kiB). See https://github.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes for details.
-[KWIK] 2025/08/12 15:05:12.467508 [INFO] [comp=KWIK-SYSTEM] Listener created address=localhost:4434 
-[KWIK] 2025/08/12 15:05:12.467516 [INFO] [comp=KWIK-SYSTEM] Server listener created address=localhost:4434 
-2025/08/12 15:05:12 [2S->]: listening on localhost:4434
-2025/08/12 15:05:12 [2S->]: Waiting for connections...
-2025/08/12 15:05:21 [2S->] New connection accepted from [C]
+=== SECONDARY SERVER MULTI-PATH DEMO ===
+[SECONDARY] 1. Starting listener on localhost:4434...
+[KWIK] 2025/08/13 23:36:49.268121 [INFO] [comp=KWIK-SYSTEM] Wiring KWIK components together
+[KWIK] 2025/08/13 23:36:49.268317 [INFO] [comp=KWIK-SYSTEM] Setting up message routing between components
+[KWIK] 2025/08/13 23:36:49.268327 [INFO] [comp=KWIK-SYSTEM] All KWIK components wired successfully
+[KWIK] 2025/08/13 23:36:49.268333 [INFO] [comp=KWIK-SYSTEM] Starting KWIK system
+[KWIK] 2025/08/13 23:36:49.268340 [INFO] [comp=KWIK-SYSTEM] Session manager started
+[KWIK] 2025/08/13 23:36:49.268355 [INFO] [comp=KWIK-SYSTEM] KWIK system started successfully
+2025/08/13 23:36:49 failed to sufficiently increase receive buffer size (was: 208 kiB, wanted: 2048 kiB, got: 416 kiB). See https://github.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes for details.
+[KWIK] 2025/08/13 23:36:49.599893 [INFO] [comp=KWIK-SYSTEM] Listener created address=localhost:4434 
+[KWIK] 2025/08/13 23:36:49.599902 [INFO] [comp=KWIK-SYSTEM] Server listener created address=localhost:4434 
+[SECONDARY] ✅ Listening on localhost:4434
+[SECONDARY] 2. Waiting for session...
+DEBUG: Server received authentication request with role: SECONDARY, session ID: kwik-session-d56008b8fc4bc1c2a1799b927147aece
+DEBUG: AuthManager handling authentication request with role: SECONDARY, sessionID: kwik-session-d56008b8fc4bc1c2a1799b927147aece, isAuthenticated: false
+DEBUG: AuthManager accepting SECONDARY authentication for session kwik-session-d56008b8fc4bc1c2a1799b927147aece
+DEBUG: AuthManager authentication result: success=true, errorMessage=, finalRole=SECONDARY
+DEBUG: Server authenticated client with role: SECONDARY, session ID: kwik-session-d56008b8fc4bc1c2a1799b927147aece
+[SECONDARY] ✅ Session accepted
+[SECONDARY] 2. Waiting for session...
+[SECONDARY] 3. Handling session...
+[SECONDARY] 4. Waiting for stream...
 DEBUG: Server control frame handler started, listening for client responses...
-2025/08/12 15:05:21 [2S->]: handling session with 1 paths
-[2S->]: Starting proactive data response sender
-[2S->]: Will only send messages when there's data to process
-2025/08/12 15:05:23 [2S->]: received stream 0
-2025/08/12 15:05:23 [2S->]: received message: Message en direction de [2S] par SendRawData! depuis [PS]
-[2S->]: Processing message: Message en direction de [2S] par SendRawData! depuis [PS]
-2025/08/12 15:05:23 [2S->]: triggered Response: [2S->]: response to: Message en direction de [2S] par SendRawData! depuis [PS] [processed at 15:05:23]
-2025/08/12 15:05:23 [2S->] sent response: Message de [2S] à [C] avec 1 chemin en reponse à ': Message en direction de [2S] par SendRawData! depuis [PS]'
-[2S->]: Received data to send proactively: [2S->]: response to: Message en direction de [2S] par SendRawData! depuis [PS] [processed at 15:05:23]
-[2S->]: Has 1 active paths
-[2S->]: Path 1: ID=path-3707f5570ed79452, Address=127.0.0.1:47215, Primary=true
-[2S->]: Successfully created stream 1 for proactive response
-[2S->]: Sent proactive response #1: [2S->]: response to: Message en direction de [2S] par SendRawData! depuis [PS] [processed at 15:05:23]
-2025/08/12 15:05:41 [2S->]: stream error: KWIK_CONNECTION_LOST: failed to accept stream (caused by: Application error 0x0 (remote): path closed)
+[SECONDARY] ✅ Stream 0 accepted
+[SECONDARY] 4. Waiting for stream...
+[SECONDARY] Handling stream 0...
+[SECONDARY] 5. Reading from stream 0...
+[SECONDARY] ✅ Read: Données brutes pour serveur secondaire concernant: Premier message du client offset=55
+[SECONDARY] 6. Deciding response method for stream 0...
+[SECONDARY] 6a. Responding in same stream 0...
+[SECONDARY] ✅ Response sent in same stream: Réponse du serveur secondaire dans le même flux pour: Données brutes pour serveur secondaire concernant: Premier message du client offset=55
+[SECONDARY] 7. Waiting before stream 0 completion...
+[SECONDARY] ✅ Stream 0 completed
 DEBUG: Server control frame read error: Application error 0x0 (remote): path closed
-^Cmake: *** [Makefile:49: run-multipath-secondary-server] Interrompre
-
+2025/08/13 23:36:55 [SECONDARY] Stream error: KWIK_CONNECTION_LOST: failed to accept stream (caused by: Application error 0x0 (remote): path closed)
 
 make run-multipath-client
 Building multi-path example...
@@ -81,89 +106,45 @@ go build -o bin/multipath-secondary-server ./multi-path-demo/secondary/server.go
 go build -o bin/multipath-client ./multi-path-demo/client.go
 Running multi-path client...
 ./bin/multipath-client
-[KWIK] 2025/08/12 15:05:20.490560 [INFO] [comp=KWIK-SYSTEM] Wiring KWIK components together
-[KWIK] 2025/08/12 15:05:20.490654 [INFO] [comp=KWIK-SYSTEM] Setting up message routing between components
-[KWIK] 2025/08/12 15:05:20.490659 [INFO] [comp=KWIK-SYSTEM] All KWIK components wired successfully
-[KWIK] 2025/08/12 15:05:20.490663 [INFO] [comp=KWIK-SYSTEM] Starting KWIK system
-[KWIK] 2025/08/12 15:05:20.490667 [INFO] [comp=KWIK-SYSTEM] Session manager started
-[KWIK] 2025/08/12 15:05:20.490673 [INFO] [comp=KWIK-SYSTEM] KWIK system started successfully
-2025/08/12 15:05:20 failed to sufficiently increase receive buffer size (was: 208 kiB, wanted: 2048 kiB, got: 416 kiB). See https://github.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes for details.
-[KWIK] 2025/08/12 15:05:20.495986 [INFO] [comp=KWIK-SYSTEM] Client session created sessionID=kwik-session-de0ab911faf1397cbd3236556c7142ca address=localhost:4433 
-[KWIK] 2025/08/12 15:05:20.495999 [INFO] [comp=KWIK-SYSTEM] Client session created address=localhost:4433 sessionID=kwik-session-de0ab911faf1397cbd3236556c7142ca 
-[C->]: Connected to [PS]
-
-Initial paths (1 total):
-  1. localhost:4433 (Primary: true, Status: ACTIVE)
-
-[C->]: Starting listener for [2S] messages
-DEBUG: Client found managed path with original ID path-0f470ecab6e39afb, secondary path has server ID path-0f470ecab6e39afb
-[C->]: Checking 2 active paths for incoming streams
-[C->]: Checking path 1: localhost:4433 (Primary: true)
-[C->]: Checking path 2: localhost:4434 (Primary: false)
-[C->]: Starting listener for secondary path: localhost:4434
-[C->]: Starting dedicated listener for secondary path localhost:4434
-DEBUG: Client routing raw packet (57 bytes) to data plane of path path-0f470ecab6e39afb
-Sent: Message de [C] à [PS], pour demande de ressources!
-Received: Reponse du [PS] au [C] avec 1 chemins pour: Message de [C] à [PS], pour demande de ressources!
-[C->]: Waiting for [PS] to add secondary path...
-[C->]: Stream accept error on main session: context deadline exceeded
-[C->]: Checking 2 active paths for incoming streams
-[C->]: Checking path 1: localhost:4433 (Primary: true)
-[C->]: Checking path 2: localhost:4434 (Primary: false)
-[C->]: Starting listener for secondary path: localhost:4434
-[C->]: Starting dedicated listener for secondary path localhost:4434
-[C->]: Accepted stream 2 from secondary path localhost:4434
-[C->]: Handling incoming message on stream 2
-🎉 [C->] RECEIVED PROACTIVE MESSAGE FROM [2S]: [2S->]: response to: Message en direction de [2S] par SendRawData! depuis [PS] [processed at 15:05:23]
-[C->]: Sent ACK back to secondary server
-
-After server path addition paths (2 total):
-  1. localhost:4434 (Primary: false, Status: ACTIVE)
-  2. localhost:4433 (Primary: true, Status: ACTIVE)
-
-Sent: Second Message à [PS] en provenance de [C]
-Received: Reponse du [PS] au [C] avec 1 chemins pour: Second Message à [PS] en provenance de [C]
-[C->]: Waiting for proactive messages from [2S]...
-[C->]: Stream accept error on main session: context deadline exceeded
-[C->]: Checking 2 active paths for incoming streams
-[C->]: Checking path 1: localhost:4433 (Primary: true)
-[C->]: Checking path 2: localhost:4434 (Primary: false)
-[C->]: Starting listener for secondary path: localhost:4434
-[C->]: Starting dedicated listener for secondary path localhost:4434
-[C->]: Stream accept error on main session: context deadline exceeded
-[C->]: Checking 2 active paths for incoming streams
-[C->]: Checking path 1: localhost:4433 (Primary: true)
-[C->]: Checking path 2: localhost:4434 (Primary: false)
-[C->]: Starting listener for secondary path: localhost:4434
-[C->]: Starting dedicated listener for secondary path localhost:4434
-[C->]: Stream accept error on main session: context deadline exceeded
-[C->]: Checking 2 active paths for incoming streams
-[C->]: Checking path 1: localhost:4433 (Primary: true)
-[C->]: Checking path 2: localhost:4434 (Primary: false)
-[C->]: Starting listener for secondary path: localhost:4434
-[C->]: Starting dedicated listener for secondary path localhost:4434
-[C->]: Stream accept error on main session: context deadline exceeded
-[C->]: Checking 2 active paths for incoming streams
-[C->]: Checking path 1: localhost:4434 (Primary: false)
-[C->]: Starting listener for secondary path: localhost:4434
-[C->]: Checking path 2: localhost:4433 (Primary: true)
-[C->]: Starting dedicated listener for secondary path localhost:4434
-[C->]: Stream accept error on main session: context deadline exceeded
-[C->]: Checking 2 active paths for incoming streams
-[C->]: Checking path 1: localhost:4433 (Primary: true)
-[C->]: Checking path 2: localhost:4434 (Primary: false)
-[C->]: Starting listener for secondary path: localhost:4434
-[C->]: Starting dedicated listener for secondary path localhost:4434
-Multi-path demo completed
-[C->]: Failed to accept stream on secondary path localhost:4434: KWIK_CONNECTION_LOST: session closed
-[C->]: Failed to accept stream on secondary path localhost:4434: KWIK_CONNECTION_LOST: session closed
-[C->]: Stream accept error on main session: KWIK_CONNECTION_LOST: session closed
-[C->]: Failed to accept stream on secondary path localhost:4434: KWIK_CONNECTION_LOST: session closed
-[C->]: Failed to accept stream on secondary path localhost:4434: KWIK_CONNECTION_LOST: session closed
-[C->]: Failed to accept stream on secondary path localhost:4434: KWIK_CONNECTION_LOST: session closed
-[C->]: Failed to accept stream on secondary path localhost:4434: KWIK_CONNECTION_LOST: session closed
-[C->]: Failed to accept stream on secondary path localhost:4434: KWIK_CONNECTION_LOST: session closed
+=== CLIENT MULTI-PATH DEMO ===
+[CLIENT] 1. Dialing primary server...
+[KWIK] 2025/08/13 23:36:52.737236 [INFO] [comp=KWIK-SYSTEM] Wiring KWIK components together
+[KWIK] 2025/08/13 23:36:52.737359 [INFO] [comp=KWIK-SYSTEM] Setting up message routing between components
+[KWIK] 2025/08/13 23:36:52.737364 [INFO] [comp=KWIK-SYSTEM] All KWIK components wired successfully
+[KWIK] 2025/08/13 23:36:52.737369 [INFO] [comp=KWIK-SYSTEM] Starting KWIK system
+[KWIK] 2025/08/13 23:36:52.737372 [INFO] [comp=KWIK-SYSTEM] Session manager started
+[KWIK] 2025/08/13 23:36:52.737381 [INFO] [comp=KWIK-SYSTEM] KWIK system started successfully
+2025/08/13 23:36:52 failed to sufficiently increase receive buffer size (was: 208 kiB, wanted: 2048 kiB, got: 416 kiB). See https://github.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes for details.
+[KWIK] 2025/08/13 23:36:52.742918 [INFO] [comp=KWIK-SYSTEM] Client session created sessionID=kwik-session-d56008b8fc4bc1c2a1799b927147aece address=localhost:4433 
+[KWIK] 2025/08/13 23:36:52.742942 [INFO] [comp=KWIK-SYSTEM] Client session created address=localhost:4433 sessionID=kwik-session-d56008b8fc4bc1c2a1799b927147aece 
+[CLIENT] ✅ Connected to primary server
+[CLIENT] 2. Opening stream and sending first message...
+[CLIENT] ✅ Sent: Premier message du client
+[CLIENT] 3. Waiting for at least 2 paths...
+[CLIENT] Current paths: 1
+DEBUG: Client received AddPathRequest with PathId: path-2952cd335a11a57e, TargetAddress: localhost:4434
+DEBUG: Client attempting to create path to localhost:4434
+DEBUG: Client successfully created path to localhost:4434 in 3.584013ms
+DEBUG: Client starting authentication on secondary path path-2952cd335a11a57e
+DEBUG: Client creating SECONDARY authentication request for session kwik-session-d56008b8fc4bc1c2a1799b927147aece
+DEBUG: Client authentication successful on secondary path path-2952cd335a11a57e
+DEBUG: Client starting integration of secondary path path-2952cd335a11a57e
+DEBUG: Client found managed path with original ID path-2952cd335a11a57e, secondary path has server ID path-2952cd335a11a57e
+DEBUG: Client integration successful for secondary path path-2952cd335a11a57e
+DEBUG: Client sending success response for path path-2952cd335a11a57e
+DEBUG: Client sent AddPathResponse with success=true for path path-2952cd335a11a57e
+DEBUG: Client routing raw packet (87 bytes) to data plane of path path-2952cd335a11a57e
+[CLIENT] Current paths: 2
+[CLIENT] ✅ At least 2 paths available
+[CLIENT] 4. Reading from stream...
+[CLIENT] ✅ Read: Partie 1 de la réponse pour: Premier message du client
+[CLIENT] 5. Writing second message...
+[CLIENT] ✅ Sent: Deuxième message du client
+[CLIENT] 6. Reading second response...
+[CLIENT] ✅ Read: Réponse finale pour: Deuxième message du client (avec données agrégées)
+[CLIENT] 7. Waiting before termination...
+[CLIENT] ✅ Demo completed
 DEBUG: Client control frame read error: Application error 0x0 (local): path closed
-[KWIK] 2025/08/12 15:05:41.006281 [INFO] [comp=KWIK-SYSTEM] Stopping KWIK system
-[KWIK] 2025/08/12 15:05:41.006300 [INFO] [comp=KWIK-SYSTEM] Session manager stopped
-[KWIK] 2025/08/12 15:05:41.060692 [INFO] [comp=KWIK-SYSTEM] KWIK system stopped successfully
+[KWIK] 2025/08/13 23:36:55.747392 [INFO] [comp=KWIK-SYSTEM] Stopping KWIK system
+[KWIK] 2025/08/13 23:36:55.747583 [INFO] [comp=KWIK-SYSTEM] Session manager stopped
+[KWIK] 2025/08/13 23:36:55.749535 [INFO] [comp=KWIK-SYSTEM] KWIK system stopped successfully

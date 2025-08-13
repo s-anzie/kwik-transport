@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	kwiктls "kwik/internal/tls"
 	"kwik/internal/utils"
+	"kwik/pkg/data"
 	"kwik/pkg/stream"
 	"kwik/pkg/transport"
 	"kwik/proto/control"
@@ -58,6 +59,10 @@ type ServerSession struct {
 
 	// Channel for accepting incoming streams
 	acceptChan chan *ServerStream
+
+	// Secondary stream aggregation
+	secondaryAggregator *data.SecondaryStreamAggregator
+	metadataProtocol    *stream.MetadataProtocolImpl
 
 	// Synchronization
 	mutex  sync.RWMutex
@@ -111,6 +116,8 @@ func NewServerSession(sessionID string, pathManager transport.PathManager, confi
 		serverRole:           ServerRolePrimary,                          // Default to primary role
 		streams:              make(map[uint64]*ServerStream),
 		acceptChan:           make(chan *ServerStream, 100),
+		secondaryAggregator:  data.NewSecondaryStreamAggregator(),        // Initialize secondary stream aggregator
+		metadataProtocol:     stream.NewMetadataProtocol(),               // Initialize metadata protocol
 		ctx:                  ctx,
 		cancel:               cancel,
 		config:               config,
@@ -611,6 +618,31 @@ func (s *ServerSession) GetPendingPathID(address string) string {
 	defer s.pathIDsMutex.RUnlock()
 
 	return s.pendingPathIDs[address]
+}
+
+// GetSecondaryStreamAggregator returns the secondary stream aggregator
+func (s *ServerSession) GetSecondaryStreamAggregator() *data.SecondaryStreamAggregator {
+	return s.secondaryAggregator
+}
+
+// GetMetadataProtocol returns the metadata protocol instance
+func (s *ServerSession) GetMetadataProtocol() *stream.MetadataProtocolImpl {
+	return s.metadataProtocol
+}
+
+// SetServerRole sets the server role (PRIMARY or SECONDARY)
+func (s *ServerSession) SetServerRole(role ServerRole) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.serverRole = role
+	fmt.Printf("[SERVER] Role set to: %s\n", role.String())
+}
+
+// GetServerRole returns the current server role
+func (s *ServerSession) GetServerRole() ServerRole {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return s.serverRole
 }
 
 // waitForAddPathResponse waits for AddPathResponse from client with timeout
@@ -1134,9 +1166,38 @@ func (s *ServerSession) SendRawData(data []byte, pathID string, remoteStreamID .
 			"failed to get control stream for raw packet transmission", err)
 	}
 
+	// If remoteStreamID is provided, encapsulate data with metadata for secondary stream aggregation
+	var finalData []byte
+	if len(remoteStreamID) > 0 && remoteStreamID[0] != 0 {
+		// Encapsulate data with metadata for secondary stream aggregation
+		metadataProtocol := s.metadataProtocol
+		if metadataProtocol == nil {
+			return utils.NewKwikError(utils.ErrStreamCreationFailed, "no metadata protocol available", nil)
+		}
+
+		// Use offset 0 as default since we don't have offset information in SendRawData
+		// In a real scenario, the offset would be provided as an additional parameter
+		encapsulatedData, err := metadataProtocol.EncapsulateData(
+			remoteStreamID[0], // Target KWIK stream ID
+			0,                 // Default offset (could be enhanced to accept offset parameter)
+			data,
+		)
+		if err != nil {
+			return utils.NewKwikError(utils.ErrInvalidFrame, 
+				fmt.Sprintf("failed to encapsulate raw data with metadata: %v", err), err)
+		}
+		
+		finalData = encapsulatedData
+		fmt.Printf("[PRIMARY] SendRawData encapsulated %d bytes for KWIK stream %d\n", 
+			len(data), remoteStreamID[0])
+	} else {
+		// No metadata encapsulation needed
+		finalData = data
+	}
+
 	// Create RawPacketTransmission protobuf message
 	rawPacketReq := &control.RawPacketTransmission{
-		Data:           data,
+		Data:           finalData,
 		TargetPathId:   pathID,
 		SourceServerId: s.sessionID,
 		ProtocolHint:   "custom", // Default hint for custom protocols
@@ -1515,16 +1576,20 @@ func (s *ServerStream) updateAggregationMapping() error {
 	}
 
 	// Get the secondary stream aggregator from the session
-	// Note: This would need to be added to the session structure
-	// For now, we'll create a placeholder that logs the mapping
+	aggregator := s.session.secondaryAggregator
+	if aggregator == nil {
+		return utils.NewKwikError(utils.ErrStreamCreationFailed, "no secondary aggregator available", nil)
+	}
 
-	fmt.Printf("[SECONDARY] Stream %d mapped to KWIK stream %d at offset %d\n",
+	// Set up the stream mapping in the aggregator
+	err := aggregator.SetStreamMapping(s.id, s.remoteStreamID, s.pathID)
+	if err != nil {
+		return utils.NewKwikError(utils.ErrStreamCreationFailed, 
+			fmt.Sprintf("failed to set stream mapping: %v", err), err)
+	}
+
+	fmt.Printf("[SECONDARY] Stream %d mapped to KWIK stream %d at offset %d (aggregator configured)\n", 
 		s.id, s.remoteStreamID, s.offset)
-
-	// In a full implementation, this would:
-	// 1. Get the aggregator from the session
-	// 2. Call aggregator.SetStreamMapping(s.id, s.remoteStreamID, s.pathID)
-	// 3. Set up the metadata protocol for data encapsulation
 
 	return nil
 }
@@ -1692,6 +1757,15 @@ func (s *ServerSession) handleAuthenticationWithSessionID(ctx context.Context) (
 			"failed to parse authentication request", err)
 	}
 
+	// Debug: Log the received authentication request details
+	roleStr := "UNKNOWN"
+	if authReq.Role == control.SessionRole_PRIMARY {
+		roleStr = "PRIMARY"
+	} else if authReq.Role == control.SessionRole_SECONDARY {
+		roleStr = "SECONDARY"
+	}
+	fmt.Printf("DEBUG: Server received authentication request with role: %s, session ID: %s\n", roleStr, authReq.SessionId)
+
 	// Use AuthenticationManager to handle the authentication request with role support
 	responseFrame, err := s.authManager.HandleAuthenticationRequest(&frame)
 	if err != nil {
@@ -1708,7 +1782,7 @@ func (s *ServerSession) handleAuthenticationWithSessionID(ctx context.Context) (
 
 	// The role is now stored in the AuthenticationManager and can be accessed via GetSessionRole()
 	// Log the role information for debugging
-	roleStr := "UNKNOWN"
+	roleStr = "UNKNOWN"
 	if s.authManager.GetSessionRole() == control.SessionRole_PRIMARY {
 		roleStr = "PRIMARY"
 	} else if s.authManager.GetSessionRole() == control.SessionRole_SECONDARY {
@@ -1800,11 +1874,4 @@ func (s *ServerSession) getServerRole() ServerRole {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 	return s.serverRole
-}
-
-// SetServerRole sets the role of this server session
-func (s *ServerSession) SetServerRole(role ServerRole) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	s.serverRole = role
 }

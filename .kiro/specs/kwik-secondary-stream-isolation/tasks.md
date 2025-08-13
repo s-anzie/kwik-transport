@@ -132,7 +132,7 @@
   - Ajouter les stratégies de récupération pour les métadonnées corrompues
   - _Requirements: 8.5_
 
-- [ ] 7. Créer les tests unitaires pour les nouveaux composants
+- [x] 7. Créer les tests unitaires pour les nouveaux composants
   - Développer une suite de tests complète pour valider le fonctionnement de l'isolation
   - Tester les cas d'erreur et les scénarios de récupération
   - _Requirements: 9.1, 9.2, 9.3, 9.4_
@@ -178,7 +178,7 @@
   - Valider que la latence supplémentaire reste < 1ms
   - _Requirements: 10.1, 10.2_
 
-- [x] 8.3 Créer les tests de compatibilité
+- [ ] 8.3 Créer les tests de compatibilité
   - Créer le fichier `kwik/pkg/session/compatibility_test.go`
   - Tester que les applications existantes fonctionnent sans modification
   - Valider que l'interface publique reste identique

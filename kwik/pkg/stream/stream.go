@@ -239,15 +239,19 @@ func (s *ClientStream) RemoteStreamID() uint64 {
 // updateAggregationOffset updates the aggregation system with current offset information
 func (s *ClientStream) updateAggregationOffset() error {
 	// This would integrate with the secondary stream aggregation system
-	// For now, we'll log the mapping for debugging
+	// For now, we'll log the mapping for debugging since we need access to the session
+	// to get the aggregator, but ClientStream doesn't have direct access to ClientSession
 	
-	fmt.Printf("[CLIENT] Stream %d mapped to remote stream %d at offset %d\n", 
+	fmt.Printf("[CLIENT] Stream %d mapped to remote stream %d at offset %d (ready for aggregation)\n", 
 		s.id, s.remoteStreamID, s.offset)
 	
-	// In a full implementation, this would:
-	// 1. Get the aggregator from the session
+	// Note: In a full implementation, this would:
+	// 1. Get the aggregator from the session via s.session.getSecondaryStreamAggregator()
 	// 2. Call aggregator.SetStreamMapping(s.id, s.remoteStreamID, s.pathID)
 	// 3. Update offset information for proper data placement
+	// 
+	// However, since ClientStream doesn't have direct access to ClientSession,
+	// this mapping will be handled when data is actually received and processed
 	
 	return nil
 }

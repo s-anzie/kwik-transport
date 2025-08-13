@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"time"
 
 	"kwik/internal/utils"
@@ -124,6 +125,9 @@ func (am *AuthenticationManager) HandleAuthenticationRequest(frame *control.Cont
 	errorMessage := ""
 	
 	// Handle role-based authentication logic
+	fmt.Printf("DEBUG: AuthManager handling authentication request with role: %v, sessionID: %s, isAuthenticated: %t\n", 
+		authReq.Role, authReq.SessionId, am.isAuthenticated)
+	
 	if authReq.Role == control.SessionRole_PRIMARY {
 		// Primary path authentication - this is the main session
 		if am.isAuthenticated {
@@ -136,21 +140,30 @@ func (am *AuthenticationManager) HandleAuthenticationRequest(frame *control.Cont
 			am.sessionRole = control.SessionRole_PRIMARY
 		}
 	} else if authReq.Role == control.SessionRole_SECONDARY {
-		// Secondary path authentication - validate against existing session
+		// Secondary path authentication - this is a secondary server accepting a client connection
+		// The secondary server should accept the client's session ID and role
 		if !am.isAuthenticated {
-			success = false
-			errorMessage = "secondary authentication requires existing primary session"
+			// First authentication on this secondary server - accept the session ID
+			fmt.Printf("DEBUG: AuthManager accepting SECONDARY authentication for session %s\n", authReq.SessionId)
+			am.sessionID = authReq.SessionId
+			am.sessionRole = control.SessionRole_SECONDARY
 		} else if authReq.SessionId != am.sessionID {
 			success = false
 			errorMessage = "session ID mismatch for secondary path"
+			fmt.Printf("DEBUG: AuthManager rejecting SECONDARY auth - session ID mismatch: expected %s, got %s\n", 
+				am.sessionID, authReq.SessionId)
 		} else {
-			// Valid secondary path authentication
+			// Valid secondary path authentication with matching session ID
+			fmt.Printf("DEBUG: AuthManager accepting SECONDARY authentication for existing session %s\n", authReq.SessionId)
 			am.sessionRole = control.SessionRole_SECONDARY
 		}
 	} else {
 		success = false
 		errorMessage = "invalid session role"
 	}
+	
+	fmt.Printf("DEBUG: AuthManager authentication result: success=%t, errorMessage=%s, finalRole=%v\n", 
+		success, errorMessage, am.sessionRole)
 
 	// Validate client version compatibility
 	if success && !am.isVersionCompatible(authReq.ClientVersion) {
