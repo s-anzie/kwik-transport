@@ -359,7 +359,7 @@ func (s *ClientSession) GetAllPaths() []PathInfo {
 }
 
 // SendRawData sends raw data through a specific path
-func (s *ClientSession) SendRawData(data []byte, pathID string) error {
+func (s *ClientSession) SendRawData(data []byte, pathID string, remoteStreamID ...uint64) error {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 

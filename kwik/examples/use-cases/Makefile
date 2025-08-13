@@ -4,7 +4,7 @@
 .PHONY: all clean help
 
 # Build all use case examples
-all: simple-echo multi-path concurrent raw-packets
+all: simple-echo multi-path
 
 # Simple Echo Example (complete client-server pair)
 simple-echo: bin
@@ -18,18 +18,6 @@ multi-path: bin
 	go build -o bin/multipath-primary-server ./multi-path-demo/primary/server.go
 	go build -o bin/multipath-secondary-server ./multi-path-demo/secondary/server.go
 	go build -o bin/multipath-client ./multi-path-demo/client.go
-
-# Concurrent Streams Example (complete client-server pair)
-concurrent: bin
-	@echo "Building concurrent streams example..."
-	go build -o bin/concurrent-server ./concurrent-streams/server/server.go
-	go build -o bin/concurrent-client ./concurrent-streams/client.go
-
-# Raw Packets Example (complete client-server pair)
-raw-packets: bin
-	@echo "Building raw packets example..."
-	go build -o bin/rawpackets-server ./raw-packets/server/server.go
-	go build -o bin/rawpackets-client ./raw-packets/client.go
 
 # Run Examples - Each use case has both client and server
 run-echo-server: simple-echo
@@ -54,22 +42,6 @@ run-multipath-client: multi-path
 
 # Legacy target for backward compatibility
 run-multipath-server: run-multipath-primary-server
-
-run-concurrent-server: concurrent
-	@echo "Starting concurrent streams server on localhost:4433..."
-	./bin/concurrent-server
-
-run-concurrent-client: concurrent
-	@echo "Running concurrent streams client..."
-	./bin/concurrent-client
-
-run-rawpackets-server: raw-packets
-	@echo "Starting raw packets server on localhost:4433..."
-	./bin/rawpackets-server
-
-run-rawpackets-client: raw-packets
-	@echo "Running raw packets client..."
-	./bin/rawpackets-client
 
 # Clean built binaries
 clean:

@@ -21,7 +21,7 @@ type Session interface {
 	GetAllPaths() []PathInfo
 	
 	// Raw packet transmission for custom protocols
-	SendRawData(data []byte, pathID string) error
+	SendRawData(data []byte, pathID string, remoteStreamID ...uint64) error
 	
 	Close() error
 }
@@ -36,6 +36,12 @@ type Stream interface {
 	// KWIK-specific metadata
 	StreamID() uint64
 	PathID() string
+	
+	// Secondary stream isolation methods
+	SetOffset(offset int) error
+	GetOffset() int
+	SetRemoteStreamID(remoteStreamID uint64) error
+	RemoteStreamID() uint64
 }
 
 // PathInfo contains information about a connection path

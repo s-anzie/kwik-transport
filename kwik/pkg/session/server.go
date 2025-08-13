@@ -87,6 +87,10 @@ type ServerStream struct {
 	writeBuf   []byte
 	quicStream quic.Stream // Underlying QUIC stream
 	mutex      sync.RWMutex
+
+	// Secondary stream isolation fields
+	offset         int    // Current offset for stream data aggregation
+	remoteStreamID uint64 // Remote stream ID for cross-stream references
 }
 
 // NewServerSession creates a new KWIK server session
@@ -104,7 +108,7 @@ func NewServerSession(sessionID string, pathManager transport.PathManager, confi
 		state:                SessionStateActive,
 		createdAt:            time.Now(),
 		authManager:          NewAuthenticationManager(sessionID, false), // false = isServer
-		serverRole:           ServerRolePrimary,                           // Default to primary role
+		serverRole:           ServerRolePrimary,                          // Default to primary role
 		streams:              make(map[uint64]*ServerStream),
 		acceptChan:           make(chan *ServerStream, 100),
 		ctx:                  ctx,
@@ -350,7 +354,7 @@ func (s *ServerSession) OpenStreamSync(ctx context.Context) (Stream, error) {
 
 	// Restrict stream opening to primary servers only (Requirement 1.1, 1.2, 1.3)
 	if s.serverRole != ServerRolePrimary {
-		return nil, utils.NewKwikError(utils.ErrInvalidFrame, 
+		return nil, utils.NewKwikError(utils.ErrInvalidFrame,
 			"only primary servers can open streams on the public client session", nil)
 	}
 
@@ -1065,7 +1069,7 @@ func (s *ServerSession) createPathInfo(path transport.Path, status PathStatus) P
 
 // SendRawData sends raw data through a specific path with dead path detection
 // Requirements: 6.3 - detect operations targeting dead paths and send notifications
-func (s *ServerSession) SendRawData(data []byte, pathID string) error {
+func (s *ServerSession) SendRawData(data []byte, pathID string, remoteStreamID ...uint64) error {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -1386,8 +1390,46 @@ func (s *ServerStream) Write(p []byte) (int, error) {
 		return 0, utils.NewKwikError(utils.ErrStreamCreationFailed, "no underlying QUIC stream", nil)
 	}
 
-	// Write directly to the underlying QUIC stream
+	// If this is a secondary server stream with aggregation mapping, encapsulate data
+	if s.session.serverRole == ServerRoleSecondary && s.remoteStreamID != 0 {
+		return s.writeWithAggregation(p)
+	}
+
+	// For primary servers, write directly to the underlying QUIC stream
 	return s.quicStream.Write(p)
+}
+
+// writeWithAggregation writes data with metadata for secondary stream aggregation
+func (s *ServerStream) writeWithAggregation(data []byte) (int, error) {
+	// Create metadata protocol instance
+	metadataProtocol := stream.NewMetadataProtocol()
+
+	// Encapsulate data with metadata for aggregation
+	encapsulatedData, err := metadataProtocol.EncapsulateData(
+		s.remoteStreamID, // Target KWIK stream ID
+		uint64(s.offset), // Current offset in the target stream
+		data,
+	)
+	if err != nil {
+		return 0, utils.NewKwikError(utils.ErrInvalidFrame,
+			fmt.Sprintf("failed to encapsulate secondary stream data: %v", err), err)
+	}
+
+	// Write encapsulated data to the underlying QUIC stream
+	_, err = s.quicStream.Write(encapsulatedData)
+	if err != nil {
+		return 0, err
+	}
+
+	// Update offset for next write
+	s.offset += len(data)
+
+	// Log for debugging
+	fmt.Printf("[SECONDARY] Stream %d wrote %d bytes to KWIK stream %d at offset %d\n",
+		s.id, len(data), s.remoteStreamID, s.offset-len(data))
+
+	// Return the original data length (not encapsulated length)
+	return len(data), nil
 }
 
 // Close closes the stream (QUIC-compatible)
@@ -1407,6 +1449,84 @@ func (s *ServerStream) StreamID() uint64 {
 // PathID returns the primary path ID for this stream
 func (s *ServerStream) PathID() string {
 	return s.pathID
+}
+
+// SetOffset sets the current offset for stream data aggregation
+// This is used by secondary servers to specify where their data should be placed in the KWIK stream
+func (s *ServerStream) SetOffset(offset int) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	if offset < 0 {
+		return utils.NewKwikError(utils.ErrInvalidFrame, "offset cannot be negative", nil)
+	}
+
+	s.offset = offset
+
+	// If this is a secondary server stream, notify the aggregation system
+	if s.session.serverRole == ServerRoleSecondary && s.remoteStreamID != 0 {
+		// Create secondary stream data for aggregation
+		// This will be used when data is written to this stream
+		return s.updateAggregationMapping()
+	}
+
+	return nil
+}
+
+// GetOffset returns the current offset for stream data aggregation
+func (s *ServerStream) GetOffset() int {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return s.offset
+}
+
+// SetRemoteStreamID sets the remote stream ID for cross-stream references
+// For secondary servers, this represents the KWIK stream ID where data should be aggregated
+func (s *ServerStream) SetRemoteStreamID(remoteStreamID uint64) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	if remoteStreamID == 0 {
+		return utils.NewKwikError(utils.ErrInvalidFrame, "remote stream ID cannot be zero", nil)
+	}
+
+	s.remoteStreamID = remoteStreamID
+
+	// If this is a secondary server stream, set up aggregation mapping
+	if s.session.serverRole == ServerRoleSecondary {
+		return s.updateAggregationMapping()
+	}
+
+	return nil
+}
+
+// RemoteStreamID returns the remote stream ID for cross-stream references
+func (s *ServerStream) RemoteStreamID() uint64 {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return s.remoteStreamID
+}
+
+// updateAggregationMapping updates the aggregation mapping for secondary streams
+func (s *ServerStream) updateAggregationMapping() error {
+	// Only for secondary servers with both offset and remote stream ID set
+	if s.session.serverRole != ServerRoleSecondary || s.remoteStreamID == 0 {
+		return nil
+	}
+
+	// Get the secondary stream aggregator from the session
+	// Note: This would need to be added to the session structure
+	// For now, we'll create a placeholder that logs the mapping
+
+	fmt.Printf("[SECONDARY] Stream %d mapped to KWIK stream %d at offset %d\n",
+		s.id, s.remoteStreamID, s.offset)
+
+	// In a full implementation, this would:
+	// 1. Get the aggregator from the session
+	// 2. Call aggregator.SetStreamMapping(s.id, s.remoteStreamID, s.pathID)
+	// 3. Set up the metadata protocol for data encapsulation
+
+	return nil
 }
 
 // Additional utility methods for QUIC compatibility
@@ -1518,7 +1638,6 @@ func (s *ServerSession) handleAuthenticationWithSessionID(ctx context.Context) (
 			"failed to get control stream for authentication", err)
 	}
 
-
 	// Read authentication request from client with timeout
 	buffer := make([]byte, 4096)
 
@@ -1628,7 +1747,7 @@ func (s *ServerSession) openSecondaryStream(ctx context.Context) (stream.Seconda
 
 	// Only secondary servers can use this method
 	if s.serverRole != ServerRoleSecondary {
-		return nil, utils.NewKwikError(utils.ErrInvalidFrame, 
+		return nil, utils.NewKwikError(utils.ErrInvalidFrame,
 			"openSecondaryStream is only available for secondary servers", nil)
 	}
 

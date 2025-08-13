@@ -1,4 +1,4 @@
-// Multi-Path Demo Server - Shows server-side path management
+// Multi-Path Demo Primary Server - Shows Secondary Stream Isolation
 package main
 
 import (
@@ -13,85 +13,53 @@ import (
 )
 
 func main() {
-	// Configure for multi-path
+	fmt.Println("=== PRIMARY SERVER MULTI-PATH DEMO ===")
+	
+	// 1. Il listen
+	fmt.Println("[PRIMARY] 1. Starting listener on localhost:4433...")
 	config := kwik.DefaultConfig()
 	config.MaxPathsPerSession = 5
-
+	
 	listener, err := kwik.Listen("localhost:4433", config)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer listener.Close()
+	fmt.Println("[PRIMARY] ✅ Listening on localhost:4433")
 
-	log.Println("Multi-path server listening on localhost:4433")
-
+	// 2. Accepte les sessions pour les handle
 	for {
+		fmt.Println("[PRIMARY] 2. Waiting for session...")
 		session, err := listener.Accept(context.Background())
 		if err != nil {
-			log.Printf("Accept error: %v", err)
+			log.Printf("[PRIMARY] Accept error: %v", err)
 			continue
 		}
+		fmt.Println("[PRIMARY] ✅ Session accepted")
 
-		go handleMultiPathSession(session)
+		// 3. Handle les sessions
+		go handleSession(session)
 	}
 }
 
-func handleMultiPathSession(sess session.Session) {
+// 3. Handle les sessions en acceptant les stream pour les handle
+func handleSession(sess session.Session) {
 	defer sess.Close()
+	fmt.Println("[PRIMARY] 3. Handling session...")
 
-	log.Printf("[PS->]: [C] connected with %d paths", len(sess.GetActivePaths()))
-
-	// Add secondary path after connection (with small delay to ensure client is ready)
-	log.Println("[PS->]: Add secondary path to localhost:4434...")
-
-	// Give the client a moment to set up its control frame handler
-	time.Sleep(500 * time.Millisecond)
-
-	err := sess.AddPath("localhost:4434")
-	if err != nil {
-		log.Printf("ERROR: Failed to add path: %v", err)
-	} else {
-		log.Println("[PS->]: AddPath request sent successfully to [C]")
-	}
-
-	// Wait for secondary path to be established on client side
-	time.Sleep(2 * time.Second)
-	
-	log.Println("[PS->]: Sending raw data to [2S]...")
-	
-	// Use the stored path ID from AddPath request
-	// The server generated this ID and sent it to the client, so it should know it
-	secondaryAddress := "localhost:4434"
-	
-	// Get the path ID that was generated during AddPath
-	if serverSession, ok := sess.(*session.ServerSession); ok {
-		pathID := serverSession.GetPendingPathID(secondaryAddress)
-		if pathID != "" {
-			rawMessage := []byte("Message en direction de [2S] par SendRawData! depuis [PS]")
-			// log.Printf("DEBUG: Sending raw data to secondary path %s (address: %s)", pathID, secondaryAddress)
-			err = sess.SendRawData(rawMessage, pathID)
-			if err != nil {
-				log.Printf("[PS->]: Failed to send raw data: %v", err)
-			} else {
-				log.Println("[PS->]: Raw data sent successfully using SendRawData API!")
-			}
-		} else {
-			log.Printf("[PS->]: No pending path ID found for address %s", secondaryAddress)
-		}
-	} else {
-		log.Println("[PS->]: Could not cast session to ServerSession")
-	}
-
-	// Handle streams
+	// 4. Handle les stream
 	for {
+		fmt.Println("[PRIMARY] 4. Waiting for stream...")
 		stream, err := sess.AcceptStream(context.Background())
 		if err != nil {
 			if err == io.EOF {
+				fmt.Println("[PRIMARY] ✅ Session ended")
 				return
 			}
-			log.Printf("Stream error: %v", err)
+			log.Printf("[PRIMARY] Stream error: %v", err)
 			return
 		}
+		fmt.Printf("[PRIMARY] ✅ Stream %d accepted\n", stream.StreamID())
 
 		go handleStream(stream, sess)
 	}
@@ -99,16 +67,78 @@ func handleMultiPathSession(sess session.Session) {
 
 func handleStream(stream session.Stream, sess session.Session) {
 	defer stream.Close()
+	fmt.Printf("[PRIMARY] Handling stream %d...\n", stream.StreamID())
 
+	// 5. Il lit un message
+	fmt.Printf("[PRIMARY] 5. Reading message from stream %d...\n", stream.StreamID())
 	buffer := make([]byte, 1024)
 	n, err := stream.Read(buffer)
 	if err != nil {
+		log.Printf("[PRIMARY] Read error: %v", err)
 		return
 	}
+	message := string(buffer[:n])
+	fmt.Printf("[PRIMARY] ✅ Read: %s\n", message)
 
-	// Show path information
-	paths := sess.GetActivePaths()
-	response := fmt.Sprintf("Reponse du [PS] au [C] avec %d chemins pour: %s", len(paths), string(buffer[:n]))
+	// 6. Après avoir lu il ajoute un chemin avec addPath sur la session
+	fmt.Printf("[PRIMARY] 6. Adding secondary path after reading message...\n")
+	err = sess.AddPath("localhost:4434")
+	if err != nil {
+		log.Printf("[PRIMARY] Failed to add path: %v", err)
+	} else {
+		fmt.Println("[PRIMARY] ✅ Secondary path added: localhost:4434")
+	}
 
-	stream.Write([]byte(response))
+	// 7. Il écrit une partie du message sur le flux
+	fmt.Printf("[PRIMARY] 7. Writing partial response to stream %d...\n", stream.StreamID())
+	partialResponse := fmt.Sprintf("Partie 1 de la réponse pour: %s", message)
+	stream.SetOffset(0)
+	_, err = stream.Write([]byte(partialResponse))
+	if err != nil {
+		log.Printf("[PRIMARY] Write error: %v", err)
+		return
+	}
+	fmt.Printf("[PRIMARY] ✅ Wrote partial response: %s\n", partialResponse)
+
+	// 8. Il fait un sendRawData pour le path qu'il a demandé d'ajouter
+	fmt.Printf("[PRIMARY] 8. Sending raw data to secondary path...\n")
+	time.Sleep(500 * time.Millisecond) // Wait for path to be established
+	
+	if serverSession, ok := sess.(*session.ServerSession); ok {
+		pathID := serverSession.GetPendingPathID("localhost:4434")
+		if pathID != "" {
+			rawMessage := []byte(fmt.Sprintf("Données brutes pour serveur secondaire concernant: %s offset=%d", message, len(partialResponse)))
+			err = sess.SendRawData(rawMessage, pathID, stream.RemoteStreamID())
+			if err != nil {
+				log.Printf("[PRIMARY] SendRawData error: %v", err)
+			} else {
+				fmt.Printf("[PRIMARY] ✅ Raw data sent to secondary path: %s\n", string(rawMessage))
+			}
+		} else {
+			log.Printf("[PRIMARY] No path ID found for localhost:4434")
+		}
+	}
+
+	// 9. Puis il lit encore dans le flux
+	fmt.Printf("[PRIMARY] 9. Reading second message from stream %d...\n", stream.StreamID())
+	n, err = stream.Read(buffer)
+	if err != nil {
+		log.Printf("[PRIMARY] Second read error: %v", err)
+		return
+	}
+	secondMessage := string(buffer[:n])
+	fmt.Printf("[PRIMARY] ✅ Read second message: %s\n", secondMessage)
+
+	// 10. Il écrit dans le flux
+	fmt.Printf("[PRIMARY] 10. Writing final response to stream %d...\n", stream.StreamID())
+	finalResponse := fmt.Sprintf("Réponse finale pour: %s (avec données agrégées)", secondMessage)
+	_, err = stream.Write([]byte(finalResponse))
+	if err != nil {
+		log.Printf("[PRIMARY] Final write error: %v", err)
+		return
+	}
+	fmt.Printf("[PRIMARY] ✅ Wrote final response: %s\n", finalResponse)
+
+	// 11. Il se ferme
+	fmt.Printf("[PRIMARY] 11. Stream %d completed, closing...\n", stream.StreamID())
 }

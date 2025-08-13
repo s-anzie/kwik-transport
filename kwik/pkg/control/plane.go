@@ -402,14 +402,14 @@ func (cp *ControlPlaneImpl) RegisterSecondaryStreamHandler(pathID string, handle
 	if pathID == "" {
 		return utils.NewKwikError(utils.ErrInvalidFrame, "path ID is empty", nil)
 	}
-	
+
 	if handler == nil {
 		return utils.NewKwikError(utils.ErrInvalidFrame, "handler is nil", nil)
 	}
-	
+
 	cp.secondaryHandlersMutex.Lock()
 	defer cp.secondaryHandlersMutex.Unlock()
-	
+
 	cp.secondaryStreamHandlers[pathID] = handler
 	return nil
 }
@@ -418,7 +418,7 @@ func (cp *ControlPlaneImpl) RegisterSecondaryStreamHandler(pathID string, handle
 func (cp *ControlPlaneImpl) UnregisterSecondaryStreamHandler(pathID string) {
 	cp.secondaryHandlersMutex.Lock()
 	defer cp.secondaryHandlersMutex.Unlock()
-	
+
 	delete(cp.secondaryStreamHandlers, pathID)
 }
 
@@ -427,20 +427,20 @@ func (cp *ControlPlaneImpl) SendSecondaryStreamMappingUpdate(pathID string, mapp
 	if pathID == "" {
 		return utils.NewKwikError(utils.ErrInvalidFrame, "path ID is empty", nil)
 	}
-	
+
 	if mapping == nil {
 		return utils.NewKwikError(utils.ErrInvalidFrame, "mapping is nil", nil)
 	}
-	
+
 	// For now, just notify the handler directly (simplified implementation)
 	cp.secondaryHandlersMutex.RLock()
 	handler, exists := cp.secondaryStreamHandlers[pathID]
 	cp.secondaryHandlersMutex.RUnlock()
-	
+
 	if exists && handler != nil {
 		return handler.OnSecondaryStreamMappingUpdate(pathID, mapping)
 	}
-	
+
 	// If no handler is registered, this is not an error - just log and continue
 	return nil
 }
@@ -450,20 +450,20 @@ func (cp *ControlPlaneImpl) SendOffsetSyncRequest(pathID string, request *Offset
 	if pathID == "" {
 		return utils.NewKwikError(utils.ErrInvalidFrame, "path ID is empty", nil)
 	}
-	
+
 	if request == nil {
 		return utils.NewKwikError(utils.ErrInvalidFrame, "request is nil", nil)
 	}
-	
+
 	// For now, just notify the handler directly (simplified implementation)
 	cp.secondaryHandlersMutex.RLock()
 	handler, exists := cp.secondaryStreamHandlers[pathID]
 	cp.secondaryHandlersMutex.RUnlock()
-	
+
 	if exists && handler != nil {
 		return handler.OnOffsetSyncRequest(pathID, request)
 	}
-	
+
 	// If no handler is registered, this is not an error - just log and continue
 	return nil
 }
@@ -473,20 +473,20 @@ func (cp *ControlPlaneImpl) SendOffsetSyncResponse(pathID string, response *Offs
 	if pathID == "" {
 		return utils.NewKwikError(utils.ErrInvalidFrame, "path ID is empty", nil)
 	}
-	
+
 	if response == nil {
 		return utils.NewKwikError(utils.ErrInvalidFrame, "response is nil", nil)
 	}
-	
+
 	// For now, just notify the handler directly (simplified implementation)
 	cp.secondaryHandlersMutex.RLock()
 	handler, exists := cp.secondaryStreamHandlers[pathID]
 	cp.secondaryHandlersMutex.RUnlock()
-	
+
 	if exists && handler != nil {
 		return handler.OnOffsetSyncResponse(pathID, response)
 	}
-	
+
 	// If no handler is registered, this is not an error - just log and continue
 	return nil
 }
