@@ -19,7 +19,7 @@ type SecondaryStreamAggregator struct {
 	streamMappings map[uint64]uint64 // secondaryStreamID -> kwikStreamID
 	mappingsMutex  sync.RWMutex
 
-	// KWIK stream aggregation state
+	// KWIK stream aggregation state (kept for backward compatibility)
 	kwikStreams map[uint64]*KwikStreamAggregationState
 	kwikMutex   sync.RWMutex
 
@@ -29,12 +29,21 @@ type SecondaryStreamAggregator struct {
 	// Statistics (internal structure with mutex)
 	stats *internalSecondaryAggregationStats
 
-	// Metrics (removed to avoid import cycle)
+	// Data presentation manager integration
+	presentationManager DataPresentationManagerInterface
+	presentationMutex   sync.RWMutex
 
 	// Parallel processing
 	workerPool    *AggregationWorkerPool
 	batchChannel  chan []*SecondaryStreamData
 	resultChannel chan *AggregationResult
+}
+
+// DataPresentationManagerInterface defines the interface for presentation manager integration
+type DataPresentationManagerInterface interface {
+	WriteToStream(streamID uint64, data []byte, offset uint64, metadata interface{}) error
+	CreateStreamBuffer(streamID uint64, metadata interface{}) error
+	IsBackpressureActive(streamID uint64) bool
 }
 
 // SecondaryStreamData is defined in interfaces.go
@@ -279,17 +288,23 @@ func (ssa *SecondaryStreamAggregator) RemoveStreamMapping(secondaryStreamID uint
 
 // GetAggregatedData returns the aggregated data for a KWIK stream
 func (ssa *SecondaryStreamAggregator) GetAggregatedData(kwikStreamID uint64) ([]byte, error) {
+	fmt.Printf("DEBUG: SecondaryStreamAggregator.GetAggregatedData called for KWIK stream %d\n", kwikStreamID)
+	
 	ssa.kwikMutex.RLock()
 	kwikState, exists := ssa.kwikStreams[kwikStreamID]
 	ssa.kwikMutex.RUnlock()
 
 	if !exists {
+		fmt.Printf("DEBUG: SecondaryStreamAggregator.GetAggregatedData: KWIK stream %d not found\n", kwikStreamID)
 		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
 			"KWIK stream not found", nil)
 	}
 
 	kwikState.mutex.RLock()
 	defer kwikState.mutex.RUnlock()
+
+	fmt.Printf("DEBUG: SecondaryStreamAggregator.GetAggregatedData: KWIK stream %d has buffer length %d\n", 
+		kwikStreamID, len(kwikState.AggregatedBuffer))
 
 	// Return only contiguous data (up to first gap)
 	contiguousLength := 0
@@ -306,15 +321,91 @@ func (ssa *SecondaryStreamAggregator) GetAggregatedData(kwikStreamID uint64) ([]
 			}
 			if hasDataAfter {
 				// This is a gap in the middle, stop here
+				fmt.Printf("DEBUG: SecondaryStreamAggregator.GetAggregatedData: found gap at position %d\n", i)
 				break
 			}
 		}
 		contiguousLength = i + 1
 	}
 
+	fmt.Printf("DEBUG: SecondaryStreamAggregator.GetAggregatedData: returning %d bytes of contiguous data for KWIK stream %d\n", 
+		contiguousLength, kwikStreamID)
+
 	// Return copy of contiguous data only
 	data := make([]byte, contiguousLength)
 	copy(data, kwikState.AggregatedBuffer[:contiguousLength])
+
+	return data, nil
+}
+
+// ConsumeAggregatedData returns and removes the specified amount of data from the aggregated buffer
+// This implements the "coulissage vers l'avant" (forward sliding) mechanism
+func (ssa *SecondaryStreamAggregator) ConsumeAggregatedData(kwikStreamID uint64, bytesToConsume int) ([]byte, error) {
+	fmt.Printf("DEBUG: SecondaryStreamAggregator.ConsumeAggregatedData called for KWIK stream %d, consuming %d bytes\n", 
+		kwikStreamID, bytesToConsume)
+	
+	ssa.kwikMutex.RLock()
+	kwikState, exists := ssa.kwikStreams[kwikStreamID]
+	ssa.kwikMutex.RUnlock()
+
+	if !exists {
+		fmt.Printf("DEBUG: SecondaryStreamAggregator.ConsumeAggregatedData: KWIK stream %d not found\n", kwikStreamID)
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"KWIK stream not found", nil)
+	}
+
+	kwikState.mutex.Lock()
+	defer kwikState.mutex.Unlock()
+
+	// Check if we have enough contiguous data to consume
+	contiguousLength := 0
+	for i, b := range kwikState.AggregatedBuffer {
+		if b == 0 {
+			// Found a gap, check if it's a real gap or just trailing zeros
+			hasDataAfter := false
+			for j := i + 1; j < len(kwikState.AggregatedBuffer); j++ {
+				if kwikState.AggregatedBuffer[j] != 0 {
+					hasDataAfter = true
+					break
+				}
+			}
+			if hasDataAfter {
+				// This is a gap in the middle, stop here
+				break
+			}
+		}
+		contiguousLength = i + 1
+	}
+
+	if bytesToConsume > contiguousLength {
+		fmt.Printf("DEBUG: SecondaryStreamAggregator.ConsumeAggregatedData: not enough contiguous data (requested: %d, available: %d)\n", 
+			bytesToConsume, contiguousLength)
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"not enough contiguous data to consume", nil)
+	}
+
+	// Extract the data to return
+	data := make([]byte, bytesToConsume)
+	copy(data, kwikState.AggregatedBuffer[:bytesToConsume])
+
+	// Slide the remaining data forward (coulissage vers l'avant)
+	remainingLength := len(kwikState.AggregatedBuffer) - bytesToConsume
+	if remainingLength > 0 {
+		// Move remaining data to the beginning of the buffer
+		copy(kwikState.AggregatedBuffer[:remainingLength], kwikState.AggregatedBuffer[bytesToConsume:])
+		// Clear the end of the buffer
+		for i := remainingLength; i < len(kwikState.AggregatedBuffer); i++ {
+			kwikState.AggregatedBuffer[i] = 0
+		}
+		// Resize the buffer to remove the consumed data
+		kwikState.AggregatedBuffer = kwikState.AggregatedBuffer[:remainingLength]
+	} else {
+		// All data consumed, reset buffer
+		kwikState.AggregatedBuffer = kwikState.AggregatedBuffer[:0]
+	}
+
+	fmt.Printf("DEBUG: SecondaryStreamAggregator.ConsumeAggregatedData: consumed %d bytes, remaining buffer length: %d\n", 
+		bytesToConsume, len(kwikState.AggregatedBuffer))
 
 	return data, nil
 }
@@ -336,11 +427,8 @@ func (ssa *SecondaryStreamAggregator) GetSecondaryStreamStats() *SecondaryAggreg
 
 // validateSecondaryData validates secondary stream data
 func (ssa *SecondaryStreamAggregator) validateSecondaryData(data *SecondaryStreamData) error {
-	if data.StreamID == 0 {
-		return utils.NewKwikError(utils.ErrInvalidFrame, "invalid secondary stream ID", nil)
-	}
 	if data.KwikStreamID == 0 {
-		return utils.NewKwikError(utils.ErrInvalidFrame, "invalid KWIK stream ID", nil)
+		return utils.NewKwikError(utils.ErrInvalidFrame, "invalid KWIK stream ID: cannot be 0", nil)
 	}
 	if data.PathID == "" {
 		return utils.NewKwikError(utils.ErrInvalidFrame, "invalid path ID", nil)
@@ -799,3 +887,133 @@ func (ssa *SecondaryStreamAggregator) Shutdown() error {
 	
 	return nil
 }
+
+// SetPresentationManager sets the data presentation manager for integration
+func (ssa *SecondaryStreamAggregator) SetPresentationManager(manager DataPresentationManagerInterface) {
+	ssa.presentationMutex.Lock()
+	defer ssa.presentationMutex.Unlock()
+	ssa.presentationManager = manager
+}
+
+// GetPresentationManager returns the current presentation manager
+func (ssa *SecondaryStreamAggregator) GetPresentationManager() DataPresentationManagerInterface {
+	ssa.presentationMutex.RLock()
+	defer ssa.presentationMutex.RUnlock()
+	return ssa.presentationManager
+}
+
+// AggregateSecondaryDataWithPresentation aggregates data using the presentation manager
+func (ssa *SecondaryStreamAggregator) AggregateSecondaryDataWithPresentation(data *SecondaryStreamData) error {
+	if data == nil {
+		return utils.NewKwikError(utils.ErrInvalidFrame, "secondary stream data is nil", nil)
+	}
+
+	// Validate the data
+	if err := ssa.validateSecondaryData(data); err != nil {
+		return err
+	}
+
+	// Check if presentation manager is available
+	ssa.presentationMutex.RLock()
+	presentationManager := ssa.presentationManager
+	ssa.presentationMutex.RUnlock()
+
+	if presentationManager != nil {
+		// Use presentation manager for new architecture
+		return ssa.aggregateWithPresentationManager(data, presentationManager)
+	}
+
+	// Fallback to legacy aggregation
+	return ssa.AggregateSecondaryData(data)
+}
+
+// aggregateWithPresentationManager aggregates data using the presentation manager
+func (ssa *SecondaryStreamAggregator) aggregateWithPresentationManager(data *SecondaryStreamData, manager DataPresentationManagerInterface) error {
+	// Check if backpressure is active for the target stream
+	if manager.IsBackpressureActive(data.KwikStreamID) {
+		return utils.NewKwikError(utils.ErrStreamCreationFailed, 
+			fmt.Sprintf("stream %d is under backpressure", data.KwikStreamID), nil)
+	}
+
+	// Create metadata for the data
+	metadata := &SecondaryDataMetadata{
+		Offset:     data.Offset,
+		Length:     uint64(len(data.Data)),
+		Timestamp:  data.Timestamp,
+		SourcePath: data.PathID,
+		Flags:      SecondaryDataFlagNone,
+	}
+
+	// Write data to the presentation manager
+	err := manager.WriteToStream(data.KwikStreamID, data.Data, data.Offset, metadata)
+	if err != nil {
+		return fmt.Errorf("failed to write to presentation manager: %w", err)
+	}
+
+	// Update statistics
+	ssa.updateAggregationStats(data)
+
+	// Update secondary stream state
+	secondaryState, err := ssa.getOrCreateSecondaryStream(data.StreamID, data.PathID, data.KwikStreamID)
+	if err != nil {
+		return err
+	}
+
+	secondaryState.mutex.Lock()
+	secondaryState.BytesAggregated += uint64(len(data.Data))
+	secondaryState.LastActivity = time.Now()
+	secondaryState.mutex.Unlock()
+
+	return nil
+}
+
+// GetAggregatedDataFromPresentation reads data from the presentation manager
+func (ssa *SecondaryStreamAggregator) GetAggregatedDataFromPresentation(kwikStreamID uint64) ([]byte, error) {
+	ssa.presentationMutex.RLock()
+	presentationManager := ssa.presentationManager
+	ssa.presentationMutex.RUnlock()
+
+	if presentationManager != nil {
+		// This would require extending the interface to support reading
+		// For now, we'll fall back to legacy method
+		return ssa.GetAggregatedData(kwikStreamID)
+	}
+
+	return ssa.GetAggregatedData(kwikStreamID)
+}
+
+// ConsumeAggregatedDataFromPresentation consumes data from the presentation manager
+func (ssa *SecondaryStreamAggregator) ConsumeAggregatedDataFromPresentation(kwikStreamID uint64, bytesToConsume int) ([]byte, error) {
+	ssa.presentationMutex.RLock()
+	presentationManager := ssa.presentationManager
+	ssa.presentationMutex.RUnlock()
+
+	if presentationManager != nil {
+		// This would require extending the interface to support consumption
+		// For now, we'll fall back to legacy method
+		return ssa.ConsumeAggregatedData(kwikStreamID, bytesToConsume)
+	}
+
+	return ssa.ConsumeAggregatedData(kwikStreamID, bytesToConsume)
+}
+
+// SecondaryDataMetadata represents metadata for secondary stream data chunks
+type SecondaryDataMetadata struct {
+	Offset     uint64                 `json:"offset"`
+	Length     uint64                 `json:"length"`
+	Timestamp  time.Time              `json:"timestamp"`
+	SourcePath string                 `json:"source_path"`
+	Checksum   uint32                 `json:"checksum"`
+	Flags      SecondaryDataFlags     `json:"flags"`
+	Properties map[string]interface{} `json:"properties"`
+}
+
+// SecondaryDataFlags defines flags for secondary stream data chunks
+type SecondaryDataFlags uint32
+
+const (
+	SecondaryDataFlagNone        SecondaryDataFlags = 0      // No special flags
+	SecondaryDataFlagEndOfStream SecondaryDataFlags = 1 << 0 // End of stream marker
+	SecondaryDataFlagUrgent      SecondaryDataFlags = 1 << 1 // Urgent data
+	SecondaryDataFlagCompressed  SecondaryDataFlags = 1 << 2 // Compressed data
+)

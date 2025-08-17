@@ -178,7 +178,7 @@
   - Valider que la latence supplémentaire reste < 1ms
   - _Requirements: 10.1, 10.2_
 
-- [ ] 8.3 Créer les tests de compatibilité
+- [x] 8.3 Créer les tests de compatibilité
   - Créer le fichier `kwik/pkg/session/compatibility_test.go`
   - Tester que les applications existantes fonctionnent sans modification
   - Valider que l'interface publique reste identique

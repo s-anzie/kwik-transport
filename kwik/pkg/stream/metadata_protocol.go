@@ -163,7 +163,7 @@ func (p *MetadataProtocolImpl) ValidateMetadata(metadata *StreamMetadata) error 
 	if metadata.KwikStreamID == 0 {
 		return &MetadataProtocolError{
 			Code:    ErrMetadataInvalid,
-			Message: "KWIK stream ID cannot be zero",
+			Message: "KWIK stream ID cannot be 0",
 		}
 	}
 	

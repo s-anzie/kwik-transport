@@ -94,8 +94,9 @@ type ServerStream struct {
 	mutex      sync.RWMutex
 
 	// Secondary stream isolation fields
-	offset         int    // Current offset for stream data aggregation
-	remoteStreamID uint64 // Remote stream ID for cross-stream references
+	offset            int    // Current offset for stream data aggregation
+	remoteStreamID    uint64 // Remote stream ID for cross-stream references
+	isSecondaryStream bool   // Flag to indicate if this is a secondary stream for aggregation
 }
 
 // NewServerSession creates a new KWIK server session
@@ -350,7 +351,9 @@ func AcceptSession(listener *quic.Listener) (Session, error) {
 }
 
 // OpenStreamSync opens a new stream synchronously (QUIC-compatible)
-// Only primary servers can open streams on the public client session
+// Behavior depends on server role:
+// - PRIMARY servers: open streams on the public client session
+// - SECONDARY servers: open internal streams that will be aggregated client-side
 func (s *ServerSession) OpenStreamSync(ctx context.Context) (Stream, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -359,16 +362,23 @@ func (s *ServerSession) OpenStreamSync(ctx context.Context) (Stream, error) {
 		return nil, utils.NewKwikError(utils.ErrConnectionLost, "session is not active", nil)
 	}
 
-	// Restrict stream opening to primary servers only (Requirement 1.1, 1.2, 1.3)
-	if s.serverRole != ServerRolePrimary {
-		return nil, utils.NewKwikError(utils.ErrInvalidFrame,
-			"only primary servers can open streams on the public client session", nil)
-	}
-
 	// Generate new stream ID
 	streamID := s.nextStreamID
 	s.nextStreamID++
 
+	// Behavior depends on server role
+	if s.serverRole == ServerRolePrimary {
+		// PRIMARY SERVER: Open stream on public client session (original behavior)
+		return s.openPrimaryStream(ctx, streamID)
+	} else {
+		// SECONDARY SERVER: Open internal stream for aggregation
+		fmt.Printf("[SECONDARY] Opening secondary stream %d for aggregation\n", streamID)
+		return s.openSecondaryStreamInternal(ctx, streamID)
+	}
+}
+
+// openPrimaryStream opens a stream on the public client session (for primary servers)
+func (s *ServerSession) openPrimaryStream(ctx context.Context, streamID uint64) (Stream, error) {
 	// Ensure primary path is available and active (Requirement 2.5)
 	if s.primaryPath == nil {
 		return nil, utils.NewKwikError(utils.ErrConnectionLost, "no primary path available", nil)
@@ -413,6 +423,51 @@ func (s *ServerSession) OpenStreamSync(ctx context.Context) (Stream, error) {
 	s.streams[streamID] = serverStream
 	s.streamsMutex.Unlock()
 
+	return serverStream, nil
+}
+
+// openSecondaryStreamInternal opens an internal stream for secondary servers (will be aggregated client-side)
+func (s *ServerSession) openSecondaryStreamInternal(ctx context.Context, streamID uint64) (Stream, error) {
+	// For secondary servers, we create a stream that will be handled internally
+	// and aggregated on the client side according to the secondary stream isolation architecture
+	
+	// Ensure primary path is available (secondary servers still use the primary path for communication)
+	if s.primaryPath == nil {
+		return nil, utils.NewKwikError(utils.ErrConnectionLost, "no primary path available", nil)
+	}
+
+	// Create actual QUIC stream on primary path (this will be detected as secondary by client)
+	conn := s.primaryPath.GetConnection()
+	if conn == nil {
+		return nil, utils.NewKwikError(utils.ErrConnectionLost, "no QUIC connection available", nil)
+	}
+
+	quicStream, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed, "failed to create secondary QUIC stream", err)
+	}
+
+	fmt.Printf("[SECONDARY] Created QUIC stream for secondary stream %d\n", streamID)
+
+	// Create secondary stream wrapper that will handle metadata encapsulation
+	serverStream := &ServerStream{
+		id:         streamID,
+		pathID:     s.primaryPath.ID(),
+		session:    s,
+		created:    time.Now(),
+		state:      stream.StreamStateOpen,
+		readBuf:    make([]byte, 0, utils.DefaultReadBufferSize),
+		writeBuf:   make([]byte, 0, utils.DefaultWriteBufferSize),
+		quicStream: quicStream, // Add the underlying QUIC stream
+		// Mark this as a secondary stream for special handling
+		isSecondaryStream: true,
+	}
+
+	s.streamsMutex.Lock()
+	s.streams[streamID] = serverStream
+	s.streamsMutex.Unlock()
+
+	fmt.Printf("[SECONDARY] Secondary stream %d created and ready for aggregation\n", streamID)
 	return serverStream, nil
 }
 
@@ -1451,12 +1506,19 @@ func (s *ServerStream) Write(p []byte) (int, error) {
 		return 0, utils.NewKwikError(utils.ErrStreamCreationFailed, "no underlying QUIC stream", nil)
 	}
 
+	// Debug: Log the write attempt and conditions
+	fmt.Printf("DEBUG: ServerStream %d Write() - serverRole=%s, remoteStreamID=%d, isSecondaryStream=%t\n", 
+		s.id, s.session.serverRole.String(), s.remoteStreamID, s.isSecondaryStream)
+
 	// If this is a secondary server stream with aggregation mapping, encapsulate data
-	if s.session.serverRole == ServerRoleSecondary && s.remoteStreamID != 0 {
+	// Note: remoteStreamID can be 0 (valid KWIK stream ID), so we check if it's been set via isSecondaryStream flag
+	if s.session.serverRole == ServerRoleSecondary && s.isSecondaryStream {
+		fmt.Printf("DEBUG: ServerStream %d using writeWithAggregation for %d bytes (remoteStreamID=%d)\n", s.id, len(p), s.remoteStreamID)
 		return s.writeWithAggregation(p)
 	}
 
 	// For primary servers, write directly to the underlying QUIC stream
+	fmt.Printf("DEBUG: ServerStream %d writing directly to QUIC stream (%d bytes)\n", s.id, len(p))
 	return s.quicStream.Write(p)
 }
 
