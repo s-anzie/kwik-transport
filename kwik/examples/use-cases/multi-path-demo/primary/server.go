@@ -3,21 +3,21 @@ package main
 
 import (
 	"context"
-	"io"
-	"log"
-	"time"
 	"fmt"
+	"io"
 	kwik "kwik/pkg"
 	"kwik/pkg/session"
+	"log"
+	"time"
 )
 
 func main() {
 	fmt.Println("\n\n[PRIMARY SERVER] Démarrage du serveur primaire sur localhost:4433")
-	
+
 	config := kwik.DefaultConfig()
 	config.MaxPathsPerSession = 5
 	config.Logging.GlobalLevel = kwik.LogLevelSilent
-	
+
 	listener, err := kwik.Listen("localhost:4433", config)
 	if err != nil {
 		log.Fatal(err)
@@ -65,7 +65,7 @@ func handleStream(stream session.Stream, sess session.Session) {
 		fmt.Printf("[PRIMARY SERVER] Fermeture du stream %d\n", stream.StreamID())
 		stream.Close()
 	}()
-	
+
 	nextoffset := 0
 
 	// Lit le message du client
@@ -76,7 +76,7 @@ func handleStream(stream session.Stream, sess session.Session) {
 		fmt.Printf("[PRIMARY SERVER] Erreur lors de la lecture: %v\n", err)
 		return
 	}
-	
+
 	clientMessage := string(buffer[:n])
 	fmt.Printf("[PRIMARY SERVER] Message reçu du client: '%s'\n", clientMessage)
 
@@ -102,7 +102,7 @@ func handleStream(stream session.Stream, sess session.Session) {
 	// Envoie des données au serveur secondaire
 	fmt.Println("[PRIMARY SERVER] Attente avant envoi au serveur secondaire...")
 	time.Sleep(500 * time.Millisecond)
-	
+
 	if serverSession, ok := sess.(*session.ServerSession); ok {
 		pathID := serverSession.GetPendingPathID("localhost:4434")
 		if pathID != "" {
@@ -110,6 +110,7 @@ func handleStream(stream session.Stream, sess session.Session) {
 			nextoffset += primaryResponseLength
 			rawMessage := []byte("Second Message 2")
 			fmt.Printf("[PRIMARY SERVER] Envoi de données au serveur secondaire via path %s: '%s'\n", pathID, string(rawMessage))
+			fmt.Printf("[PRIMARY SERVER] Stream KWIK cible: %d\n", stream.RemoteStreamID())
 			err = sess.SendRawData(rawMessage, pathID, stream.RemoteStreamID())
 			if err != nil {
 				fmt.Printf("[PRIMARY SERVER] Erreur lors de l'envoi au serveur secondaire: %v\n", err)

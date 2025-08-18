@@ -6,8 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/quic-go/quic-go"
 	"kwik/internal/utils"
+
+	"github.com/quic-go/quic-go"
 )
 
 // StreamState represents the state of a KWIK stream
@@ -31,10 +32,13 @@ type ClientSession interface {
 	GetAggregatedDataForStream(streamID uint64) ([]byte, error)
 	ConsumeAggregatedDataForStream(streamID uint64, bytesToConsume int) ([]byte, error)
 	DepositPrimaryDataInAggregator(streamID uint64, data []byte, offset uint64) error
-	
+
 	// New methods for data presentation manager integration
 	GetDataPresentationManager() DataPresentationManager
 	ReadFromPresentationStream(streamID uint64, buffer []byte, timeout time.Duration) (int, error)
+
+	// Expose metadata protocol for encapsulation/decapsulation
+	GetMetadataProtocol() *MetadataProtocolImpl
 }
 
 // DataPresentationManager interface to avoid circular imports
@@ -68,16 +72,16 @@ const (
 
 // ClientStream represents a client-side KWIK stream
 type ClientStream struct {
-	id             uint64
-	pathID         string
-	session        ClientSession
-	created        time.Time
-	state          StreamState
-	readBuf        []byte
-	writeBuf       []byte
-	quicStream     quic.Stream // Underlying QUIC stream
-	mutex          sync.RWMutex
-	
+	id         uint64
+	pathID     string
+	session    ClientSession
+	created    time.Time
+	state      StreamState
+	readBuf    []byte
+	writeBuf   []byte
+	quicStream quic.Stream // Underlying QUIC stream
+	mutex      sync.RWMutex
+
 	// Secondary stream isolation fields
 	offset         int    // Current offset for stream data aggregation
 	remoteStreamID uint64 // Remote stream ID for cross-stream references
@@ -121,50 +125,13 @@ func (s *ClientStream) Read(p []byte) (int, error) {
 		return 0, utils.NewKwikError(utils.ErrStreamClosed, "stream is half-closed for reading", nil)
 	}
 
-	// Try to use the new DataPresentationManager if available
+	// Always use DataPresentationManager; streams must be presented only here
 	if dpm := s.session.GetDataPresentationManager(); dpm != nil {
-		// Use the new presentation manager for separated stream reading
 		return s.session.ReadFromPresentationStream(s.id, p, 5*time.Second)
 	}
 
-	// Fallback to legacy aggregated reading for backward compatibility
-	return s.readFromLegacyAggregator(p)
-}
-
-// readFromLegacyAggregator provides backward compatibility with the old aggregation system
-func (s *ClientStream) readFromLegacyAggregator(p []byte) (int, error) {
-	// Check if we have a QUIC stream to read from
-	if s.quicStream == nil {
-		return 0, utils.NewKwikError(utils.ErrStreamCreationFailed, "no underlying QUIC stream", nil)
-	}
-
-	// First, check if there are any new primary data to deposit in the aggregator
-	s.depositPrimaryDataInAggregator()
-
-	// Now read from the aggregator which contains ALL data (primary + secondary)
-	// First check how much data is available to avoid requesting too much
-	availableData, err := s.session.GetAggregatedDataForStream(s.id)
-	if err != nil || len(availableData) == 0 {
-		// No data available, return no data (wait for more data)
-		return 0, utils.NewKwikError(utils.ErrStreamClosed, "no data available", nil)
-	}
-	
-	// Request only the amount of data that's actually available
-	maxBytesToRead := len(availableData)
-	if maxBytesToRead > len(p) {
-		maxBytesToRead = len(p) // Don't exceed the provided buffer size
-	}
-	
-	// Use ConsumeAggregatedDataForStream to implement coulissage vers l'avant
-	if consumedData, err := s.session.ConsumeAggregatedDataForStream(s.id, maxBytesToRead); err == nil && len(consumedData) > 0 {
-		// We have aggregated data (from both primary and secondary streams)
-		n := copy(p, consumedData)
-		fmt.Printf("DEBUG: ClientStream %d consumed and read %d bytes from unified aggregated data (coulissage vers l'avant)\n", s.id, n)
-		return n, nil
-	}
-
-	// If consumption failed, return no data
-	return 0, utils.NewKwikError(utils.ErrStreamClosed, "no data available", nil)
+	// If DPM is unavailable, return no data (design decision: presentation-only)
+	return 0, utils.NewKwikError(utils.ErrStreamCreationFailed, "no data presentation manager available", nil)
 }
 
 // Write writes data to the stream (QUIC-compatible)
@@ -197,8 +164,28 @@ func (s *ClientStream) Write(p []byte) (int, error) {
 		return 0, utils.NewKwikError(utils.ErrStreamCreationFailed, "no underlying QUIC stream", nil)
 	}
 
-	// Write directly to the underlying QUIC stream
-	return s.quicStream.Write(p)
+	// Try to encapsulate data with metadata carrying the KWIK Stream ID and current offset
+	if mp := s.session.GetMetadataProtocol(); mp != nil {
+		encapsulated, err := mp.EncapsulateData(
+			uint64(s.id), // KWIK Stream ID (source stream ID)
+			uint64(s.id), // Secondary stream ID (not serialized; placeholder)
+			uint64(s.offset),
+			p,
+		)
+		if err == nil {
+			// Write encapsulated frame
+			if _, werr := s.quicStream.Write(encapsulated); werr != nil {
+				return 0, werr
+			}
+			// Update offset by application payload length
+			s.offset += len(p)
+			return len(p), nil
+		}
+		// If encapsulation fails, fall back to raw write
+	}
+
+	// Fallback: Write directly to the underlying QUIC stream
+	return 0, fmt.Errorf("metadata protocol not found")
 }
 
 // Close closes the stream (QUIC-compatible)
@@ -233,21 +220,21 @@ func (s *ClientStream) PathID() string {
 func (s *ClientStream) SetOffset(offset int) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	
+
 	if offset < 0 {
 		return &StreamError{
 			Code:    "KWIK_INVALID_OFFSET",
 			Message: "offset cannot be negative",
 		}
 	}
-	
+
 	s.offset = offset
-	
+
 	// If this stream is part of secondary stream aggregation, update the aggregation system
 	if s.remoteStreamID != 0 {
 		return s.updateAggregationOffset()
 	}
-	
+
 	return nil
 }
 
@@ -263,21 +250,21 @@ func (s *ClientStream) GetOffset() int {
 func (s *ClientStream) SetRemoteStreamID(remoteStreamID uint64) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	
+
 	if remoteStreamID == 0 {
 		return &StreamError{
 			Code:    "KWIK_INVALID_REMOTE_STREAM_ID",
 			Message: "remote stream ID cannot be zero",
 		}
 	}
-	
+
 	s.remoteStreamID = remoteStreamID
-	
+
 	// Set up aggregation mapping if offset is also set
 	if s.offset >= 0 {
 		return s.updateAggregationOffset()
 	}
-	
+
 	return nil
 }
 
@@ -293,18 +280,18 @@ func (s *ClientStream) updateAggregationOffset() error {
 	// This would integrate with the secondary stream aggregation system
 	// For now, we'll log the mapping for debugging since we need access to the session
 	// to get the aggregator, but ClientStream doesn't have direct access to ClientSession
-	
-	fmt.Printf("[CLIENT] Stream %d mapped to remote stream %d at offset %d (ready for aggregation)\n", 
+
+	fmt.Printf("[CLIENT] Stream %d mapped to remote stream %d at offset %d (ready for aggregation)\n",
 		s.id, s.remoteStreamID, s.offset)
-	
+
 	// Note: In a full implementation, this would:
 	// 1. Get the aggregator from the session via s.session.getSecondaryStreamAggregator()
 	// 2. Call aggregator.SetStreamMapping(s.id, s.remoteStreamID, s.pathID)
 	// 3. Update offset information for proper data placement
-	// 
+	//
 	// However, since ClientStream doesn't have direct access to ClientSession,
 	// this mapping will be handled when data is actually received and processed
-	
+
 	return nil
 }
 
@@ -420,33 +407,33 @@ func (s *ClientStream) readAggregatedData() ([]byte, error) {
 }
 
 // readWithGapHandling reads data with proper gap handling and timeout
-// This implements the requirement: "l'application ne peut lire que si les données contigues suivantes sont disponibles 
+// This implements the requirement: "l'application ne peut lire que si les données contigues suivantes sont disponibles
 // et elle ne peut lire que si les données totales disponibles font au moins la taille d'un paquet de donnée et sans gap"
 func (s *ClientStream) readWithGapHandling(p []byte) (int, error) {
-	const readTimeout = 5 * time.Second // Timeout for gap filling
+	const readTimeout = 5 * time.Second         // Timeout for gap filling
 	const retryInterval = 50 * time.Millisecond // Interval between gap checks
-	const minPacketSize = 1 // Minimum packet size to read
-	
+	const minPacketSize = 1                     // Minimum packet size to read
+
 	startTime := time.Now()
-	
+
 	// Track our current read position in the stream
 	if s.offset < 0 {
 		s.offset = 0 // Initialize offset if not set
 	}
-	
+
 	for {
 		// Build a unified view of all available data (primary + secondary)
 		unifiedBuffer, err := s.buildUnifiedBuffer()
 		if err != nil {
 			fmt.Printf("DEBUG: ClientStream %d failed to build unified buffer: %v\n", s.id, err)
 		}
-		
+
 		// Check for contiguous data starting from our current read position
 		contiguousLength := s.findContiguousDataLength(unifiedBuffer, s.offset)
-		
-		fmt.Printf("DEBUG: ClientStream %d at offset %d: unified buffer length=%d, contiguous length=%d\n", 
+
+		fmt.Printf("DEBUG: ClientStream %d at offset %d: unified buffer length=%d, contiguous length=%d\n",
 			s.id, s.offset, len(unifiedBuffer), contiguousLength)
-		
+
 		// Check if we have enough contiguous data to read (at least minPacketSize)
 		if contiguousLength >= minPacketSize {
 			// We have enough contiguous data to read
@@ -454,26 +441,26 @@ func (s *ClientStream) readWithGapHandling(p []byte) (int, error) {
 			if maxRead > len(p) {
 				maxRead = len(p) // Don't exceed the provided buffer size
 			}
-			
+
 			// Copy the contiguous data
 			n := copy(p, unifiedBuffer[s.offset:s.offset+maxRead])
 			s.offset += n // Update our read position
-			
-			fmt.Printf("DEBUG: ClientStream %d read %d bytes of contiguous data at offset %d\n", 
+
+			fmt.Printf("DEBUG: ClientStream %d read %d bytes of contiguous data at offset %d\n",
 				s.id, n, s.offset-n)
 			return n, nil
 		}
-		
+
 		// No sufficient contiguous data available, check if we've exceeded timeout
 		if time.Since(startTime) > readTimeout {
-			fmt.Printf("DEBUG: ClientStream %d read timeout after %v - insufficient contiguous data at offset %d (need %d, have %d)\n", 
+			fmt.Printf("DEBUG: ClientStream %d read timeout after %v - insufficient contiguous data at offset %d (need %d, have %d)\n",
 				s.id, time.Since(startTime), s.offset, minPacketSize, contiguousLength)
 			return 0, utils.NewKwikError(utils.ErrStreamClosed, "read timeout: insufficient contiguous data", nil)
 		}
-		
+
 		// Wait before retrying
 		time.Sleep(retryInterval)
-		
+
 		// Check if the session context is cancelled
 		select {
 		case <-s.session.GetContext().Done():
@@ -491,41 +478,41 @@ func (s *ClientStream) buildUnifiedBuffer() ([]byte, error) {
 	if err != nil {
 		aggregatedData = []byte{} // Use empty slice if no aggregated data
 	}
-	
+
 	// Try to read any available data from the primary QUIC stream without blocking
 	primaryData := s.readAvailablePrimaryData()
-	
+
 	// Create a unified buffer that combines both data sources
 	// The aggregated data already has correct offset positioning
 	// Primary data starts at offset 0
-	
+
 	maxLength := len(aggregatedData)
 	if len(primaryData) > maxLength {
 		maxLength = len(primaryData)
 	}
-	
+
 	if maxLength == 0 {
 		return []byte{}, nil
 	}
-	
+
 	// Create unified buffer
 	unifiedBuffer := make([]byte, maxLength)
-	
+
 	// First, copy aggregated data (it already has correct positioning)
 	if len(aggregatedData) > 0 {
 		copy(unifiedBuffer, aggregatedData)
 		fmt.Printf("DEBUG: ClientStream %d unified buffer: copied %d bytes from aggregated data\n", s.id, len(aggregatedData))
 	}
-	
+
 	// Then overlay primary data at offset 0 (primary data always starts at beginning)
 	if len(primaryData) > 0 {
 		copy(unifiedBuffer[:len(primaryData)], primaryData)
 		fmt.Printf("DEBUG: ClientStream %d unified buffer: overlaid %d bytes from primary data at offset 0\n", s.id, len(primaryData))
 	}
-	
-	fmt.Printf("DEBUG: ClientStream %d unified buffer: total length %d (primary: %d, aggregated: %d)\n", 
+
+	fmt.Printf("DEBUG: ClientStream %d unified buffer: total length %d (primary: %d, aggregated: %d)\n",
 		s.id, len(unifiedBuffer), len(primaryData), len(aggregatedData))
-	
+
 	return unifiedBuffer, nil
 }
 
@@ -535,7 +522,7 @@ func (s *ClientStream) findContiguousDataLength(buffer []byte, startOffset int) 
 	if startOffset >= len(buffer) {
 		return 0 // No data available at this offset
 	}
-	
+
 	// Check for contiguous non-zero data starting from startOffset
 	contiguousLength := 0
 	for i := startOffset; i < len(buffer); i++ {
@@ -556,10 +543,10 @@ func (s *ClientStream) findContiguousDataLength(buffer []byte, startOffset int) 
 		}
 		contiguousLength++
 	}
-	
-	fmt.Printf("DEBUG: ClientStream %d found %d bytes of contiguous data starting at offset %d\n", 
+
+	fmt.Printf("DEBUG: ClientStream %d found %d bytes of contiguous data starting at offset %d\n",
 		s.id, contiguousLength, startOffset)
-	
+
 	return contiguousLength
 }
 
@@ -568,13 +555,13 @@ func (s *ClientStream) readAvailablePrimaryData() []byte {
 	// Use a very short deadline to avoid blocking
 	s.quicStream.SetReadDeadline(time.Now().Add(1 * time.Millisecond))
 	defer s.quicStream.SetReadDeadline(time.Time{}) // Clear deadline
-	
+
 	buffer := make([]byte, 4096) // Large enough buffer for available data
 	n, err := s.quicStream.Read(buffer)
 	if err != nil || n == 0 {
 		return []byte{} // No data available
 	}
-	
+
 	fmt.Printf("DEBUG: ClientStream %d read %d bytes from primary QUIC stream\n", s.id, n)
 	return buffer[:n]
 }
@@ -584,31 +571,31 @@ func (s *ClientStream) depositPrimaryDataInAggregator() {
 	// Try to read any available data from the primary QUIC stream
 	s.quicStream.SetReadDeadline(time.Now().Add(1 * time.Millisecond))
 	defer s.quicStream.SetReadDeadline(time.Time{}) // Clear deadline
-	
+
 	buffer := make([]byte, 4096)
 	n, err := s.quicStream.Read(buffer)
 	if err != nil || n == 0 {
 		return // No data available
 	}
-	
+
 	primaryData := buffer[:n]
 	fmt.Printf("DEBUG: ClientStream %d depositing %d bytes from primary stream into aggregator\n", s.id, n)
-	
+
 	// Deposit primary data into the aggregator via the session
 	// We need to calculate the correct offset - for now, we'll use the current offset
 	currentOffset := uint64(s.offset)
 	if s.offset < 0 {
 		currentOffset = 0
 	}
-	
+
 	err = s.session.DepositPrimaryDataInAggregator(s.id, primaryData, currentOffset)
 	if err != nil {
 		fmt.Printf("DEBUG: ClientStream %d failed to deposit primary data in aggregator: %v\n", s.id, err)
 		return
 	}
-	
+
 	// Update our offset to reflect the data we just deposited
 	s.offset += len(primaryData)
-	fmt.Printf("DEBUG: ClientStream %d successfully deposited %d bytes at offset %d, new offset: %d\n", 
+	fmt.Printf("DEBUG: ClientStream %d successfully deposited %d bytes at offset %d, new offset: %d\n",
 		s.id, len(primaryData), currentOffset, s.offset)
 }

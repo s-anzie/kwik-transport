@@ -1,0 +1,168 @@
+make run-multipath-primary-server
+[PRIMARY SERVER] Démarrage du serveur primaire sur localhost:4433
+2025/08/18 17:47:24 failed to sufficiently increase receive buffer size (was: 208 kiB, wanted: 2048 kiB, got: 416 kiB). See https://github.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes for details.
+[PRIMARY SERVER] Serveur en écoute, en attente de connexions...
+DEBUG: Server received authentication request with role: PRIMARY, session ID: kwik-session-21b4be774a3006651b449ea90a3a67e6
+DEBUG: AuthManager handling authentication request with role: PRIMARY, sessionID: kwik-session-21b4be774a3006651b449ea90a3a67e6, isAuthenticated: false
+DEBUG: AuthManager authentication result: success=true, errorMessage=, finalRole=PRIMARY
+DEBUG: Server authenticated client with role: PRIMARY, session ID: kwik-session-21b4be774a3006651b449ea90a3a67e6
+[PRIMARY SERVER] Nouvelle session acceptée
+[PRIMARY SERVER] Gestion d'une nouvelle session
+DEBUG: Server control frame handler started, listening for client responses...
+[PRIMARY SERVER] Nouveau stream accepté (ID: 0)
+[PRIMARY SERVER] Traitement du stream 0
+[PRIMARY SERVER] Lecture du message du client sur stream 0
+[PRIMARY SERVER] Message reçu du client: 'bonjour'
+[PRIMARY SERVER] Ajout du chemin secondaire localhost:4434
+DEBUG: Server received control frame (74 bytes)
+DEBUG: Server processing control frame type: ADD_PATH_RESPONSE
+DEBUG: Server received AddPathResponse for path path-6173f7d3031ba031, success: true
+DEBUG: Server routed AddPathResponse to waiting channel for path path-6173f7d3031ba031
+[PRIMARY SERVER] Chemin secondaire ajouté avec succès
+[PRIMARY SERVER] Envoi de la réponse primaire: 'salut comment vas tu'
+DEBUG: ServerStream 0 Write() - serverRole=PRIMARY, remoteStreamID=1, isSecondaryStream=false
+[SERVER] Stream 0 wrote 20 bytes (payload) to KWIK stream 1 at offset 0
+[PRIMARY SERVER] Attente avant envoi au serveur secondaire...
+[PRIMARY SERVER] Envoi de données au serveur secondaire via path path-6173f7d3031ba031: 'Second Message 2'
+[PRIMARY SERVER] Stream KWIK cible: 1
+DEBUG: SendRawData checking for pathID path-6173f7d3031ba031 in pendingPathIDs
+DEBUG: pendingPathIDs[localhost:4434] = path-6173f7d3031ba031
+DEBUG: Found matching pathID path-6173f7d3031ba031 for address localhost:4434
+DEBUG: PathID path-6173f7d3031ba031 found in pendingPathIDs, proceeding with SendRawData
+[PRIMARY] SendRawData encapsulated 16 bytes for KWIK stream 1
+[PRIMARY SERVER] Données envoyées au serveur secondaire avec succès
+[PRIMARY SERVER] Attente finale avant fermeture...
+[PRIMARY SERVER] Fermeture du stream 0
+DEBUG: Server control frame read error: timeout: no recent network activity
+[PRIMARY SERVER] Erreur lors de l'acceptation de stream: KWIK_CONNECTION_LOST: failed to accept stream (caused by: timeout: no recent network activity)
+[PRIMARY SERVER] Fermeture de la session
+
+
+
+make run-multipath-secondary-server
+[SECONDARY SERVER] Démarrage du serveur secondaire sur localhost:4434
+[KWIK] 2025/08/18 17:47:28.541735 [INFO] [comp=KWIK-SYSTEM] Wiring KWIK components together
+[KWIK] 2025/08/18 17:47:28.541839 [INFO] [comp=KWIK-SYSTEM] Setting up message routing between components
+[KWIK] 2025/08/18 17:47:28.541845 [INFO] [comp=KWIK-SYSTEM] All KWIK components wired successfully
+[KWIK] 2025/08/18 17:47:28.541850 [INFO] [comp=KWIK-SYSTEM] Starting KWIK system
+[KWIK] 2025/08/18 17:47:28.541854 [INFO] [comp=KWIK-SYSTEM] Session manager started
+[KWIK] 2025/08/18 17:47:28.541859 [INFO] [comp=KWIK-SYSTEM] KWIK system started successfully
+2025/08/18 17:47:28 failed to sufficiently increase receive buffer size (was: 208 kiB, wanted: 2048 kiB, got: 416 kiB). See https://github.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes for details.
+[KWIK] 2025/08/18 17:47:28.907772 [INFO] [comp=KWIK-SYSTEM] Listener created address=localhost:4434 
+[KWIK] 2025/08/18 17:47:28.907777 [INFO] [comp=KWIK-SYSTEM] Server listener created address=localhost:4434 
+[SECONDARY SERVER] Serveur en écoute, en attente de connexions...
+DEBUG: Server received authentication request with role: SECONDARY, session ID: kwik-session-21b4be774a3006651b449ea90a3a67e6
+DEBUG: AuthManager handling authentication request with role: SECONDARY, sessionID: kwik-session-21b4be774a3006651b449ea90a3a67e6, isAuthenticated: false
+DEBUG: AuthManager accepting SECONDARY authentication for session kwik-session-21b4be774a3006651b449ea90a3a67e6
+DEBUG: AuthManager authentication result: success=true, errorMessage=, finalRole=SECONDARY
+DEBUG: Server authenticated client with role: SECONDARY, session ID: kwik-session-21b4be774a3006651b449ea90a3a67e6
+[SECONDARY SERVER] Nouvelle session acceptée
+[SECONDARY SERVER] Gestion d'une nouvelle session
+[SECONDARY SERVER] Configuration du rôle serveur secondaire
+[SERVER] Role set to: SECONDARY
+DEBUG: Server control frame handler started, listening for client responses...
+[SECONDARY SERVER] Nouveau stream accepté (ID: 0)
+[SECONDARY SERVER] Traitement du stream 0
+[SECONDARY SERVER] Lecture du message du serveur primaire sur stream 0
+[SECONDARY SERVER] Message reçu du serveur primaire: 'Second Message 2'
+[SECONDARY SERVER] Ouverture d'un nouveau stream pour la réponse (offset: 21)
+[SECONDARY] Opening secondary stream 1 for aggregation
+[SECONDARY] Created QUIC stream for secondary stream 1
+[SECONDARY] Secondary stream 1 created and ready for aggregation
+[SECONDARY SERVER] Configuration du stream 1 pour l'agrégation
+[SECONDARY] Stream 1 mapped to KWIK stream 1 at offset 21 (aggregator configured)
+[SECONDARY SERVER] Stream KWIK cible: 1
+[SECONDARY SERVER] Stream configuré: offset=21, remoteStreamID=1
+[SECONDARY SERVER] Envoi de la réponse: 'Salut, ça fait longtemps'
+DEBUG: ServerStream 1 Write() - serverRole=SECONDARY, remoteStreamID=1, isSecondaryStream=true
+[SERVER] Stream 1 wrote 25 bytes (payload) to KWIK stream 1 at offset 21
+[SECONDARY SERVER] Réponse envoyée avec succès
+[SECONDARY SERVER] Attente avant fermeture...
+[SECONDARY SERVER] Fermeture du nouveau stream 1
+[SECONDARY SERVER] Fermeture du stream 0
+[SECONDARY SERVER] Erreur lors de l'acceptation de stream: KWIK_CONNECTION_LOST: failed to accept stream (caused by: timeout: no recent network activity)
+[SECONDARY SERVER] Fermeture de la session
+DEBUG: Server control frame read error: timeout: no recent network activity
+
+
+make run-multipath-client
+[CLIENT] Démarrage du client multi-path demo
+[CLIENT] Connexion au serveur primaire localhost:4433...
+[KWIK] 2025/08/18 17:53:48.713107 [INFO] [comp=KWIK-SYSTEM] Wiring KWIK components together
+[KWIK] 2025/08/18 17:53:48.713227 [INFO] [comp=KWIK-SYSTEM] Setting up message routing between components
+[KWIK] 2025/08/18 17:53:48.713234 [INFO] [comp=KWIK-SYSTEM] All KWIK components wired successfully
+[KWIK] 2025/08/18 17:53:48.713239 [INFO] [comp=KWIK-SYSTEM] Starting KWIK system
+[KWIK] 2025/08/18 17:53:48.713245 [INFO] [comp=KWIK-SYSTEM] Session manager started
+[KWIK] 2025/08/18 17:53:48.713253 [INFO] [comp=KWIK-SYSTEM] KWIK system started successfully
+2025/08/18 17:53:48 failed to sufficiently increase receive buffer size (was: 208 kiB, wanted: 2048 kiB, got: 416 kiB). See https://github.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes for details.
+[KWIK] 2025/08/18 17:53:48.718253 [INFO] [comp=KWIK-SYSTEM] Client session created sessionID=kwik-session-186f6228a82e31ba66d28ab8466cb6ea address=localhost:4433 
+[KWIK] 2025/08/18 17:53:48.718265 [INFO] [comp=KWIK-SYSTEM] Client session created address=localhost:4433 sessionID=kwik-session-186f6228a82e31ba66d28ab8466cb6ea 
+[CLIENT] Connexion établie avec succès
+[CLIENT] Ouverture d'un stream...
+[CLIENT] Stream 1 ouvert avec succès
+[CLIENT] Stream KWIK source: 1
+[CLIENT] Envoi du message: 'bonjour'
+[CLIENT] Message envoyé avec succès
+[CLIENT] Attente de l'établissement de chemins multiples...
+[CLIENT] Nombre de chemins actifs: 1
+DEBUG: Client received AddPathRequest with PathId: path-657e9e1fcd4ed3f2, TargetAddress: localhost:4434
+DEBUG: Client attempting to create path to localhost:4434
+DEBUG: Client successfully created path to localhost:4434 in 3.597583ms
+DEBUG: Client starting authentication on secondary path path-657e9e1fcd4ed3f2
+DEBUG: Client creating SECONDARY authentication request for session kwik-session-186f6228a82e31ba66d28ab8466cb6ea
+DEBUG: Client authentication successful on secondary path path-657e9e1fcd4ed3f2
+DEBUG: Client starting integration of secondary path path-657e9e1fcd4ed3f2
+DEBUG: Client found managed path with original ID path-657e9e1fcd4ed3f2, secondary path has server ID path-657e9e1fcd4ed3f2
+DEBUG: Client starting automatic stream acceptance for secondary path path-657e9e1fcd4ed3f2
+DEBUG: Client integration successful for secondary path path-657e9e1fcd4ed3f2
+DEBUG: Client sending success response for path path-657e9e1fcd4ed3f2
+DEBUG: Client starting automatic stream acceptance loop for secondary path path-657e9e1fcd4ed3f2
+DEBUG: Client attempting to accept stream from secondary path path-657e9e1fcd4ed3f2
+DEBUG: Client sent AddPathResponse with success=true for path path-657e9e1fcd4ed3f2
+DEBUG: Stream 1 writing new data: dataSize=20, consumedSpace=0, increase=20, newUsedSize=20
+DEBUG: Client routing raw packet (53 bytes) to data plane of path path-657e9e1fcd4ed3f2
+DEBUG: Client accepted new stream from secondary path path-657e9e1fcd4ed3f2
+DEBUG: Client attempting to accept stream from secondary path path-657e9e1fcd4ed3f2
+DEBUG: Client handling secondary stream open from path path-657e9e1fcd4ed3f2
+DEBUG: Client starting secondary stream data processing for path path-657e9e1fcd4ed3f2
+DEBUG: Client starting secondary stream data processing loop for path path-657e9e1fcd4ed3f2
+DEBUG: Client attempting to read from secondary stream on path path-657e9e1fcd4ed3f2
+DEBUG: Client received path-657e9e1fcd4ed3f2 bytes from secondary stream on path 62: KWKM\�qs�$|Salut, ça fait longtemps
+DEBUG: Client processing encapsulated secondary data from path path-657e9e1fcd4ed3f2 (62 bytes)
+DEBUG: Client attempting to decapsulate data from path path-657e9e1fcd4ed3f2
+DEBUG: Client decapsulated data from path path-657e9e1fcd4ed3f2: KwikStreamID=1, Offset=20, DataLen=25
+DEBUG: Client attempting to aggregate secondary data from path path-657e9e1fcd4ed3f2
+DEBUG: Stream 1 writing new data: dataSize=25, consumedSpace=0, increase=25, newUsedSize=45
+DEBUG: Client successfully aggregated 25 bytes from path path-657e9e1fcd4ed3f2 to KWIK stream 1 at offset 20
+DEBUG: Client successfully processed secondary stream data from path path-657e9e1fcd4ed3f2
+DEBUG: Client attempting to read from secondary stream on path path-657e9e1fcd4ed3f2
+[CLIENT] Nombre de chemins actifs: 2
+[CLIENT] Chemins multiples établis!
+[CLIENT] Début de la lecture des réponses...
+[CLIENT] Tentative de lecture 1/2...
+[CLIENT] Message 1 reçu: 'salut comment vas tuSalut, ça fait longtemps'
+[CLIENT] Tentative de lecture 2/2...
+[CLIENT] Lecture à 0 octet, continuer...
+[CLIENT] Tentative de lecture 2/2...
+[CLIENT] Lecture à 0 octet, continuer...
+[CLIENT] Tentative de lecture 2/2...
+[CLIENT] Lecture à 0 octet, continuer...
+[CLIENT] Tentative de lecture 2/2...
+[CLIENT] Lecture à 0 octet, continuer...
+[CLIENT] Tentative de lecture 2/2...
+[CLIENT] Lecture à 0 octet, continuer...
+[CLIENT] Tentative de lecture 2/2...
+[CLIENT] Lecture à 0 octet, continuer...
+[CLIENT] Tentative de lecture 2/2...
+[CLIENT] Lecture à 0 octet, continuer...
+[CLIENT] Tentative de lecture 2/2...
+[CLIENT] Lecture à 0 octet, continuer...
+[CLIENT] Tentative de lecture 2/2...
+[CLIENT] Lecture à 0 octet, continuer...
+[CLIENT] Tentative de lecture 2/2...
+[CLIENT] Lecture à 0 octet, continuer...
+[CLIENT] Tentative de lecture 2/2...
+[CLIENT] Lecture à 0 octet, continuer...
+[CLIENT] Tentative de lecture 2/2...
+[CLIENT] Lecture à 0 octet, continuer...
+^Ccursor.appimage: *** [Makefile:41: run-multipath-client] Interrompre

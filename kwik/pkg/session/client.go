@@ -121,14 +121,17 @@ func NewClientSession(pathManager transport.PathManager, config *SessionConfig) 
 		streams:                 make(map[uint64]*stream.ClientStream),
 		secondaryStreamHandler:  stream.NewSecondaryStreamHandler(nil), // Use default config
 		streamAggregator:        data.NewDataAggregator(&DefaultSessionLogger{}),
-		secondaryAggregator:     data.NewSecondaryStreamAggregator(&DefaultSessionLogger{}),  // Initialize secondary stream aggregator
-		metadataProtocol:        stream.NewMetadataProtocol(),         // Initialize metadata protocol
-		dataPresentationManager: dataPresentationManager,              // Initialize data presentation manager
-		acceptChan:              make(chan *stream.ClientStream, 100), // Buffered channel
+		secondaryAggregator:     data.NewSecondaryStreamAggregator(&DefaultSessionLogger{}), // Initialize secondary stream aggregator
+		metadataProtocol:        stream.NewMetadataProtocol(),                               // Initialize metadata protocol
+		dataPresentationManager: dataPresentationManager,                                    // Initialize data presentation manager
+		acceptChan:              make(chan *stream.ClientStream, 100),                       // Buffered channel
 		ctx:                     ctx,
 		cancel:                  cancel,
 		config:                  config,
 	}
+
+	// Wire the secondary aggregator to the presentation manager so reads use the same buffer path
+	session.secondaryAggregator.SetPresentationManager(dataPresentationManager)
 
 	return session
 }
@@ -258,6 +261,9 @@ func (s *ClientSession) OpenStreamSync(ctx context.Context) (Stream, error) {
 			return nil, utils.NewKwikError(utils.ErrStreamCreationFailed, "failed to create stream buffer", err)
 		}
 	}
+
+	// Start ingestion of primary path data for this stream (decapsulation -> DPM)
+	go s.startPrimaryIngestion(streamID, quicStream, s.primaryPath.ID())
 
 	s.streamsMutex.Lock()
 	s.streams[streamID] = clientStream
@@ -403,7 +409,7 @@ func (s *ClientSession) GetAllPaths() []PathInfo {
 }
 
 // SendRawData sends raw data through a specific path
-func (s *ClientSession) SendRawData(data []byte, pathID string, remoteStreamID ...uint64) error {
+func (s *ClientSession) SendRawData(data []byte, pathID string, remoteStreamID uint64) error {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -1120,9 +1126,9 @@ func (s *ClientSession) GetPrimaryPath() transport.Path {
 func (s *ClientSession) RemoveStream(streamID uint64) {
 	s.streamsMutex.Lock()
 	defer s.streamsMutex.Unlock()
-	
+
 	delete(s.streams, streamID)
-	
+
 	// Clean up stream buffer in DataPresentationManager
 	if s.dataPresentationManager != nil {
 		err := s.dataPresentationManager.RemoveStreamBuffer(streamID)
@@ -1189,7 +1195,7 @@ func (s *ClientSession) DepositPrimaryDataInAggregator(streamID uint64, data []b
 
 	// Create SecondaryStreamData structure for primary data
 	primaryData := &stream.SecondaryStreamData{
-		StreamID:     0,         // Use 0 for primary stream data
+		StreamID:     streamID,  // Use streamID to pass validation
 		PathID:       "primary", // Mark as primary path
 		Data:         data,
 		Offset:       offset,
@@ -1202,7 +1208,7 @@ func (s *ClientSession) DepositPrimaryDataInAggregator(streamID uint64, data []b
 	fmt.Printf("DEBUG: ClientSession depositing %d bytes of primary data for KWIK stream %d at offset %d\n",
 		len(data), streamID, offset)
 
-	return s.secondaryAggregator.AggregateSecondaryData(primaryData)
+	return s.secondaryAggregator.AggregateSecondaryDataWithPresentation(primaryData)
 }
 
 // performSecondaryPathAuthentication performs authentication on a secondary path using existing session ID
@@ -1641,10 +1647,16 @@ func (s *ClientSession) processEncapsulatedSecondaryData(pathID string, encapsul
 	fmt.Printf("DEBUG: Client decapsulated data from path %s: KwikStreamID=%d, Offset=%d, DataLen=%d\n",
 		pathID, metadata.KwikStreamID, metadata.Offset, len(data))
 
+	// Determine a valid secondary stream ID; fallback to KWIK stream ID if missing in metadata
+	secondaryStreamID := metadata.SecondaryStreamID
+	if secondaryStreamID == 0 {
+		secondaryStreamID = metadata.KwikStreamID
+	}
+
 	// Create SecondaryStreamData structure for aggregation
-	// Use the SecondaryStreamID from the metadata
+	// Use the resolved secondary stream ID
 	secondaryData := &stream.SecondaryStreamData{
-		StreamID:     metadata.SecondaryStreamID, // Use the actual secondary stream ID from metadata
+		StreamID:     secondaryStreamID, // Use the actual secondary stream ID from metadata
 		PathID:       pathID,
 		Data:         data,
 		Offset:       metadata.Offset,
@@ -1661,8 +1673,8 @@ func (s *ClientSession) processEncapsulatedSecondaryData(pathID string, encapsul
 	}
 
 	fmt.Printf("DEBUG: Client attempting to aggregate secondary data from path %s\n", pathID)
-	// Aggregate the secondary stream data
-	err = aggregator.AggregateSecondaryData(secondaryData)
+	// Aggregate the secondary stream data via presentation manager
+	err = aggregator.AggregateSecondaryDataWithPresentation(secondaryData)
 	if err != nil {
 		fmt.Printf("DEBUG: Client failed to aggregate secondary data from path %s: %v\n", pathID, err)
 		return utils.NewKwikError(utils.ErrStreamCreationFailed,
@@ -1705,6 +1717,44 @@ func (s *ClientSession) autoAcceptSecondaryStreams(path transport.Path) {
 
 			// Handle this secondary stream internally (don't expose to application)
 			go s.handleSecondaryStreamOpen(path.ID(), quicStream)
+		}
+	}
+}
+
+// startPrimaryIngestion reads metadata-encapsulated frames from the primary QUIC stream
+// and deposits the decoded payload into the DataPresentationManager via the aggregator
+func (s *ClientSession) startPrimaryIngestion(streamID uint64, quicStream quic.Stream, pathID string) {
+	buffer := make([]byte, 4096)
+	for {
+		n, err := quicStream.Read(buffer)
+		if err != nil || n == 0 {
+			return
+		}
+
+		// Decapsulate
+		mp := s.metadataProtocol
+		if mp == nil {
+			continue
+		}
+		metadata, payload, derr := mp.DecapsulateData(buffer[:n])
+		if derr != nil || metadata == nil || len(payload) == 0 {
+			continue
+		}
+
+		// Build secondary data (use non-zero StreamID)
+		secondaryData := &stream.SecondaryStreamData{
+			StreamID:     streamID,
+			PathID:       pathID,
+			Data:         payload,
+			Offset:       metadata.Offset,
+			KwikStreamID: metadata.KwikStreamID,
+			Timestamp:    time.Now(),
+			SequenceNum:  0,
+		}
+
+		// Deposit via presentation-enabled path
+		if s.secondaryAggregator != nil {
+			_ = s.secondaryAggregator.AggregateSecondaryDataWithPresentation(secondaryData)
 		}
 	}
 }

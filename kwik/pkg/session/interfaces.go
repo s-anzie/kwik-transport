@@ -12,17 +12,17 @@ type Session interface {
 	OpenStreamSync(ctx context.Context) (Stream, error)
 	OpenStream() (Stream, error)
 	AcceptStream(ctx context.Context) (Stream, error)
-	
+
 	// Server-specific methods for path management (control plane)
 	AddPath(address string) error
 	RemovePath(pathID string) error
 	GetActivePaths() []PathInfo
 	GetDeadPaths() []PathInfo
 	GetAllPaths() []PathInfo
-	
+
 	// Raw packet transmission for custom protocols
-	SendRawData(data []byte, pathID string, remoteStreamID ...uint64) error
-	
+	SendRawData(data []byte, pathID string, remoteStreamID uint64) error
+
 	Close() error
 }
 
@@ -32,11 +32,11 @@ type Stream interface {
 	Read([]byte) (int, error)
 	Write([]byte) (int, error)
 	Close() error
-	
+
 	// KWIK-specific metadata
 	StreamID() uint64
 	PathID() string
-	
+
 	// Secondary stream isolation methods
 	SetOffset(offset int) error
 	GetOffset() int
@@ -46,11 +46,11 @@ type Stream interface {
 
 // PathInfo contains information about a connection path
 type PathInfo struct {
-	PathID    string
-	Address   string
-	IsPrimary bool
-	Status    PathStatus
-	CreatedAt time.Time
+	PathID     string
+	Address    string
+	IsPrimary  bool
+	Status     PathStatus
+	CreatedAt  time.Time
 	LastActive time.Time
 }
 
@@ -75,9 +75,6 @@ const (
 	SessionStateClosed
 )
 
-
-
-
 // Listener represents a KWIK listener that maintains QUIC compatibility
 // while providing enhanced session management capabilities
 type Listener interface {
@@ -85,7 +82,7 @@ type Listener interface {
 	Accept(ctx context.Context) (Session, error)
 	Close() error
 	Addr() string
-	
+
 	// KWIK-specific methods for enhanced functionality
 	AcceptWithConfig(ctx context.Context, config *SessionConfig) (Session, error)
 	SetSessionConfig(config *SessionConfig)
@@ -123,4 +120,3 @@ func (s SessionState) String() string {
 		return "UNKNOWN"
 	}
 }
-

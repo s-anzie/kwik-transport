@@ -7,14 +7,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/quic-go/quic-go"
-	"google.golang.org/protobuf/proto"
 	kwiктls "kwik/internal/tls"
 	"kwik/internal/utils"
 	"kwik/pkg/data"
 	"kwik/pkg/stream"
 	"kwik/pkg/transport"
 	"kwik/proto/control"
+
+	"github.com/quic-go/quic-go"
+	"google.golang.org/protobuf/proto"
 )
 
 // DefaultServerLogger provides a simple logger implementation for server session
@@ -131,8 +132,8 @@ func NewServerSession(sessionID string, pathManager transport.PathManager, confi
 		serverRole:           ServerRolePrimary,                          // Default to primary role
 		streams:              make(map[uint64]*ServerStream),
 		acceptChan:           make(chan *ServerStream, 100),
-		secondaryAggregator:  data.NewSecondaryStreamAggregator(&DefaultServerLogger{}),        // Initialize secondary stream aggregator
-		metadataProtocol:     stream.NewMetadataProtocol(),               // Initialize metadata protocol
+		secondaryAggregator:  data.NewSecondaryStreamAggregator(&DefaultServerLogger{}), // Initialize secondary stream aggregator
+		metadataProtocol:     stream.NewMetadataProtocol(),                              // Initialize metadata protocol
 		ctx:                  ctx,
 		cancel:               cancel,
 		config:               config,
@@ -444,7 +445,7 @@ func (s *ServerSession) openPrimaryStream(ctx context.Context, streamID uint64) 
 func (s *ServerSession) openSecondaryStreamInternal(ctx context.Context, streamID uint64) (Stream, error) {
 	// For secondary servers, we create a stream that will be handled internally
 	// and aggregated on the client side according to the secondary stream isolation architecture
-	
+
 	// Ensure primary path is available (secondary servers still use the primary path for communication)
 	if s.primaryPath == nil {
 		return nil, utils.NewKwikError(utils.ErrConnectionLost, "no primary path available", nil)
@@ -1170,7 +1171,7 @@ func (s *ServerSession) createPathInfo(path transport.Path, status PathStatus) P
 
 // SendRawData sends raw data through a specific path with dead path detection
 // Requirements: 6.3 - detect operations targeting dead paths and send notifications
-func (s *ServerSession) SendRawData(data []byte, pathID string, remoteStreamID ...uint64) error {
+func (s *ServerSession) SendRawData(data []byte, pathID string, remoteStreamID uint64) error {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -1237,7 +1238,7 @@ func (s *ServerSession) SendRawData(data []byte, pathID string, remoteStreamID .
 
 	// If remoteStreamID is provided, encapsulate data with metadata for secondary stream aggregation
 	var finalData []byte
-	if len(remoteStreamID) > 0 && remoteStreamID[0] != 0 {
+	if remoteStreamID != 0 {
 		// Encapsulate data with metadata for secondary stream aggregation
 		metadataProtocol := s.metadataProtocol
 		if metadataProtocol == nil {
@@ -1247,19 +1248,19 @@ func (s *ServerSession) SendRawData(data []byte, pathID string, remoteStreamID .
 		// Use offset 0 as default since we don't have offset information in SendRawData
 		// In a real scenario, the offset would be provided as an additional parameter
 		encapsulatedData, err := metadataProtocol.EncapsulateData(
-			remoteStreamID[0], // Target KWIK stream ID
-			1,                 // Secondary stream ID (placeholder, should be actual stream ID)
-			0,                 // Default offset (could be enhanced to accept offset parameter)
+			remoteStreamID, // Target KWIK stream ID
+			1,              // Secondary stream ID (placeholder, should be actual stream ID)
+			0,              // Default offset (could be enhanced to accept offset parameter)
 			data,
 		)
 		if err != nil {
-			return utils.NewKwikError(utils.ErrInvalidFrame, 
+			return utils.NewKwikError(utils.ErrInvalidFrame,
 				fmt.Sprintf("failed to encapsulate raw data with metadata: %v", err), err)
 		}
-		
+
 		finalData = encapsulatedData
-		fmt.Printf("[PRIMARY] SendRawData encapsulated %d bytes for KWIK stream %d\n", 
-			len(data), remoteStreamID[0])
+		fmt.Printf("[PRIMARY] SendRawData encapsulated %d bytes for KWIK stream %d\n",
+			len(data), remoteStreamID)
 	} else {
 		// No metadata encapsulation needed
 		finalData = data
@@ -1507,8 +1508,32 @@ func (s *ServerStream) Read(p []byte) (int, error) {
 		return 0, utils.NewKwikError(utils.ErrStreamCreationFailed, "no underlying QUIC stream", nil)
 	}
 
-	// Read directly from the underlying QUIC stream
-	return s.quicStream.Read(p)
+	// Read directly from the underlying QUIC stream into a temporary buffer
+	buf := make([]byte, len(p))
+	n, err := s.quicStream.Read(buf)
+	if err != nil || n == 0 {
+		return n, err
+	}
+
+	// Try to decapsulate using metadata protocol
+	mp := s.session.metadataProtocol
+	if mp != nil {
+		metadata, payload, derr := mp.DecapsulateData(buf[:n])
+		if derr == nil && metadata != nil && len(payload) > 0 {
+			// Update remoteStreamID based on KWIK Stream ID carried by the client
+			s.mutex.RUnlock()
+			s.mutex.Lock()
+			s.remoteStreamID = metadata.KwikStreamID
+			s.mutex.Unlock()
+			s.mutex.RLock()
+			// Return only the application payload to the server application
+			copied := copy(p, payload)
+			return copied, nil
+		}
+	}
+
+	// If not a metadata frame, return raw data
+	return 0, fmt.Errorf("no metadata protocol available")
 }
 
 // Write writes data to the stream (QUIC-compatible)
@@ -1522,36 +1547,29 @@ func (s *ServerStream) Write(p []byte) (int, error) {
 	}
 
 	// Debug: Log the write attempt and conditions
-	fmt.Printf("DEBUG: ServerStream %d Write() - serverRole=%s, remoteStreamID=%d, isSecondaryStream=%t\n", 
+	fmt.Printf("DEBUG: ServerStream %d Write() - serverRole=%s, remoteStreamID=%d, isSecondaryStream=%t\n",
 		s.id, s.session.serverRole.String(), s.remoteStreamID, s.isSecondaryStream)
 
-	// If this is a secondary server stream with aggregation mapping, encapsulate data
-	// Note: remoteStreamID can be 0 (valid KWIK stream ID), so we check if it's been set via isSecondaryStream flag
-	if s.session.serverRole == ServerRoleSecondary && s.isSecondaryStream {
-		fmt.Printf("DEBUG: ServerStream %d using writeWithAggregation for %d bytes (remoteStreamID=%d)\n", s.id, len(p), s.remoteStreamID)
-		return s.writeWithAggregation(p)
-	}
-
-	// For primary servers, write directly to the underlying QUIC stream
-	fmt.Printf("DEBUG: ServerStream %d writing directly to QUIC stream (%d bytes)\n", s.id, len(p))
-	return s.quicStream.Write(p)
+	// Always encapsulate data with metadata for uniform client-side processing
+	return s.writeWithMetadata(p)
 }
 
-// writeWithAggregation writes data with metadata for secondary stream aggregation
-func (s *ServerStream) writeWithAggregation(data []byte) (int, error) {
+// writeWithMetadata writes data encapsulated with metadata for both primary and secondary roles
+func (s *ServerStream) writeWithMetadata(data []byte) (int, error) {
 	// Create metadata protocol instance
 	metadataProtocol := stream.NewMetadataProtocol()
 
-	// Encapsulate data with metadata for aggregation
+	// Encapsulate data with metadata
 	encapsulatedData, err := metadataProtocol.EncapsulateData(
 		s.remoteStreamID, // Target KWIK stream ID
-		s.id,             // Secondary stream ID
-		uint64(s.offset), // Current offset in the target stream
+		s.id,             // Secondary stream ID (placeholder; not serialized in current format)
+		uint64(s.offset),
 		data,
 	)
+
 	if err != nil {
 		return 0, utils.NewKwikError(utils.ErrInvalidFrame,
-			fmt.Sprintf("failed to encapsulate secondary stream data: %v", err), err)
+			fmt.Sprintf("failed to encapsulate stream data: %v", err), err)
 	}
 
 	// Write encapsulated data to the underlying QUIC stream
@@ -1564,7 +1582,7 @@ func (s *ServerStream) writeWithAggregation(data []byte) (int, error) {
 	s.offset += len(data)
 
 	// Log for debugging
-	fmt.Printf("[SECONDARY] Stream %d wrote %d bytes to KWIK stream %d at offset %d\n",
+	fmt.Printf("[SERVER] Stream %d wrote %d bytes (payload) to KWIK stream %d at offset %d\n",
 		s.id, len(data), s.remoteStreamID, s.offset-len(data))
 
 	// Return the original data length (not encapsulated length)
@@ -1662,11 +1680,11 @@ func (s *ServerStream) updateAggregationMapping() error {
 	// Set up the stream mapping in the aggregator
 	err := aggregator.SetStreamMapping(s.id, s.remoteStreamID, s.pathID)
 	if err != nil {
-		return utils.NewKwikError(utils.ErrStreamCreationFailed, 
+		return utils.NewKwikError(utils.ErrStreamCreationFailed,
 			fmt.Sprintf("failed to set stream mapping: %v", err), err)
 	}
 
-	fmt.Printf("[SECONDARY] Stream %d mapped to KWIK stream %d at offset %d (aggregator configured)\n", 
+	fmt.Printf("[SECONDARY] Stream %d mapped to KWIK stream %d at offset %d (aggregator configured)\n",
 		s.id, s.remoteStreamID, s.offset)
 
 	return nil

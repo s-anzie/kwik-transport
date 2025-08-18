@@ -3,20 +3,20 @@ package main
 
 import (
 	"context"
-	"io"
-	"log"
-	"time"
 	"fmt"
+	"io"
 	kwik "kwik/pkg"
 	"kwik/pkg/session"
+	"log"
+	"time"
 )
 
 func main() {
 	fmt.Println("\n\n[SECONDARY SERVER] Démarrage du serveur secondaire sur localhost:4434")
-	
+
 	config := kwik.DefaultConfig()
 	config.MaxPathsPerSession = 5
-	config.Logging.GlobalLevel = kwik.LogLevelSilent
+	config.Logging.GlobalLevel = kwik.LogLevelDebug
 
 	listener, err := kwik.Listen("localhost:4434", config)
 	if err != nil {
@@ -80,14 +80,15 @@ func handleStream(stream session.Stream, sess session.Session) {
 		fmt.Printf("[SECONDARY SERVER] Erreur lors de la lecture: %v\n", err)
 		return
 	}
-	
+
 	primaryMessage := string(buffer[:n])
 	fmt.Printf("[SECONDARY SERVER] Message reçu du serveur primaire: '%s'\n", primaryMessage)
 
 	// Ouvre un nouveau stream secondaire pour la réponse
-	offset := 21 // Après "salut comment vas tu"
+	// offset 20 pour s'aligner sur "salut comment vas tu" (20 octets)
+	offset := 20
 	fmt.Printf("[SECONDARY SERVER] Ouverture d'un nouveau stream pour la réponse (offset: %d)\n", offset)
-	
+
 	newStream, err := sess.OpenStreamSync(context.Background())
 	if err != nil {
 		fmt.Printf("[SECONDARY SERVER] Erreur lors de l'ouverture du stream: %v\n", err)
@@ -101,7 +102,8 @@ func handleStream(stream session.Stream, sess session.Session) {
 	// Configure le stream pour l'agrégation
 	fmt.Printf("[SECONDARY SERVER] Configuration du stream %d pour l'agrégation\n", newStream.StreamID())
 	newStream.SetOffset(offset)
-	newStream.SetRemoteStreamID(1) // Stream KWIK cible
+	newStream.SetRemoteStreamID(stream.RemoteStreamID()) // Stream KWIK cible
+	fmt.Printf("[SECONDARY SERVER] Stream KWIK cible: %d\n", stream.RemoteStreamID())
 	fmt.Printf("[SECONDARY SERVER] Stream configuré: offset=%d, remoteStreamID=1\n", offset)
 
 	// Envoie la réponse
@@ -112,7 +114,7 @@ func handleStream(stream session.Stream, sess session.Session) {
 		fmt.Printf("[SECONDARY SERVER] Erreur lors de l'écriture: %v\n", err)
 		return
 	}
-	
+
 	fmt.Println("[SECONDARY SERVER] Réponse envoyée avec succès")
 	fmt.Println("[SECONDARY SERVER] Attente avant fermeture...")
 	time.Sleep(1 * time.Second)

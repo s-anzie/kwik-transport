@@ -12,11 +12,11 @@ import (
 
 func main() {
 	fmt.Println("\n\n[CLIENT] Démarrage du client multi-path demo")
-	
+
 	// 1. Il dial avec logs silencieux
 	fmt.Println("[CLIENT] Connexion au serveur primaire localhost:4433...")
 	config := kwik.DefaultConfig()
-	config.Logging.GlobalLevel = kwik.LogLevelSilent
+	config.Logging.GlobalLevel = kwik.LogLevelDebug
 	session, err := kwik.Dial(context.Background(), "localhost:4433", config)
 	if err != nil {
 		log.Fatal(err)
@@ -25,7 +25,7 @@ func main() {
 		fmt.Println("[CLIENT] Fermeture de la session")
 		session.Close()
 	}()
-	
+
 	fmt.Println("[CLIENT] Connexion établie avec succès")
 
 	// 2. Il envoie un message
@@ -38,9 +38,9 @@ func main() {
 		fmt.Printf("[CLIENT] Fermeture du stream %d\n", stream.StreamID())
 		stream.Close()
 	}()
-	
-	fmt.Printf("[CLIENT] Stream %d ouvert avec succès\n", stream.StreamID())
 
+	fmt.Printf("[CLIENT] Stream %d ouvert avec succès\n", stream.StreamID())
+	fmt.Printf("[CLIENT] Stream KWIK source: %d\n", stream.StreamID())
 	message1 := "bonjour"
 	fmt.Printf("[CLIENT] Envoi du message: '%s'\n", message1)
 	_, err = stream.Write([]byte(message1))
@@ -70,17 +70,23 @@ func main() {
 	fmt.Println("[CLIENT] Début de la lecture des réponses...")
 	buffer := make([]byte, 1024)
 	messagesReceived := 0
-	maxMessages := 2  // Attendre 2 messages: primaire + secondaire
+	maxMessages := 2 // Attendre 2 messages: primaire + secondaire
 
 	for messagesReceived < maxMessages {
 		fmt.Printf("[CLIENT] Tentative de lecture %d/%d...\n", messagesReceived+1, maxMessages)
-		
+
 		// Lecture avec timeout pour éviter de bloquer indéfiniment
 		n, err := stream.Read(buffer)
 		if err != nil {
 			fmt.Printf("[CLIENT] Erreur de lecture ou pas de données: %v\n", err)
 			time.Sleep(500 * time.Millisecond)
 			continue
+		}
+
+		if n == 0 {
+			// Ignorer les lectures à 0 octet (aucune donnée disponible pour l'instant)
+			fmt.Printf("[CLIENT] Lecture à 0 octet, continuer...\n")
+			break
 		}
 
 		// Message reçu avec succès

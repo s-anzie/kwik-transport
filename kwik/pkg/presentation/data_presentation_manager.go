@@ -213,7 +213,7 @@ func (dpm *DataPresentationManagerImpl) RemoveStreamBuffer(streamID uint64) erro
 	// Get the actual allocated size from window manager
 	windowStatus := dpm.windowManager.GetWindowStatus()
 	allocatedSize, hasAllocation := windowStatus.StreamAllocations[streamID]
-	
+
 	// Close the buffer
 	buffer.Close()
 
@@ -264,7 +264,7 @@ func (dpm *DataPresentationManagerImpl) ReadFromStreamWithTimeout(streamID uint6
 	dpm.mutex.RLock()
 	running := dpm.running
 	dpm.mutex.RUnlock()
-	
+
 	if !running {
 		dpm.incrementErrorCount()
 		return 0, fmt.Errorf("data presentation manager is not running")
@@ -280,10 +280,18 @@ func (dpm *DataPresentationManagerImpl) ReadFromStreamWithTimeout(streamID uint6
 	// Note: We don't check backpressure for reads - reads should always be allowed
 	// to help relieve backpressure by consuming data
 
-	// For timeout handling, we need to handle the case where no data is available
-	// First try a non-blocking read
+	// Wait for readiness (contiguous data available) or timeout
+	if sbImpl, ok := streamBuffer.(*StreamBufferImpl); ok {
+		if !sbImpl.WaitReady(timeout) {
+			// timeout
+			dpm.updateReadStats(0, time.Since(startTime))
+			return 0, nil
+		}
+	}
+
+	// Now perform a contiguous read
 	n, err := streamBuffer.Read(buffer)
-	
+
 	// Update statistics
 	dpm.updateReadStats(n, time.Since(startTime))
 
@@ -292,18 +300,7 @@ func (dpm *DataPresentationManagerImpl) ReadFromStreamWithTimeout(streamID uint6
 		dpm.windowManager.SlideWindow(uint64(n))
 	}
 
-	// If we got data or an error (other than no data available), return immediately
-	if n > 0 || (err != nil && err.Error() != "no data available") {
-		return n, err
-	}
-
-	// If no data is available and timeout is specified, count it as a timeout event
-	if timeout > 0 {
-		dpm.incrementTimeoutCount()
-	}
-
-	// Return 0 bytes when no data is available (this is normal behavior, not an error)
-	return 0, nil
+	return n, err
 }
 
 // GetReceiveWindowStatus returns the current receive window status
@@ -627,17 +624,17 @@ func (dpm *DataPresentationManagerImpl) performCleanup() {
 // WriteToStream writes data to a specific stream (internal method for aggregators)
 func (dpm *DataPresentationManagerImpl) WriteToStream(streamID uint64, data []byte, offset uint64, metadata interface{}) error {
 	startTime := time.Now()
-	
+
 	// Check if system is running
 	dpm.mutex.RLock()
 	running := dpm.running
 	dpm.mutex.RUnlock()
-	
+
 	if !running {
 		dpm.incrementErrorCount()
 		return fmt.Errorf("data presentation manager is not running")
 	}
-	
+
 	// Get the stream buffer
 	streamBuffer, err := dpm.GetStreamBuffer(streamID)
 	if err != nil {
@@ -667,14 +664,14 @@ func (dpm *DataPresentationManagerImpl) WriteToStream(streamID uint64, data []by
 	} else {
 		writeErr = streamBuffer.Write(data, offset)
 	}
-	
+
 	// Update statistics
 	if writeErr == nil {
 		dpm.updateWriteStats(len(data), time.Since(startTime))
 	} else {
 		dpm.incrementErrorCount()
 	}
-	
+
 	return writeErr
 }
 
