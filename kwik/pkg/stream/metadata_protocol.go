@@ -9,7 +9,7 @@ import (
 // MetadataProtocol handles encapsulation and decapsulation of metadata for secondary streams
 type MetadataProtocol interface {
 	// Encapsulation des métadonnées
-	EncapsulateData(kwikStreamID uint64, offset uint64, data []byte) ([]byte, error)
+	EncapsulateData(kwikStreamID uint64, secondaryStreamID uint64, offset uint64, data []byte) ([]byte, error)
 	DecapsulateData(encapsulatedData []byte) (*StreamMetadata, []byte, error)
 	
 	// Batch processing des métadonnées
@@ -23,12 +23,13 @@ type MetadataProtocol interface {
 
 // StreamMetadata contains metadata information for secondary stream data
 type StreamMetadata struct {
-	KwikStreamID uint64      // Target KWIK stream ID
-	Offset       uint64      // Offset in the target KWIK stream
-	DataLength   uint32      // Length of the data payload
-	Timestamp    uint64      // Timestamp when metadata was created
-	SourcePathID string      // Source path identifier
-	MessageType  MetadataType // Type of metadata message
+	KwikStreamID      uint64      // Target KWIK stream ID
+	SecondaryStreamID uint64      // Source secondary stream ID
+	Offset            uint64      // Offset in the target KWIK stream
+	DataLength        uint32      // Length of the data payload
+	Timestamp         uint64      // Timestamp when metadata was created
+	SourcePathID      string      // Source path identifier
+	MessageType       MetadataType // Type of metadata message
 }
 
 // MetadataType defines the type of metadata message
@@ -119,7 +120,7 @@ const (
 )
 
 // EncapsulateData encapsulates data with metadata for transmission over secondary streams
-func (p *MetadataProtocolImpl) EncapsulateData(kwikStreamID uint64, offset uint64, data []byte) ([]byte, error) {
+func (p *MetadataProtocolImpl) EncapsulateData(kwikStreamID uint64, secondaryStreamID uint64, offset uint64, data []byte) ([]byte, error) {
 	if len(data) > int(p.maxDataLength) {
 		return nil, &MetadataProtocolError{
 			Code:    ErrMetadataDataTooLarge,
@@ -128,12 +129,13 @@ func (p *MetadataProtocolImpl) EncapsulateData(kwikStreamID uint64, offset uint6
 	}
 	
 	metadata := &StreamMetadata{
-		KwikStreamID: kwikStreamID,
-		Offset:       offset,
-		DataLength:   uint32(len(data)),
-		Timestamp:    uint64(time.Now().UnixNano()),
-		SourcePathID: "", // Will be set by caller if needed
-		MessageType:  MetadataTypeData,
+		KwikStreamID:      kwikStreamID,
+		SecondaryStreamID: secondaryStreamID,
+		Offset:            offset,
+		DataLength:        uint32(len(data)),
+		Timestamp:         uint64(time.Now().UnixNano()),
+		SourcePathID:      "", // Will be set by caller if needed
+		MessageType:       MetadataTypeData,
 	}
 	
 	return p.encodeFrame(metadata, data)

@@ -1248,6 +1248,7 @@ func (s *ServerSession) SendRawData(data []byte, pathID string, remoteStreamID .
 		// In a real scenario, the offset would be provided as an additional parameter
 		encapsulatedData, err := metadataProtocol.EncapsulateData(
 			remoteStreamID[0], // Target KWIK stream ID
+			1,                 // Secondary stream ID (placeholder, should be actual stream ID)
 			0,                 // Default offset (could be enhanced to accept offset parameter)
 			data,
 		)
@@ -1544,6 +1545,7 @@ func (s *ServerStream) writeWithAggregation(data []byte) (int, error) {
 	// Encapsulate data with metadata for aggregation
 	encapsulatedData, err := metadataProtocol.EncapsulateData(
 		s.remoteStreamID, // Target KWIK stream ID
+		s.id,             // Secondary stream ID
 		uint64(s.offset), // Current offset in the target stream
 		data,
 	)

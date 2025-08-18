@@ -64,7 +64,7 @@ func TestEncapsulateData(t *testing.T) {
 		offset := uint64(1024)
 		data := []byte("hello world")
 		
-		encapsulated, err := protocol.EncapsulateData(kwikStreamID, offset, data)
+		encapsulated, err := protocol.EncapsulateData(kwikStreamID, 1, offset, data)
 		
 		assert.NoError(t, err)
 		assert.NotNil(t, encapsulated)
@@ -83,7 +83,7 @@ func TestEncapsulateData(t *testing.T) {
 	t.Run("handles empty data", func(t *testing.T) {
 		protocol := createTestMetadataProtocol()
 		
-		encapsulated, err := protocol.EncapsulateData(100, 0, []byte{})
+		encapsulated, err := protocol.EncapsulateData(100, 1, 0, []byte{})
 		
 		assert.NoError(t, err)
 		assert.NotNil(t, encapsulated)
@@ -104,7 +104,7 @@ func TestEncapsulateData(t *testing.T) {
 			largeData[i] = byte(i % 256)
 		}
 		
-		encapsulated, err := protocol.EncapsulateData(100, 0, largeData)
+		encapsulated, err := protocol.EncapsulateData(100, 1, 0, largeData)
 		
 		assert.NoError(t, err)
 		assert.NotNil(t, encapsulated)
@@ -122,7 +122,7 @@ func TestEncapsulateData(t *testing.T) {
 		// Create data larger than the limit
 		tooLargeData := make([]byte, protocol.maxDataLength+1)
 		
-		_, err := protocol.EncapsulateData(100, 0, tooLargeData)
+		_, err := protocol.EncapsulateData(100, 1, 0, tooLargeData)
 		
 		assert.Error(t, err)
 		protocolErr, ok := err.(*MetadataProtocolError)
@@ -134,7 +134,7 @@ func TestEncapsulateData(t *testing.T) {
 		protocol := createTestMetadataProtocol()
 		
 		beforeTime := time.Now().UnixNano()
-		encapsulated, err := protocol.EncapsulateData(100, 0, []byte("test"))
+		encapsulated, err := protocol.EncapsulateData(100, 1, 0, []byte("test"))
 		afterTime := time.Now().UnixNano()
 		
 		require.NoError(t, err)
@@ -154,7 +154,7 @@ func TestDecapsulateData(t *testing.T) {
 		
 		// Create a valid frame first
 		originalData := []byte("test data")
-		encapsulated, err := protocol.EncapsulateData(100, 1024, originalData)
+		encapsulated, err := protocol.EncapsulateData(100, 1, 1024, originalData)
 		require.NoError(t, err)
 		
 		// Decapsulate it
@@ -439,7 +439,7 @@ func TestRoundTripEncodingDecoding(t *testing.T) {
 				offset := uint64(1024)
 				
 				// Encode
-				encoded, err := protocol.EncapsulateData(kwikStreamID, offset, tc.data)
+				encoded, err := protocol.EncapsulateData(kwikStreamID, 1, offset, tc.data)
 				require.NoError(t, err)
 				
 				// Decode
@@ -537,7 +537,7 @@ func TestFrameFormatValidation(t *testing.T) {
 		
 		// Create a valid frame
 		data := []byte("test")
-		encoded, err := protocol.EncapsulateData(100, 1024, data)
+		encoded, err := protocol.EncapsulateData(100, 1, 1024, data)
 		require.NoError(t, err)
 		
 		// Verify frame structure
@@ -588,7 +588,7 @@ func TestFrameFormatValidation(t *testing.T) {
 		maxData := bytes.Repeat([]byte("x"), 50000) // Use smaller size for test
 		
 		// Encode
-		encoded, err := protocol.EncapsulateData(100, 1024, maxData)
+		encoded, err := protocol.EncapsulateData(100, 1, 1024, maxData)
 		require.NoError(t, err)
 		
 		// Decode
@@ -608,7 +608,7 @@ func TestProtocolErrorHandling(t *testing.T) {
 		
 		// Create a valid frame first
 		originalData := []byte("test data")
-		validFrame, err := protocol.EncapsulateData(100, 1024, originalData)
+		validFrame, err := protocol.EncapsulateData(100, 1, 1024, originalData)
 		require.NoError(t, err)
 		
 		corruptionTests := []struct {
@@ -664,7 +664,7 @@ func TestProtocolErrorHandling(t *testing.T) {
 		
 		// Test data too large error
 		tooLargeData := make([]byte, protocol.maxDataLength+1)
-		_, err := protocol.EncapsulateData(100, 0, tooLargeData)
+		_, err := protocol.EncapsulateData(100, 1, 0, tooLargeData)
 		
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "exceeds maximum")
@@ -691,7 +691,7 @@ func TestPerformanceAndEfficiency(t *testing.T) {
 		
 		start := time.Now()
 		for i := 0; i < 1000; i++ {
-			_, err := protocol.EncapsulateData(100, uint64(i), smallData)
+			_, err := protocol.EncapsulateData(100, 1, uint64(i), smallData)
 			require.NoError(t, err)
 		}
 		duration := time.Since(start)

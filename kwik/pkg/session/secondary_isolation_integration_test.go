@@ -493,7 +493,7 @@ func TestPerformanceRequirements_Integration(t *testing.T) {
 	start := time.Now()
 	for i := 0; i < iterations; i++ {
 		// Encapsulate
-		encapsulated, err := protocol.EncapsulateData(uint64(i+1000), uint64(i*1024), testData)
+		encapsulated, err := protocol.EncapsulateData(uint64(i+1000), uint64(i+1), uint64(i*1024), testData)
 		require.NoError(t, err)
 
 		// Decapsulate
@@ -689,7 +689,7 @@ func TestErrorHandlingAndRecovery_Integration(t *testing.T) {
 
 	// Create valid frame first
 	validData := []byte("valid data")
-	validFrame, err := protocol.EncapsulateData(1000, 0, validData)
+	validFrame, err := protocol.EncapsulateData(1000, 1, 0, validData)
 	require.NoError(t, err)
 
 	// Corrupt the frame

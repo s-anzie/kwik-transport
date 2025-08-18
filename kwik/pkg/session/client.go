@@ -1642,8 +1642,9 @@ func (s *ClientSession) processEncapsulatedSecondaryData(pathID string, encapsul
 		pathID, metadata.KwikStreamID, metadata.Offset, len(data))
 
 	// Create SecondaryStreamData structure for aggregation
+	// Use the SecondaryStreamID from the metadata
 	secondaryData := &stream.SecondaryStreamData{
-		StreamID:     0, // Will be set by the aggregator based on the path
+		StreamID:     metadata.SecondaryStreamID, // Use the actual secondary stream ID from metadata
 		PathID:       pathID,
 		Data:         data,
 		Offset:       metadata.Offset,

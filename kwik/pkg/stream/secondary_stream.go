@@ -87,7 +87,7 @@ func (s *SecondaryStreamImpl) Write(data []byte) (int, error) {
 
 	// If the stream is mapped to a KWIK stream, encapsulate the data with metadata
 	if s.kwikStreamID != 0 && s.metadataProtocol != nil {
-		encapsulatedData, err := s.metadataProtocol.EncapsulateData(s.kwikStreamID, s.currentOffset, data)
+		encapsulatedData, err := s.metadataProtocol.EncapsulateData(s.kwikStreamID, s.streamID, s.currentOffset, data)
 		if err != nil {
 			return 0, &SecondaryStreamError{
 				Code:     ErrSecondaryStreamMapping,
