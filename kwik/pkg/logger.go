@@ -21,6 +21,7 @@ const (
 	LogLevelInfo
 	LogLevelWarn
 	LogLevelError
+	LogLevelSilent
 )
 
 // Logger interface for KWIK system logging
@@ -82,28 +83,28 @@ func NewLogger(level LogLevel) Logger {
 
 // Debug logs a debug message
 func (l *SimpleLogger) Debug(msg string, keysAndValues ...interface{}) {
-	if l.level <= LogLevelDebug {
+	if l.level <= LogLevelDebug && l.level != LogLevelSilent {
 		l.logWithLevel("DEBUG", msg, keysAndValues...)
 	}
 }
 
 // Info logs an info message
 func (l *SimpleLogger) Info(msg string, keysAndValues ...interface{}) {
-	if l.level <= LogLevelInfo {
+	if l.level <= LogLevelInfo && l.level != LogLevelSilent {
 		l.logWithLevel("INFO", msg, keysAndValues...)
 	}
 }
 
 // Warn logs a warning message
 func (l *SimpleLogger) Warn(msg string, keysAndValues ...interface{}) {
-	if l.level <= LogLevelWarn {
+	if l.level <= LogLevelWarn && l.level != LogLevelSilent {
 		l.logWithLevel("WARN", msg, keysAndValues...)
 	}
 }
 
 // Error logs an error message
 func (l *SimpleLogger) Error(msg string, keysAndValues ...interface{}) {
-	if l.level <= LogLevelError {
+	if l.level <= LogLevelError && l.level != LogLevelSilent {
 		l.logWithLevel("ERROR", msg, keysAndValues...)
 	}
 }
@@ -125,45 +126,47 @@ func (l LogLevel) String() string {
 		return "WARN"
 	case LogLevelError:
 		return "ERROR"
+	case LogLevelSilent:
+		return "SILENT"
 	default:
 		return "UNKNOWN"
 	}
 }
 // Enhanced logging methods with context
 func (l *SimpleLogger) DebugWithContext(ctx context.Context, msg string, keysAndValues ...interface{}) {
-	if l.level <= LogLevelDebug {
+	if l.level <= LogLevelDebug && l.level != LogLevelSilent {
 		l.logWithContext(ctx, "DEBUG", msg, keysAndValues...)
 	}
 }
 
 func (l *SimpleLogger) InfoWithContext(ctx context.Context, msg string, keysAndValues ...interface{}) {
-	if l.level <= LogLevelInfo {
+	if l.level <= LogLevelInfo && l.level != LogLevelSilent {
 		l.logWithContext(ctx, "INFO", msg, keysAndValues...)
 	}
 }
 
 func (l *SimpleLogger) WarnWithContext(ctx context.Context, msg string, keysAndValues ...interface{}) {
-	if l.level <= LogLevelWarn {
+	if l.level <= LogLevelWarn && l.level != LogLevelSilent {
 		l.logWithContext(ctx, "WARN", msg, keysAndValues...)
 	}
 }
 
 func (l *SimpleLogger) ErrorWithContext(ctx context.Context, msg string, keysAndValues ...interface{}) {
-	if l.level <= LogLevelError {
+	if l.level <= LogLevelError && l.level != LogLevelSilent {
 		l.logWithContext(ctx, "ERROR", msg, keysAndValues...)
 	}
 }
 
 // Error-specific logging methods
 func (l *SimpleLogger) LogError(err error, msg string, keysAndValues ...interface{}) {
-	if l.level <= LogLevelError {
+	if l.level <= LogLevelError && l.level != LogLevelSilent {
 		kvs := append(keysAndValues, "error", err.Error())
 		l.logWithLevel("ERROR", msg, kvs...)
 	}
 }
 
 func (l *SimpleLogger) LogKwikError(err *utils.KwikError, msg string, keysAndValues ...interface{}) {
-	if l.level <= LogLevelError {
+	if l.level <= LogLevelError && l.level != LogLevelSilent {
 		kvs := append(keysAndValues, 
 			"errorCode", err.Code,
 			"errorMessage", err.Message,
@@ -176,7 +179,7 @@ func (l *SimpleLogger) LogKwikError(err *utils.KwikError, msg string, keysAndVal
 }
 
 func (l *SimpleLogger) LogEnhancedError(err *utils.EnhancedKwikError, msg string, keysAndValues ...interface{}) {
-	if l.level <= LogLevelError {
+	if l.level <= LogLevelError && l.level != LogLevelSilent {
 		kvs := append(keysAndValues,
 			"errorCode", err.Code,
 			"errorMessage", err.Message,
@@ -262,7 +265,7 @@ func (l *SimpleLogger) WithStream(streamID uint64) Logger {
 
 // Performance logging
 func (l *SimpleLogger) LogPerformance(operation string, duration time.Duration, keysAndValues ...interface{}) {
-	if l.level <= LogLevelInfo {
+	if l.level <= LogLevelInfo && l.level != LogLevelSilent {
 		kvs := append(keysAndValues,
 			"operation", operation,
 			"duration_ms", duration.Milliseconds(),
@@ -272,7 +275,7 @@ func (l *SimpleLogger) LogPerformance(operation string, duration time.Duration, 
 }
 
 func (l *SimpleLogger) LogMetrics(metrics map[string]interface{}) {
-	if l.level <= LogLevelInfo {
+	if l.level <= LogLevelInfo && l.level != LogLevelSilent {
 		var kvs []interface{}
 		for key, value := range metrics {
 			kvs = append(kvs, key, value)

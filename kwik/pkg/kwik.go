@@ -67,6 +67,27 @@ type Config struct {
 	LogLevel        LogLevel
 	MetricsEnabled  bool
 	MetricsInterval time.Duration
+	
+	// Logging configuration
+	Logging *LogConfig
+}
+
+// LogConfig holds logging configuration
+type LogConfig struct {
+	GlobalLevel LogLevel
+	Format      string
+	Output      string
+	Components  map[string]LogLevel
+}
+
+// DefaultLogConfig returns default logging configuration
+func DefaultLogConfig() *LogConfig {
+	return &LogConfig{
+		GlobalLevel: LogLevelInfo,
+		Format:      "text",
+		Output:      "stdout",
+		Components:  make(map[string]LogLevel),
+	}
 }
 
 // DefaultConfig returns default KWIK configuration
@@ -90,6 +111,7 @@ func DefaultConfig() *Config {
 		LogLevel:                LogLevelInfo,
 		MetricsEnabled:          true,
 		MetricsInterval:         30 * time.Second,
+		Logging:                 DefaultLogConfig(),
 	}
 }
 
@@ -113,7 +135,13 @@ func New(config *Config) (*KWIK, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Create enhanced logger with error recovery
-	logger := NewEnhancedLogger(config.LogLevel, "KWIK-SYSTEM")
+	var logLevel LogLevel
+	if config.Logging != nil {
+		logLevel = config.Logging.GlobalLevel
+	} else {
+		logLevel = config.LogLevel
+	}
+	logger := NewEnhancedLogger(logLevel, "KWIK-SYSTEM")
 
 	// Create metrics system
 	var metrics *SystemMetrics

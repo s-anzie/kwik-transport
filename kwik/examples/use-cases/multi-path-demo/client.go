@@ -16,7 +16,7 @@ func main() {
 	// 1. Il dial avec logs silencieux
 	fmt.Println("[CLIENT] Connexion au serveur primaire localhost:4433...")
 	config := kwik.DefaultConfig()
-	config.LoggingConfig.GlobalLevel = kwik.LogLevelSilent
+	config.Logging.GlobalLevel = kwik.LogLevelSilent
 	session, err := kwik.Dial(context.Background(), "localhost:4433", config)
 	if err != nil {
 		log.Fatal(err)

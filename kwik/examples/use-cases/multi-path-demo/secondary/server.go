@@ -16,7 +16,7 @@ func main() {
 	
 	config := kwik.DefaultConfig()
 	config.MaxPathsPerSession = 5
-	config.LoggingConfig.GlobalLevel = kwik.LogLevelSilent
+	config.Logging.GlobalLevel = kwik.LogLevelSilent
 
 	listener, err := kwik.Listen("localhost:4434", config)
 	if err != nil {
