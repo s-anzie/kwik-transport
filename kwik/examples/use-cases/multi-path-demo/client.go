@@ -8,49 +8,77 @@ import (
 	"time"
 
 	kwik "kwik/pkg"
-	"strings"
 )
 
 func main() {
-	// 1. Il dial
-	session, err := kwik.Dial(context.Background(), "localhost:4433", nil)
+	fmt.Println("\n\n[CLIENT] Démarrage du client multi-path demo")
+	
+	// 1. Il dial avec logs silencieux
+	fmt.Println("[CLIENT] Connexion au serveur primaire localhost:4433...")
+	config := kwik.DefaultConfig()
+	config.LoggingConfig.GlobalLevel = kwik.LogLevelSilent
+	session, err := kwik.Dial(context.Background(), "localhost:4433", config)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer session.Close()
+	defer func() {
+		fmt.Println("[CLIENT] Fermeture de la session")
+		session.Close()
+	}()
+	
+	fmt.Println("[CLIENT] Connexion établie avec succès")
 
 	// 2. Il envoie un message
+	fmt.Println("[CLIENT] Ouverture d'un stream...")
 	stream, err := session.OpenStreamSync(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer stream.Close()
+	defer func() {
+		fmt.Printf("[CLIENT] Fermeture du stream %d\n", stream.StreamID())
+		stream.Close()
+	}()
+	
+	fmt.Printf("[CLIENT] Stream %d ouvert avec succès\n", stream.StreamID())
 
 	message1 := "bonjour"
+	fmt.Printf("[CLIENT] Envoi du message: '%s'\n", message1)
 	_, err = stream.Write([]byte(message1))
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("%s\n", message1)
+	fmt.Println("[CLIENT] Message envoyé avec succès")
 
 	// 3. Il attend d'avoir 2 chemins au moins
+	fmt.Println("[CLIENT] Attente de l'établissement de chemins multiples...")
+	pathCount := 0
 	for {
 		paths := session.GetActivePaths()
+		newPathCount := len(paths)
+		if newPathCount != pathCount {
+			fmt.Printf("[CLIENT] Nombre de chemins actifs: %d\n", newPathCount)
+			pathCount = newPathCount
+		}
 		if len(paths) >= 2 {
+			fmt.Println("[CLIENT] Chemins multiples établis!")
 			break
 		}
 		time.Sleep(1 * time.Second)
 	}
 
 	// 4. Boucle de lecture et d'écriture avec comptage des messages
+	fmt.Println("[CLIENT] Début de la lecture des réponses...")
 	buffer := make([]byte, 1024)
 	messagesReceived := 0
 	maxMessages := 2  // Attendre 2 messages: primaire + secondaire
 
 	for messagesReceived < maxMessages {
+		fmt.Printf("[CLIENT] Tentative de lecture %d/%d...\n", messagesReceived+1, maxMessages)
+		
 		// Lecture avec timeout pour éviter de bloquer indéfiniment
 		n, err := stream.Read(buffer)
 		if err != nil {
+			fmt.Printf("[CLIENT] Erreur de lecture ou pas de données: %v\n", err)
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
@@ -58,17 +86,14 @@ func main() {
 		// Message reçu avec succès
 		messagesReceived++
 		response := string(buffer[:n])
-		fmt.Printf("%s\n", response)
+		fmt.Printf("[CLIENT] Message %d reçu: '%s'\n", messagesReceived, response)
 
 		// Petite pause entre les messages
 		time.Sleep(500 * time.Millisecond)
 	}
 
 	// 5. Il attend un peu et se termine
+	fmt.Println("[CLIENT] Tous les messages reçus, attente finale...")
 	time.Sleep(2 * time.Second)
-}
-
-// contains vérifie si une chaîne contient une sous-chaîne (insensible à la casse)
-func contains(text, substr string) bool {
-	return strings.Contains(strings.ToLower(text), strings.ToLower(substr))
+	fmt.Println("[CLIENT] Fin du client")
 }
