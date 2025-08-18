@@ -18,6 +18,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// MockDataLogger implements DataLogger for testing
+type MockDataLogger struct{}
+
+func (m *MockDataLogger) Debug(msg string, keysAndValues ...interface{}) {}
+func (m *MockDataLogger) Info(msg string, keysAndValues ...interface{})  {}
+func (m *MockDataLogger) Warn(msg string, keysAndValues ...interface{})  {}
+func (m *MockDataLogger) Error(msg string, keysAndValues ...interface{}) {}
+func (m *MockDataLogger) Critical(msg string, keysAndValues ...interface{}){}
+
 // Package-level counter for mock stream IDs
 var mockStreamIDCounter uint64 = 0
 var mockStreamIDMutex sync.Mutex
@@ -359,7 +368,8 @@ func TestTransparentAggregation_Integration(t *testing.T) {
 	session.state = SessionStateActive
 
 	// Create aggregator for testing
-	aggregator := data.NewSecondaryStreamAggregator()
+	mockLogger := &MockDataLogger{}
+	aggregator := data.NewSecondaryStreamAggregator(mockLogger)
 
 	// Create primary stream
 	primaryStream, err := session.OpenStreamSync(context.Background())

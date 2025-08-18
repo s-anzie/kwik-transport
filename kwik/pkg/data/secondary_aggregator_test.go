@@ -10,8 +10,19 @@ import (
 
 // Test helper functions
 func createTestAggregator() *SecondaryStreamAggregator {
-	return NewSecondaryStreamAggregator()
+	// Create a mock logger for testing
+	mockLogger := &MockSecondaryLogger{}
+	return NewSecondaryStreamAggregator(mockLogger)
 }
+
+// MockSecondaryLogger implements SecondaryLogger and DataLogger for testing
+type MockSecondaryLogger struct{}
+
+func (m *MockSecondaryLogger) Debug(msg string, args ...interface{}) {}
+func (m *MockSecondaryLogger) Info(msg string, args ...interface{})  {}
+func (m *MockSecondaryLogger) Warn(msg string, args ...interface{})  {}
+func (m *MockSecondaryLogger) Error(msg string, args ...interface{}) {}
+func (m *MockSecondaryLogger) Critical(msg string, args ...interface{}) {}
 
 func createTestSecondaryData(streamID, kwikStreamID, offset uint64, pathID string, data []byte) *SecondaryStreamData {
 	return &SecondaryStreamData{
@@ -27,7 +38,8 @@ func createTestSecondaryData(streamID, kwikStreamID, offset uint64, pathID strin
 
 // Tests for NewSecondaryStreamAggregator
 func TestNewSecondaryStreamAggregator(t *testing.T) {
-	aggregator := NewSecondaryStreamAggregator()
+	mockLogger := &MockSecondaryLogger{}
+	aggregator := NewSecondaryStreamAggregator(mockLogger)
 	
 	assert.NotNil(t, aggregator)
 	assert.NotNil(t, aggregator.secondaryStreams)
@@ -531,7 +543,8 @@ func TestOffsetConflictResolution(t *testing.T) {
 func TestPerformanceAndLimits(t *testing.T) {
 	t.Run("respects maximum secondary streams limit", func(t *testing.T) {
 		// Create aggregator with low limit for testing
-		aggregator := NewSecondaryStreamAggregator()
+		mockLogger := &MockSecondaryLogger{}
+		aggregator := NewSecondaryStreamAggregator(mockLogger)
 		aggregator.config.MaxSecondaryStreams = 3
 		
 		// Add streams up to limit
@@ -549,7 +562,8 @@ func TestPerformanceAndLimits(t *testing.T) {
 	})
 	
 	t.Run("respects maximum pending data limit", func(t *testing.T) {
-		aggregator := NewSecondaryStreamAggregator()
+		mockLogger := &MockSecondaryLogger{}
+		aggregator := NewSecondaryStreamAggregator(mockLogger)
 		aggregator.config.MaxPendingData = 2
 		
 		// Add out-of-order data up to limit

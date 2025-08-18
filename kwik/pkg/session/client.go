@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -17,6 +18,19 @@ import (
 	"github.com/quic-go/quic-go"
 	"google.golang.org/protobuf/proto"
 )
+
+// DefaultSessionLogger provides a simple logger implementation for session
+type DefaultSessionLogger struct{}
+
+func (d *DefaultSessionLogger) Debug(msg string, keysAndValues ...interface{}) {}
+func (d *DefaultSessionLogger) Info(msg string, keysAndValues ...interface{})  {}
+func (d *DefaultSessionLogger) Warn(msg string, keysAndValues ...interface{})  {}
+func (d *DefaultSessionLogger) Error(msg string, keysAndValues ...interface{}) {
+	log.Printf("[ERROR] %s", msg)
+}
+func (d *DefaultSessionLogger) Critical(msg string, keysAndValues ...interface{}) {
+	log.Printf("[CRITICAL] %s", msg)
+}
 
 // ClientSession implements the Session interface for KWIK clients
 // It maintains QUIC compatibility while managing multiple paths internally
@@ -106,8 +120,8 @@ func NewClientSession(pathManager transport.PathManager, config *SessionConfig) 
 		nextStreamID:            1,                                         // Start stream IDs from 1 (QUIC-compatible)
 		streams:                 make(map[uint64]*stream.ClientStream),
 		secondaryStreamHandler:  stream.NewSecondaryStreamHandler(nil), // Use default config
-		streamAggregator:        data.NewDataAggregator(),
-		secondaryAggregator:     data.NewSecondaryStreamAggregator(),  // Initialize secondary stream aggregator
+		streamAggregator:        data.NewDataAggregator(&DefaultSessionLogger{}),
+		secondaryAggregator:     data.NewSecondaryStreamAggregator(&DefaultSessionLogger{}),  // Initialize secondary stream aggregator
 		metadataProtocol:        stream.NewMetadataProtocol(),         // Initialize metadata protocol
 		dataPresentationManager: dataPresentationManager,              // Initialize data presentation manager
 		acceptChan:              make(chan *stream.ClientStream, 100), // Buffered channel
@@ -1590,7 +1604,7 @@ func (s *ClientSession) processSecondaryStreamData(pathID string, quicStream qui
 				continue // No data available
 			}
 
-			fmt.Printf("DEBUG: Client received %d bytes from secondary stream on path %s: %s\n", pathID, n, string(buffer[:n]))
+			fmt.Printf("DEBUG: Client received %s bytes from secondary stream on path %d: %s\n", pathID, n, string(buffer[:n]))
 
 			// Process the encapsulated data according to the metadata protocol
 			err = s.processEncapsulatedSecondaryData(pathID, buffer[:n])

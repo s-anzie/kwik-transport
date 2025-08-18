@@ -14,6 +14,15 @@ import (
 	"kwik/pkg/data"
 )
 
+// MockDataLogger implements DataLogger for testing
+type MockDataLogger struct{}
+
+func (m *MockDataLogger) Debug(msg string, keysAndValues ...interface{}) {}
+func (m *MockDataLogger) Info(msg string, keysAndValues ...interface{})  {}
+func (m *MockDataLogger) Warn(msg string, keysAndValues ...interface{})  {}
+func (m *MockDataLogger) Error(msg string, keysAndValues ...interface{}) {}
+func (m *MockDataLogger) Critical(msg string, keysAndValues ...interface{}){}
+
 // BenchmarkSecondaryStreamHandlerOperations benchmarks core secondary stream handler operations
 func BenchmarkSecondaryStreamHandlerOperations(b *testing.B) {
 	// Create handler with higher limits for benchmarking
@@ -206,7 +215,9 @@ func BenchmarkMetadataProtocolOperations(b *testing.B) {
 
 // BenchmarkSecondaryAggregatorOperations benchmarks secondary stream aggregation operations
 func BenchmarkSecondaryAggregatorOperations(b *testing.B) {
-	aggregator := data.NewSecondaryStreamAggregator()
+	// Create a mock logger for testing
+	mockLogger := &MockDataLogger{}
+	aggregator := data.NewSecondaryStreamAggregator(mockLogger)
 
 	b.Run("AggregateSecondaryData", func(b *testing.B) {
 		// Pre-setup stream mappings
@@ -302,7 +313,8 @@ func BenchmarkConcurrentOperations(b *testing.B) {
 	}
 	handler := NewSecondaryStreamHandler(config)
 	protocol := NewMetadataProtocol()
-	aggregator := data.NewSecondaryStreamAggregator()
+	mockLogger := &MockDataLogger{}
+	aggregator := data.NewSecondaryStreamAggregator(mockLogger)
 
 	b.Run("ConcurrentStreamHandling", func(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
@@ -452,7 +464,8 @@ func BenchmarkMemoryUsage(b *testing.B) {
 	})
 
 	b.Run("AggregatorMemoryEfficiency", func(b *testing.B) {
-		aggregator := data.NewSecondaryStreamAggregator()
+		mockLogger := &MockDataLogger{}
+		aggregator := data.NewSecondaryStreamAggregator(mockLogger)
 
 		var m1, m2 runtime.MemStats
 		runtime.GC()
@@ -497,7 +510,8 @@ func BenchmarkMemoryUsage(b *testing.B) {
 // BenchmarkThroughputEfficiency benchmarks throughput efficiency and validates performance requirements
 func BenchmarkThroughputEfficiency(b *testing.B) {
 	b.Run("AggregationThroughput", func(b *testing.B) {
-		aggregator := data.NewSecondaryStreamAggregator()
+		mockLogger := &MockDataLogger{}
+		aggregator := data.NewSecondaryStreamAggregator(mockLogger)
 
 		// Setup streams
 		numStreams := 100
@@ -587,7 +601,8 @@ func BenchmarkEndToEndLatency(b *testing.B) {
 	}
 	handler := NewSecondaryStreamHandler(config)
 	protocol := NewMetadataProtocol()
-	aggregator := data.NewSecondaryStreamAggregator()
+	mockLogger := &MockDataLogger{}
+	aggregator := data.NewSecondaryStreamAggregator(mockLogger)
 
 	testData := make([]byte, 1024)
 	rand.Read(testData)

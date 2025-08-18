@@ -37,6 +37,9 @@ type SecondaryStreamAggregator struct {
 	workerPool    *AggregationWorkerPool
 	batchChannel  chan []*SecondaryStreamData
 	resultChannel chan *AggregationResult
+	
+	// Logger
+	logger SecondaryLogger
 }
 
 // DataPresentationManagerInterface defines the interface for presentation manager integration
@@ -44,6 +47,15 @@ type DataPresentationManagerInterface interface {
 	WriteToStream(streamID uint64, data []byte, offset uint64, metadata interface{}) error
 	CreateStreamBuffer(streamID uint64, metadata interface{}) error
 	IsBackpressureActive(streamID uint64) bool
+}
+
+// SecondaryLogger interface for logging in secondary aggregator
+type SecondaryLogger interface {
+	Debug(msg string, args ...interface{})
+	Info(msg string, args ...interface{})
+	Warn(msg string, args ...interface{})
+	Error(msg string, args ...interface{})
+	Critical(msg string, args ...interface{})
 }
 
 // SecondaryStreamData is defined in interfaces.go
@@ -149,7 +161,7 @@ type ProcessedSecondaryData struct {
 }
 
 // NewSecondaryStreamAggregator creates a new secondary stream aggregator
-func NewSecondaryStreamAggregator() *SecondaryStreamAggregator {
+func NewSecondaryStreamAggregator(logger SecondaryLogger) *SecondaryStreamAggregator {
 	config := &SecondaryAggregatorConfig{
 		MaxSecondaryStreams:      1000,
 		MaxPendingData:           100,
@@ -172,6 +184,7 @@ func NewSecondaryStreamAggregator() *SecondaryStreamAggregator {
 		// metrics removed to avoid import cycle
 		batchChannel:  make(chan []*SecondaryStreamData, 100),
 		resultChannel: make(chan *AggregationResult, 100),
+		logger:        logger,
 	}
 
 	// Initialize worker pool if parallel processing is enabled
@@ -427,6 +440,9 @@ func (ssa *SecondaryStreamAggregator) GetSecondaryStreamStats() *SecondaryAggreg
 
 // validateSecondaryData validates secondary stream data
 func (ssa *SecondaryStreamAggregator) validateSecondaryData(data *SecondaryStreamData) error {
+	if data.StreamID == 0 {
+		return utils.NewKwikError(utils.ErrInvalidFrame, "invalid secondary stream ID: cannot be 0", nil)
+	}
 	if data.KwikStreamID == 0 {
 		return utils.NewKwikError(utils.ErrInvalidFrame, "invalid KWIK stream ID: cannot be 0", nil)
 	}

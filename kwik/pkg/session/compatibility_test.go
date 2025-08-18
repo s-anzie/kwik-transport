@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"kwik/pkg/data"
+	"kwik/pkg/presentation"
+	"kwik/pkg/stream"
 	"kwik/pkg/transport"
 
 	"github.com/stretchr/testify/assert"
@@ -1035,7 +1038,7 @@ func TestSecondaryStreamIsolation_PerformanceCompatibility(t *testing.T) {
 	// Benchmark without secondary stream isolation
 	config1 := DefaultSessionConfig()
 	// Secondary stream isolation behavior is controlled internally
-	session1 := NewClientSession(pathManager, config1)
+	session1 := createSessionWithLargeWindow(pathManager, config1)
 	
 	mockConn1 := NewMockQuicConnection("127.0.0.1:8080", "127.0.0.1:0")
 	primaryPath1, err := pathManager.CreatePathFromConnection(mockConn1)
@@ -1046,7 +1049,7 @@ func TestSecondaryStreamIsolation_PerformanceCompatibility(t *testing.T) {
 	// Benchmark with secondary stream isolation
 	config2 := DefaultSessionConfig()
 	// Secondary stream isolation is enabled by default in the implementation
-	session2 := NewClientSession(pathManager, config2)
+	session2 := createSessionWithLargeWindow(pathManager, config2)
 	
 	mockConn2 := NewMockQuicConnection("127.0.0.1:8081", "127.0.0.1:0")
 	primaryPath2, err := pathManager.CreatePathFromConnection(mockConn2)
@@ -1348,4 +1351,39 @@ func TestSecondaryStreamIsolation_ExistingTestsStillPass(t *testing.T) {
 	assert.Contains(t, err.Error(), "session is not active")
 	
 	t.Log("Existing tests compatibility verified successfully")
+}
+
+// Helper function to create a session with a large receive window for testing
+func createSessionWithLargeWindow(pathManager transport.PathManager, config *SessionConfig) *ClientSession {
+	// Create a custom presentation config with a large window
+	presentationConfig := presentation.DefaultPresentationConfig()
+	presentationConfig.ReceiveWindowSize = 200 * 1024 * 1024 // 200MB window
+	presentationConfig.DefaultStreamBufferSize = 1024 * 1024 // 1MB per stream
+	
+	// Create the data presentation manager with custom config
+	dataPresentationManager := presentation.NewDataPresentationManager(presentationConfig)
+	
+	// Create session manually with custom data presentation manager
+	sessionID := fmt.Sprintf("test-session-%d", time.Now().UnixNano())
+	ctx, cancel := context.WithCancel(context.Background())
+	
+	session := &ClientSession{
+		sessionID:               sessionID,
+		pathManager:             pathManager,
+		isClient:                true,
+		state:                   SessionStateConnecting,
+		createdAt:               time.Now(),
+		authManager:             NewAuthenticationManager(sessionID, true),
+		nextStreamID:            1,
+		streams:                 make(map[uint64]*stream.ClientStream),
+		config:                  config,
+		secondaryAggregator:     data.NewSecondaryStreamAggregator(&DefaultSessionLogger{}),
+		metadataProtocol:        stream.NewMetadataProtocol(),
+		dataPresentationManager: dataPresentationManager,
+		acceptChan:              make(chan *stream.ClientStream, 100),
+		ctx:                     ctx,
+		cancel:                  cancel,
+	}
+	
+	return session
 }

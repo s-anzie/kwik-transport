@@ -10,8 +10,18 @@ import (
 
 // Test helper functions
 func createTestDataAggregator() *DataAggregatorImpl {
-	return NewDataAggregator().(*DataAggregatorImpl)
+	mockLogger := &MockDataLogger{}
+	return NewDataAggregator(mockLogger).(*DataAggregatorImpl)
 }
+
+// MockDataLogger implements DataLogger for testing
+type MockDataLogger struct{}
+
+func (m *MockDataLogger) Debug(msg string, keysAndValues ...interface{}) {}
+func (m *MockDataLogger) Info(msg string, keysAndValues ...interface{})  {}
+func (m *MockDataLogger) Warn(msg string, keysAndValues ...interface{})  {}
+func (m *MockDataLogger) Error(msg string, keysAndValues ...interface{}) {}
+func (m *MockDataLogger) Critical(msg string, keysAndValues ...interface{}) {}
 
 func createTestSecondaryStreamData(streamID, kwikStreamID, offset uint64, pathID string, data []byte) *SecondaryStreamData {
 	return &SecondaryStreamData{

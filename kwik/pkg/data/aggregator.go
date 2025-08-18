@@ -8,6 +8,15 @@ import (
 	"kwik/internal/utils"
 )
 
+// DataLogger interface to avoid circular imports
+type DataLogger interface {
+	Debug(msg string, keysAndValues ...interface{})
+	Info(msg string, keysAndValues ...interface{})
+	Warn(msg string, keysAndValues ...interface{})
+	Error(msg string, keysAndValues ...interface{})
+	Critical(msg string, keysAndValues ...interface{})
+}
+
 // DataAggregatorImpl implements the DataAggregator interface
 // It handles aggregation of data from multiple paths for client-side sessions
 type DataAggregatorImpl struct {
@@ -51,11 +60,11 @@ type AggregatedStreamState struct {
 }
 
 // NewDataAggregator creates a new data aggregator
-func NewDataAggregator() DataAggregator {
+func NewDataAggregator(logger DataLogger) DataAggregator {
 	return &DataAggregatorImpl{
 		pathStreams:         make(map[string]DataStream),
 		aggregatedStreams:   make(map[uint64]*AggregatedStreamState),
-		secondaryAggregator: NewSecondaryStreamAggregator(),
+		secondaryAggregator: NewSecondaryStreamAggregator(logger),
 		offsetManager:       NewMultiSourceOffsetManager(),
 		streamMappings:      make(map[uint64]uint64),
 		config: &AggregatorConfig{

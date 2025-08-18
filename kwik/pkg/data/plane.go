@@ -3,6 +3,7 @@ package data
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -10,6 +11,19 @@ import (
 	"kwik/internal/utils"
 	"kwik/proto/data"
 )
+
+// DefaultDataLogger provides a simple logger implementation for data plane
+type DefaultDataLogger struct{}
+
+func (d *DefaultDataLogger) Debug(msg string, keysAndValues ...interface{}) {}
+func (d *DefaultDataLogger) Info(msg string, keysAndValues ...interface{})  {}
+func (d *DefaultDataLogger) Warn(msg string, keysAndValues ...interface{})  {}
+func (d *DefaultDataLogger) Error(msg string, keysAndValues ...interface{}) {
+	log.Printf("[ERROR] %s", msg)
+}
+func (d *DefaultDataLogger) Critical(msg string, keysAndValues ...interface{}) {
+	log.Printf("[CRITICAL] %s", msg)
+}
 
 // DataPlaneImpl implements the DataPlane interface
 // It manages data plane operations for application data transmission
@@ -128,7 +142,8 @@ func NewDataPlane(config *DataPlaneConfig) *DataPlaneImpl {
 
 	// Initialize components
 	if config.AggregationEnabled {
-		dp.aggregator = NewDataAggregator()
+		defaultLogger := &DefaultDataLogger{}
+		dp.aggregator = NewDataAggregator(defaultLogger)
 	}
 
 	dp.scheduler = NewDataScheduler()

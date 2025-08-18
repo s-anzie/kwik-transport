@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -15,6 +16,19 @@ import (
 	"kwik/pkg/transport"
 	"kwik/proto/control"
 )
+
+// DefaultServerLogger provides a simple logger implementation for server session
+type DefaultServerLogger struct{}
+
+func (d *DefaultServerLogger) Debug(msg string, keysAndValues ...interface{}) {}
+func (d *DefaultServerLogger) Info(msg string, keysAndValues ...interface{})  {}
+func (d *DefaultServerLogger) Warn(msg string, keysAndValues ...interface{})  {}
+func (d *DefaultServerLogger) Error(msg string, keysAndValues ...interface{}) {
+	log.Printf("[ERROR] %s", msg)
+}
+func (d *DefaultServerLogger) Critical(msg string, keysAndValues ...interface{}) {
+	log.Printf("[CRITICAL] %s", msg)
+}
 
 // ServerRole defines the role of a server in the KWIK architecture
 type ServerRole int
@@ -117,7 +131,7 @@ func NewServerSession(sessionID string, pathManager transport.PathManager, confi
 		serverRole:           ServerRolePrimary,                          // Default to primary role
 		streams:              make(map[uint64]*ServerStream),
 		acceptChan:           make(chan *ServerStream, 100),
-		secondaryAggregator:  data.NewSecondaryStreamAggregator(),        // Initialize secondary stream aggregator
+		secondaryAggregator:  data.NewSecondaryStreamAggregator(&DefaultServerLogger{}),        // Initialize secondary stream aggregator
 		metadataProtocol:     stream.NewMetadataProtocol(),               // Initialize metadata protocol
 		ctx:                  ctx,
 		cancel:               cancel,
