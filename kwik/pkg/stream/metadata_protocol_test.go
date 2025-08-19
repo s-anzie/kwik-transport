@@ -706,7 +706,7 @@ func TestPerformanceAndEfficiency(t *testing.T) {
 		// Pre-create encoded frames
 		frames := make([][]byte, 1000)
 		for i := 0; i < 1000; i++ {
-			frame, err := protocol.EncapsulateData(100, uint64(i), []byte("hello"))
+			frame, err := protocol.EncapsulateData(100, uint64(i), 0, []byte("hello"))
 			require.NoError(t, err)
 			frames[i] = frame
 		}
@@ -739,7 +739,7 @@ func TestPerformanceAndEfficiency(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				data := bytes.Repeat([]byte("x"), tc.dataSize)
 				
-				encoded, err := protocol.EncapsulateData(100, 0, data)
+				encoded, err := protocol.EncapsulateData(100, 1, 0, data)
 				require.NoError(t, err)
 				
 				overhead := len(encoded) - len(data)
@@ -776,7 +776,7 @@ func TestMetadataProtocol_ConcurrentAccess(t *testing.T) {
 					offset := uint64(j * 10)
 					data := []byte("test data")
 					
-					_, err := protocol.EncapsulateData(kwikStreamID, offset, data)
+					_, err := protocol.EncapsulateData(kwikStreamID, 1, offset, data)
 					assert.NoError(t, err)
 				}
 			}(i)
@@ -796,7 +796,7 @@ func TestMetadataProtocol_ConcurrentAccess(t *testing.T) {
 		frames := make([][]byte, numFrames)
 		
 		for i := 0; i < numFrames; i++ {
-			frame, err := protocol.EncapsulateData(uint64(i+1), uint64(i*10), []byte("test"))
+			frame, err := protocol.EncapsulateData(uint64(i+1), 1, uint64(i*10), []byte("test"))
 			require.NoError(t, err)
 			frames[i] = frame
 		}
@@ -844,7 +844,7 @@ func TestMetadataProtocol_ConcurrentAccess(t *testing.T) {
 						// Encapsulate
 						kwikStreamID := uint64(workerID*operationsPerWorker + j + 1)
 						data := []byte("test data")
-						_, err := protocol.EncapsulateData(kwikStreamID, uint64(j), data)
+						_, err := protocol.EncapsulateData(kwikStreamID, 1, uint64(j), data)
 						assert.NoError(t, err)
 					} else {
 						// Create and validate metadata
@@ -869,7 +869,7 @@ func TestEdgeCasesAndBoundaryConditions(t *testing.T) {
 		protocol := createTestMetadataProtocol()
 		
 		// Test with zero offset
-		encoded, err := protocol.EncapsulateData(100, 0, []byte("test"))
+		encoded, err := protocol.EncapsulateData(100, 1, 0, []byte("test"))
 		require.NoError(t, err)
 		
 		metadata, data, err := protocol.DecapsulateData(encoded)
@@ -884,7 +884,7 @@ func TestEdgeCasesAndBoundaryConditions(t *testing.T) {
 		
 		// Test with maximum offset
 		maxOffset := uint64(^uint64(0)) // Maximum uint64 value
-		encoded, err := protocol.EncapsulateData(100, maxOffset, []byte("test"))
+		encoded, err := protocol.EncapsulateData(100, 1, maxOffset, []byte("test"))
 		require.NoError(t, err)
 		
 		metadata, data, err := protocol.DecapsulateData(encoded)
@@ -937,7 +937,7 @@ func TestEdgeCasesAndBoundaryConditions(t *testing.T) {
 			binaryData[i] = byte(i)
 		}
 		
-		encoded, err := protocol.EncapsulateData(100, 1024, binaryData)
+		encoded, err := protocol.EncapsulateData(100, 1, 1024, binaryData)
 		require.NoError(t, err)
 		
 		metadata, decodedData, err := protocol.DecapsulateData(encoded)

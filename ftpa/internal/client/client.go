@@ -595,27 +595,23 @@ func (c *KwikFileTransferClient) sendChunkRetryRequest(retryRequest types.ChunkR
 		return
 	}
 
-	// Send via raw data to primary path (control channel)
-	activePaths := c.session.GetActivePaths()
-	if len(activePaths) == 0 {
+	// Send retry request over a KWIK stream (client should not use SendRawData)
+	ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
+	defer cancel()
+
+	stream, err := c.session.OpenStreamSync(ctx)
+	if err != nil {
+		return
+	}
+	defer stream.Close()
+
+	_, err = stream.Write(requestData)
+	if err != nil {
 		return
 	}
 
-	// Find primary path
-	var primaryPathID string
-	for _, path := range activePaths {
-		if path.IsPrimary {
-			primaryPathID = path.PathID
-			break
-		}
-	}
-
-	if primaryPathID != "" {
-		c.session.SendRawData(requestData, primaryPathID)
-
-		// Mark chunk as requested
-		c.chunkManager.MarkChunkRequested(retryRequest.Filename, retryRequest.SequenceNum)
-	}
+	// Mark chunk as requested after successfully sending the retry request
+	c.chunkManager.MarkChunkRequested(retryRequest.Filename, retryRequest.SequenceNum)
 }
 
 // handleDownloadError handles errors during download

@@ -111,7 +111,7 @@ func (ms *MockSession) AcceptStream(ctx context.Context) (session.Stream, error)
 	}
 }
 
-func (ms *MockSession) SendRawData(data []byte, pathID string) error {
+func (ms *MockSession) SendRawData(data []byte, pathID string, remoteStreamID uint64) error {
 	ms.mutex.Lock()
 	defer ms.mutex.Unlock()
 
@@ -351,3 +351,15 @@ func (ms *MockSession) SetSendRawError(err error) {
 	defer ms.mutex.Unlock()
 	ms.sendRawErr = err
 }
+
+func (s *MockStream) GetOffset () int {
+	return 0;
+}
+
+func (s *MockStream) RemoteStreamID () uint64 {
+	return 0;
+}
+
+func (s *MockStream) SetOffset (int) error { return nil }
+
+func (s *MockStream) SetRemoteStreamID (uint64) error { return nil }

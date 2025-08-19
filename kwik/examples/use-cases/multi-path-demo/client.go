@@ -2,11 +2,15 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
-	"time"
+	"os"
+	"path/filepath"
 
+	"kwik/examples/use-cases/multi-path-demo/types"
 	kwik "kwik/pkg"
 )
 
@@ -41,65 +45,78 @@ func main() {
 
 	fmt.Printf("[CLIENT] Stream %d ouvert avec succès\n", stream.StreamID())
 	fmt.Printf("[CLIENT] Stream KWIK source: %d\n", stream.StreamID())
-	message1 := "bonjour"
-	fmt.Printf("[CLIENT] Envoi du message: '%s'\n", message1)
-	_, err = stream.Write([]byte(message1))
+	// Transforme le message initial en une requête de fichier JSON
+	req := types.Request{Type: "file", Resource: "sample.txt"}
+	payload, err := json.Marshal(req)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("[CLIENT] Message envoyé avec succès")
-
-	// 3. Il attend d'avoir 2 chemins au moins
-	fmt.Println("[CLIENT] Attente de l'établissement de chemins multiples...")
-	pathCount := 0
-	for {
-		paths := session.GetActivePaths()
-		newPathCount := len(paths)
-		if newPathCount != pathCount {
-			fmt.Printf("[CLIENT] Nombre de chemins actifs: %d\n", newPathCount)
-			pathCount = newPathCount
-		}
-		if len(paths) >= 2 {
-			fmt.Println("[CLIENT] Chemins multiples établis!")
-			break
-		}
-		time.Sleep(1 * time.Second)
+	fmt.Printf("[CLIENT] Envoi de la requête de fichier: %s\n", string(payload))
+	_, err = stream.Write(payload)
+	if err != nil {
+		log.Fatal(err)
 	}
+	fmt.Println("[CLIENT] Requête envoyée, attente de la réponse...")
 
-	// 4. Boucle de lecture et d'écriture avec comptage des messages
-	fmt.Println("[CLIENT] Début de la lecture des réponses...")
-	buffer := make([]byte, 1024)
-	messagesReceived := 0
-	maxMessages := 2 // Attendre 2 messages: primaire + secondaire
+	// 2bis. Lecture de la réponse (ligne JSON terminée par '\n')
+	reader := bufio.NewReader(stream)
+	headerLine, err := reader.ReadString('\n')
+	if err != nil {
+		log.Fatalf("[CLIENT] Erreur lecture réponse: %v", err)
+	}
+	var resp types.Response
+	if err := json.Unmarshal([]byte(headerLine), &resp); err != nil {
+		log.Fatalf("[CLIENT] Réponse invalide: %v", err)
+	}
+	if !resp.Success {
+		log.Fatalf("[CLIENT] Requête échouée: %s", resp.Error)
+	}
+	if resp.File == nil {
+		log.Fatalf("[CLIENT] Réponse succès sans informations de fichier")
+	}
+	fmt.Printf("[CLIENT] Réponse OK: name=%s size=%d chunks=%d chunkSize=%d\n", resp.File.Name, resp.File.Size, resp.File.NumChunks, resp.File.ChunkSize)
 
-	for messagesReceived < maxMessages {
-		fmt.Printf("[CLIENT] Tentative de lecture %d/%d...\n", messagesReceived+1, maxMessages)
+	// 4. Prépare le fichier de destination
+	destName := "received_" + filepath.Base(resp.File.Name)
+	out, err := os.Create(destName)
+	if err != nil {
+		log.Fatalf("[CLIENT] Impossible de créer le fichier destination '%s': %v", destName, err)
+	}
+	defer out.Close()
+	fmt.Printf("[CLIENT] Écriture vers '%s'\n", destName)
 
-		// Lecture avec timeout pour éviter de bloquer indéfiniment
-		n, err := stream.Read(buffer)
+	// 5. Boucle de lecture: lire des frames JSON Chunk (terminées par '\n'),
+	// décapsuler et écrire au bon offset jusqu'à atteindre la taille du fichier.
+	var received int64 = 0
+	for received < resp.File.Size {
+		line, err := reader.ReadBytes('\n')
 		if err != nil {
-			fmt.Printf("[CLIENT] Erreur de lecture ou pas de données: %v\n", err)
-			time.Sleep(500 * time.Millisecond)
+			log.Fatalf("[CLIENT] Erreur lecture frame chunk: %v", err)
+		}
+		var ch types.Chunk
+		if uerr := json.Unmarshal(line, &ch); uerr != nil {
+			log.Fatalf("[CLIENT] Erreur décodage chunk JSON: %v (payload=%q)", uerr, string(line))
+		}
+		// Ecrit exactement la taille des données reçues (Data peut être inférieur à ch.Size si dernier chunk)
+		data := ch.Data
+		if len(data) == 0 {
 			continue
 		}
-
-		if n == 0 {
-			// Ignorer les lectures à 0 octet (aucune donnée disponible pour l'instant)
-			fmt.Printf("[CLIENT] Lecture à 0 octet, continuer...\n")
-			break
+		if _, werr := out.WriteAt(data, int64(ch.Offset)); werr != nil {
+			log.Fatalf("[CLIENT] Erreur écriture fichier (chunk %d): %v", ch.Id, werr)
 		}
-
-		// Message reçu avec succès
-		messagesReceived++
-		response := string(buffer[:n])
-		fmt.Printf("[CLIENT] Message %d reçu: '%s'\n", messagesReceived, response)
-
-		// Petite pause entre les messages
-		time.Sleep(500 * time.Millisecond)
+		received += int64(len(data))
+		fmt.Printf("[CLIENT] Chunk reçu id=%d, écrit=%d bytes, total=%d/%d (%.1f%%)\n", ch.Id, len(data), received, resp.File.Size, float64(received)*100/float64(resp.File.Size))
 	}
+	fmt.Println("[CLIENT] Réception terminée avec succès")
 
-	// 5. Il attend un peu et se termine
-	fmt.Println("[CLIENT] Tous les messages reçus, attente finale...")
-	time.Sleep(2 * time.Second)
+	// Envoie un ACK de fin de réception au serveur primaire
+	ack := types.Request{Type: "done", Resource: resp.File.Name}
+	ackPayload, _ := json.Marshal(ack)
+	if _, err := stream.Write(append(ackPayload, '\n')); err != nil {
+		log.Printf("[CLIENT] Erreur lors de l'envoi de l'ACK: %v", err)
+	} else {
+		fmt.Println("[CLIENT] ACK de fin envoyé au serveur primaire")
+	}
 	fmt.Println("[CLIENT] Fin du client")
 }

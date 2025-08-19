@@ -1,0 +1,73 @@
+# KWIK File Transfer Server Configuration
+# This is an example configuration file showing all available options
+
+server:
+  # Address to listen on (can be overridden with KWIK_SERVER_ADDRESS)
+  address: "localhost:8080"
+  
+  # Directory containing files to serve (can be overridden with KWIK_FILE_DIRECTORY)
+  file_directory: "./data"
+  
+  # Optional secondary address for multi-path support
+  # secondary_address: "localhost:8081"
+  
+  # Optional TLS configuration
+  # tls_cert_file: "/path/to/cert.pem"
+  # tls_key_file: "/path/to/key.pem"
+
+limits:
+  # Maximum file size in bytes (1GB default)
+  max_file_size: 1073741824
+  
+  # Maximum concurrent client connections
+  max_concurrent: 10
+  
+  # Allowed file extensions (empty list means all extensions allowed)
+  allowed_extensions:
+    - ".txt"
+    - ".pdf"
+    - ".zip"
+    - ".tar.gz"
+    - ".json"
+    - ".xml"
+    - ".log"
+    - ".csv"
+  
+  # Maximum transfer rate in bytes per second (0 = no limit)
+  max_transfer_rate: 0
+  
+  # Session timeout duration
+  session_timeout: "30m"
+
+performance:
+  # Chunk size in bytes for file transfers
+  chunk_size: 65536  # 64KB
+  
+  # Optional secondary paths for multi-path transfers
+  # secondary_paths:
+  #   - "secondary1.example.com:8081"
+  #   - "secondary2.example.com:8082"
+  
+  # Buffer size for I/O operations
+  buffer_size: 1048576  # 1MB
+  
+  # Maximum number of retry attempts
+  max_retries: 3
+  
+  # Delay between retry attempts
+  retry_delay: "1s"
+
+security:
+  # Require client authentication
+  require_auth: true
+  
+  # List of allowed client addresses (empty list means all clients allowed)
+  # allowed_clients:
+  #   - "192.168.1.0/24"
+  #   - "10.0.0.0/8"
+  
+  # Deny directory traversal attempts
+  deny_traversal: true
+  
+  # Logging level (debug, info, warn, error)
+  log_level: "info"

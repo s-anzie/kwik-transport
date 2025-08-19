@@ -1602,7 +1602,7 @@ func (s *ClientSession) processSecondaryStreamData(pathID string, quicStream qui
 				continue // No data available
 			}
 
-			fmt.Printf("DEBUG: Client received %s bytes from secondary stream on path %d: %s\n", pathID, n, string(buffer[:n]))
+			fmt.Printf("DEBUG: Client received %d bytes from secondary stream on path %s:\n", n, pathID)
 
 			// Process the encapsulated data according to the metadata protocol
 			err = s.processEncapsulatedSecondaryData(pathID, buffer[:n])

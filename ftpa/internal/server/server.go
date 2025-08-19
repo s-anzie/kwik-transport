@@ -39,6 +39,7 @@ type RequestState struct {
 	TransferState *TransferState      // Transfer state from coordinator
 	Status        RequestStatus       // Current request status
 	ErrorMessage  string              // Error message if request failed
+	stream        session.Stream      // KWIK stream for this request
 }
 
 // RequestStatus represents the current status of a file request
@@ -400,6 +401,7 @@ func (fts *FileTransferServer) handleFileRequest(stream session.Stream, request 
 		RequestedAt:   time.Now(),
 		Metadata:      metadata,
 		Status:        RequestStatusReceived,
+		stream:        stream,
 	}
 
 	// Add to active requests
@@ -586,6 +588,7 @@ func (fts *FileTransferServer) startFileTransfer(requestKey string, requestState
 
 	// Start transfer with chunk coordinator
 	transferState, err := fts.chunkCoordinator.StartFileTransfer(
+		requestState.stream,
 		requestState.Filename,
 		requestState.ClientAddress,
 	)

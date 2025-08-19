@@ -522,20 +522,8 @@ func (sfts *SecondaryFileTransferServer) notifyPrimaryServer(command *types.Chun
 		return
 	}
 
-	// Send response to primary server via raw data
-	// Note: In a real implementation, we would need to determine the correct path ID
-	// For now, we'll use the first available path
-	activePaths := sfts.session.GetActivePaths()
-	if len(activePaths) == 0 {
-		fmt.Printf("No active paths available to send response to primary server\n")
-		return
-	}
-
-	pathID := activePaths[0].PathID
-	err = sfts.session.SendRawData(responseData, pathID)
-	if err != nil {
-		fmt.Printf("Failed to send response to primary server: %v\n", err)
-	}
+	// NOTE: Secondary server cannot SendRawData; skipping notification for now.
+	fmt.Printf("Secondary notify suppressed: %s\n", string(responseData))
 }
 
 // validateFilename validates the requested filename

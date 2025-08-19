@@ -209,7 +209,7 @@ func (rph *RawPacketHandler) processRawPacketSendChunkCommand(command *types.Chu
 	rph.commandsMutex.RLock()
 	_, exists := rph.activeCommands[commandID]
 	rph.commandsMutex.RUnlock()
-	
+
 	if exists {
 		fmt.Printf("Command already in progress: %s\n", commandID)
 		rph.sendRawPacketErrorResponse(command, rawPacketMsg, "Command already in progress")
@@ -246,7 +246,7 @@ func (rph *RawPacketHandler) processDirectSendChunkCommand(command *types.ChunkC
 	rph.commandsMutex.RLock()
 	_, exists := rph.activeCommands[commandID]
 	rph.commandsMutex.RUnlock()
-	
+
 	if exists {
 		rph.sendErrorResponse(stream, "Command already in progress")
 		return
@@ -444,7 +444,7 @@ func (rph *RawPacketHandler) sendRawPacketResponse(responseData []byte, targetSe
 
 	// Use the first available path
 	pathID := activePaths[0].PathID
-	err := rph.session.SendRawData(responseData, pathID)
+	err := rph.session.SendRawData(responseData, pathID, 0)
 	if err != nil {
 		fmt.Printf("Failed to send raw packet response: %v\n", err)
 	}

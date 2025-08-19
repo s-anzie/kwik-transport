@@ -192,7 +192,7 @@ demo_single_path() {
         -server "$PRIMARY_ADDR" \
         -file "medium.txt" \
         -output "$DOWNLOADS_DIR/single-path" \
-        -progress
+        -verbose
     
     print_success "Single-path demo completed"
     

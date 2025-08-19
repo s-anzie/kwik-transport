@@ -144,7 +144,7 @@ func BenchmarkMetadataProtocolOperations(b *testing.B) {
 				offset := uint64(i * size)
 
 				start := time.Now()
-				encapsulated, err := protocol.EncapsulateData(kwikStreamID, offset, testData)
+				encapsulated, err := protocol.EncapsulateData(kwikStreamID, 1, offset, testData)
 				latency := time.Since(start)
 
 				if err != nil {
@@ -164,7 +164,7 @@ func BenchmarkMetadataProtocolOperations(b *testing.B) {
 
 		b.Run(fmt.Sprintf("DecapsulateData-%dB", size), func(b *testing.B) {
 			// Pre-encapsulate data for decapsulation benchmark
-			encapsulated, err := protocol.EncapsulateData(1000, 0, testData)
+			encapsulated, err := protocol.EncapsulateData(1000, 1, 0, testData)
 			if err != nil {
 				b.Fatalf("Failed to prepare test data: %v", err)
 			}
@@ -197,7 +197,7 @@ func BenchmarkMetadataProtocolOperations(b *testing.B) {
 
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			encapsulated, err := protocol.EncapsulateData(1000, 0, testData)
+			encapsulated, err := protocol.EncapsulateData(1000, 1, 0, testData)
 			if err != nil {
 				b.Fatalf("EncapsulateData failed: %v", err)
 			}
@@ -352,7 +352,7 @@ func BenchmarkConcurrentOperations(b *testing.B) {
 				offset := uint64(i * 1024)
 
 				start := time.Now()
-				encapsulated, err := protocol.EncapsulateData(kwikStreamID, offset, testData)
+				encapsulated, err := protocol.EncapsulateData(kwikStreamID, 1, offset, testData)
 				if err != nil {
 					b.Errorf("EncapsulateData failed: %v", err)
 					continue
@@ -565,7 +565,7 @@ func BenchmarkThroughputEfficiency(b *testing.B) {
 
 		start := time.Now()
 		for i := 0; i < b.N; i++ {
-			encapsulated, err := protocol.EncapsulateData(uint64(i+1000), uint64(i*1024), testData)
+			encapsulated, err := protocol.EncapsulateData(uint64(i+1000), 1, uint64(i*1024), testData)
 			if err != nil {
 				b.Fatalf("EncapsulateData failed: %v", err)
 			}
@@ -634,7 +634,7 @@ func BenchmarkEndToEndLatency(b *testing.B) {
 		}
 
 		// 4. Encapsulate data with metadata
-		encapsulated, err := protocol.EncapsulateData(kwikStreamID, uint64(i*1024), testData)
+		encapsulated, err := protocol.EncapsulateData(kwikStreamID, 1, uint64(i*1024), testData)
 		if err != nil {
 			b.Fatalf("EncapsulateData failed: %v", err)
 		}

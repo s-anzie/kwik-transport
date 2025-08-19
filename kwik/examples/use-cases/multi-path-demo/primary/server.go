@@ -2,12 +2,16 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"kwik/examples/use-cases/multi-path-demo/types"
 	kwik "kwik/pkg"
 	"kwik/pkg/session"
 	"log"
+	"os"
 	"time"
 )
 
@@ -66,8 +70,6 @@ func handleStream(stream session.Stream, sess session.Session) {
 		stream.Close()
 	}()
 
-	nextoffset := 0
-
 	// Lit le message du client
 	fmt.Printf("[PRIMARY SERVER] Lecture du message du client sur stream %d\n", stream.StreamID())
 	buffer := make([]byte, 1024)
@@ -77,51 +79,187 @@ func handleStream(stream session.Stream, sess session.Session) {
 		return
 	}
 
-	clientMessage := string(buffer[:n])
-	fmt.Printf("[PRIMARY SERVER] Message reçu du client: '%s'\n", clientMessage)
+	clientPayload := buffer[:n]
+	fmt.Printf("[PRIMARY SERVER] Message reçu du client: '%s'\n", string(clientPayload))
+
+	// Essaie d'interpréter la requête comme une Request JSON
+	var req types.Request
+	if err := json.Unmarshal(clientPayload, &req); err != nil {
+		fmt.Printf("[PRIMARY SERVER] Requête non JSON, fallback texte. Err=%v\n", err)
+		return
+	}
+
+	// Dispatch en fonction du type
+	switch req.Type {
+	case "file":
+		if err := handleFileRequest(stream, sess, req); err != nil {
+			fmt.Printf("[PRIMARY SERVER] Erreur handler fichier: %v\n", err)
+		}
+	default:
+		fmt.Printf("[PRIMARY SERVER] Type de requête inconnu '%s', fallback démo\n", req.Type)
+	}
+
+	fmt.Println("[PRIMARY SERVER] Traitement terminé pour ce stream")
+}
+
+// handleFileRequest gère l'envoi d'un fichier en chunks:
+// - Calcule le nombre de chunks
+// - Envoie les chunks pairs (0,2,4,...) sur le stream primaire avec le bon offset
+// - Envoie des commandes pour les chunks impairs (1,3,5,...) au serveur secondaire via SendRawData
+func handleFileRequest(stream session.Stream, sess session.Session, req types.Request) error {
+	// Lecture des stats et du contenu
+	info, err := os.Stat(req.Resource)
+	if err != nil {
+		// Réponse d'échec
+		fmt.Printf("[PRIMARY SERVER] Erreur lors de l'ouverture du fichier '%s': %v\n", req.Resource, err)
+		resp := types.Response{Success: false, Error: fmt.Sprintf("stat '%s': %v", req.Resource, err)}
+		payload, _ := json.Marshal(resp)
+		stream.SetOffset(0)
+		_, _ = stream.Write(append(payload, '\n'))
+		return err
+	}
+	size := info.Size()
+	// Choix taille chunk (démonstration)
+	const chunkSize = 1024
+	chunks := int((size + chunkSize - 1) / chunkSize)
+	fmt.Printf("[PRIMARY SERVER] Fichier %s taille=%d, chunkSize=%d, nbChunks=%d\n", req.Resource, size, chunkSize, chunks)
+
+	// Ouvre le fichier pour des lectures par chunk
+	f, readErr := os.Open(req.Resource)
+	if readErr != nil {
+		// Réponse d'échec
+		fmt.Printf("[PRIMARY SERVER] Erreur lors de l'ouverture du fichier '%s': %v\n", req.Resource, readErr)
+		resp := types.Response{Success: false, Error: fmt.Sprintf("open '%s': %v", req.Resource, readErr)}
+		payload, _ := json.Marshal(resp)
+		stream.SetOffset(0)
+		_, _ = stream.Write(append(payload, '\n'))
+		return readErr
+	}
+	defer f.Close()
+
+	// Réponse de succès avec méta-données, terminée par un '\n' pour délimiter
+	resp := types.Response{
+		Success: true,
+		File: &types.FileInfo{
+			Name:      info.Name(),
+			Size:      size,
+			NumChunks: chunks,
+			ChunkSize: chunkSize,
+		},
+	}
+	header, _ := json.Marshal(resp)
+	headerWithNL := append(header, '\n')
+	stream.SetOffset(0)
+	if _, err := stream.Write(headerWithNL); err != nil {
+		return fmt.Errorf("write header: %w", err)
+	}
+	headerLen := len(headerWithNL)
+	// Position agrégée courante dans le flux après l'entête
+	aggPos := int64(headerLen)
 
 	// Ajoute un chemin secondaire
 	fmt.Println("[PRIMARY SERVER] Ajout du chemin secondaire localhost:4434")
 	err = sess.AddPath("localhost:4434")
 	if err != nil {
-		fmt.Printf("[PRIMARY SERVER] Erreur lors de l'ajout du chemin: %v\n", err)
+		fmt.Printf("[PRIMARY SERVER] Erreur lors de l'ajout du chemin secondaire: %v\n", err)
 	} else {
 		fmt.Println("[PRIMARY SERVER] Chemin secondaire ajouté avec succès")
 	}
 
-	// Écrit la réponse primaire
-	partialResponse := "salut comment vas tu?"
-	fmt.Printf("[PRIMARY SERVER] Envoi de la réponse primaire: '%s'\n", partialResponse)
-	stream.SetOffset(nextoffset)
-	_, err = stream.Write([]byte(partialResponse))
-	if err != nil {
-		fmt.Printf("[PRIMARY SERVER] Erreur lors de l'écriture: %v\n", err)
-		return
+	// Laisse un court délai pour l'intégration du chemin secondaire côté client
+	// afin d'éviter l'envoi de commandes avant que le chemin ne soit prêt (trous d'offset)
+	time.Sleep(300 * time.Millisecond)
+
+	// Récupère path secondaire si disponible
+	var pathID string
+	if serverSession, ok := sess.(*session.ServerSession); ok {
+		pathID = serverSession.GetPendingPathID("localhost:4434")
 	}
 
-	// Envoie des données au serveur secondaire
-	fmt.Println("[PRIMARY SERVER] Attente avant envoi au serveur secondaire...")
-	time.Sleep(500 * time.Millisecond)
+	// Itère sur les chunks
+	for i := 0; i < chunks; i++ {
+		fileOffset := int64(i) * chunkSize
+		readSize := int(chunkSize)
+		if remaining := int(size - fileOffset); remaining < readSize {
+			readSize = remaining
+		}
+		// Lit le chunk depuis le disque
+		buf := make([]byte, readSize)
+		n, rerr := f.ReadAt(buf, fileOffset)
+		if rerr != nil && rerr != io.EOF && rerr != io.ErrUnexpectedEOF {
+			return fmt.Errorf("readAt chunk %d: %w", i, rerr)
+		}
+		if n == 0 {
+			continue
+		}
+		dataSeg := buf[:n]
+		// Encapsulation JSON: types.Chunk puis '\n'
+		ch := types.Chunk{Id: i, Offset: int(fileOffset), Size: n, Data: dataSeg}
+		payload, jerr := json.Marshal(ch)
+		if jerr != nil {
+			return fmt.Errorf("marshal chunk %d: %w", i, jerr)
+		}
+		frame := append(payload, '\n')
+		frameLen := len(frame)
 
-	if serverSession, ok := sess.(*session.ServerSession); ok {
-		pathID := serverSession.GetPendingPathID("localhost:4434")
-		if pathID != "" {
-			primaryResponseLength := len(partialResponse)
-			nextoffset += primaryResponseLength
-			rawMessage := []byte("Second Message 2")
-			fmt.Printf("[PRIMARY SERVER] Envoi de données au serveur secondaire via path %s: '%s'\n", pathID, string(rawMessage))
-			fmt.Printf("[PRIMARY SERVER] Stream KWIK cible: %d\n", stream.RemoteStreamID())
-			err = sess.SendRawData(rawMessage, pathID, stream.RemoteStreamID())
-			if err != nil {
-				fmt.Printf("[PRIMARY SERVER] Erreur lors de l'envoi au serveur secondaire: %v\n", err)
-			} else {
-				fmt.Println("[PRIMARY SERVER] Données envoyées au serveur secondaire avec succès")
+		if i%2 == 0 {
+			// Pair: envoi direct sur le primaire
+			stream.SetOffset(int(aggPos))
+			if _, err := stream.Write(frame); err != nil {
+				return fmt.Errorf("write chunk %d: %w", i, err)
 			}
+			fmt.Printf("[PRIMARY SERVER] Chunk pair #%d encapsulé (JSON) envoyé: fileOff=%d size=%d streamOff=%d frameLen=%d\n", i, fileOffset, n, aggPos, frameLen)
+			aggPos += int64(frameLen)
 		} else {
-			fmt.Println("[PRIMARY SERVER] Aucun pathID trouvé pour localhost:4434")
+			// Impair: commande au secondaire
+			if pathID == "" {
+				fmt.Println("[PRIMARY SERVER] Aucun path secondaire disponible, envoi sur primaire à la place")
+				stream.SetOffset(int(aggPos))
+				if _, err := stream.Write(frame); err != nil {
+					return fmt.Errorf("write chunk %d (fallback): %w", i, err)
+				}
+				fmt.Printf("[PRIMARY SERVER] Chunk impair #%d encapsulé (JSON) envoyé en fallback sur primaire: fileOff=%d size=%d streamOff=%d frameLen=%d\n", i, fileOffset, n, aggPos, frameLen)
+				aggPos += int64(frameLen)
+				continue
+			}
+			cmd := types.Command{
+				Resource:     req.Resource,
+				ChunkID:      i,
+				FileOffset:   fileOffset,
+				ReadSize:     n,
+				StreamOffset: aggPos,
+			}
+			payload, mErr := json.Marshal(cmd)
+			if mErr != nil {
+				return fmt.Errorf("marshal command chunk %d: %w", i, mErr)
+			}
+			if err := sess.SendRawData(payload, pathID, stream.RemoteStreamID()); err != nil {
+				return fmt.Errorf("send command chunk %d: %w", i, err)
+			}
+			// Réserve la place dans le flux agrégé pour la frame JSON que le secondaire va écrire.
+			// La longueur est prédite ici en sérialisant de la même manière.
+			fmt.Printf("[PRIMARY SERVER] Commande chunk impair #%d envoyée au secondaire (frameLen prédite=%d) : fileOff=%d size=%d streamOff=%d\n", i, frameLen, fileOffset, n, aggPos)
+			aggPos += int64(frameLen)
 		}
 	}
 
-	fmt.Println("[PRIMARY SERVER] Attente finale avant fermeture...")
-	time.Sleep(2 * time.Second)
+	// Attend un ACK de fin de réception du client avant de terminer
+	fmt.Println("[PRIMARY SERVER] Attente de l'ACK de fin du client...")
+	ackReader := bufio.NewReader(stream)
+	ackLine, err := ackReader.ReadString('\n')
+	if err != nil {
+		fmt.Printf("[PRIMARY SERVER] Erreur lors de la lecture de l'ACK: %v\n", err)
+		return nil
+	}
+	var ackReq types.Request
+	if err := json.Unmarshal([]byte(ackLine), &ackReq); err != nil {
+		fmt.Printf("[PRIMARY SERVER] ACK invalide: %v\n", err)
+		return nil
+	}
+	if ackReq.Type == "done" {
+		fmt.Printf("[PRIMARY SERVER] ACK reçu pour '%s', fin du transfert.\n", ackReq.Resource)
+	} else {
+		fmt.Printf("[PRIMARY SERVER] Message reçu en fin de transfert (type=%s)\n", ackReq.Type)
+	}
+	return nil
 }

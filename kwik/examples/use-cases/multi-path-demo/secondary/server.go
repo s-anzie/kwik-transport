@@ -3,11 +3,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"kwik/examples/use-cases/multi-path-demo/types"
 	kwik "kwik/pkg"
 	"kwik/pkg/session"
 	"log"
+	"os"
 	"time"
 )
 
@@ -81,41 +84,64 @@ func handleStream(stream session.Stream, sess session.Session) {
 		return
 	}
 
-	primaryMessage := string(buffer[:n])
-	fmt.Printf("[SECONDARY SERVER] Message reçu du serveur primaire: '%s'\n", primaryMessage)
+	payload := buffer[:n]
+	fmt.Printf("[SECONDARY SERVER] Message reçu du serveur primaire: '%s'\n", string(payload))
 
-	// Ouvre un nouveau stream secondaire pour la réponse
-	// offset 20 pour s'aligner sur "salut comment vas tu" (20 octets)
-	offset := 21
-	fmt.Printf("[SECONDARY SERVER] Ouverture d'un nouveau stream pour la réponse (offset: %d)\n", offset)
+	// Tente d'interpréter comme une Command
+	var cmd types.Command
+	if err := json.Unmarshal(payload, &cmd); err == nil && cmd.Resource != "" && cmd.ReadSize > 0 {
+		fmt.Printf("[SECONDARY SERVER] Commande reçue: chunkID=%d resource=%s fileOff=%d size=%d streamOff=%d\n", cmd.ChunkID, cmd.Resource, cmd.FileOffset, cmd.ReadSize, cmd.StreamOffset)
 
-	newStream, err := sess.OpenStreamSync(context.Background())
-	if err != nil {
-		fmt.Printf("[SECONDARY SERVER] Erreur lors de l'ouverture du stream: %v\n", err)
+		// Ouvre un nouveau stream pour la réponse et configure l'agrégation
+		newStream, err := sess.OpenStreamSync(context.Background())
+		if err != nil {
+			fmt.Printf("[SECONDARY SERVER] Erreur lors de l'ouverture du stream: %v\n", err)
+			return
+		}
+		defer func() {
+			fmt.Printf("[SECONDARY SERVER] Fermeture du nouveau stream %d\n", newStream.StreamID())
+			newStream.Close()
+		}()
+
+		newStream.SetOffset(int(cmd.StreamOffset))
+		newStream.SetRemoteStreamID(stream.RemoteStreamID())
+		fmt.Printf("[SECONDARY SERVER] Stream configuré: offset=%d, remoteStreamID=%d\n", cmd.StreamOffset, stream.RemoteStreamID())
+
+		// Lecture du segment à partir du fichier (ReadAt par chunk)
+		f, rErr := os.Open(cmd.Resource)
+		if rErr != nil {
+			fmt.Printf("[SECONDARY SERVER] Erreur ouverture fichier '%s': %v\n", cmd.Resource, rErr)
+			return
+		}
+		defer f.Close()
+
+		buf := make([]byte, cmd.ReadSize)
+		n, rErr := f.ReadAt(buf, cmd.FileOffset)
+		if rErr != nil && rErr != io.EOF && rErr != io.ErrUnexpectedEOF {
+			fmt.Printf("[SECONDARY SERVER] Erreur ReadAt: %v\n", rErr)
+			return
+		}
+		if n == 0 {
+			fmt.Printf("[SECONDARY SERVER] Aucun octet lu pour chunkID=%d\n", cmd.ChunkID)
+			return
+		}
+		segment := buf[:n]
+
+		// Encapsule et envoie le chunk en JSON (types.Chunk) terminé par '\n'
+		ch := types.Chunk{Id: cmd.ChunkID, Offset: int(cmd.FileOffset), Size: len(segment), Data: segment}
+		payload, jerr := json.Marshal(ch)
+		if jerr != nil {
+			fmt.Printf("[SECONDARY SERVER] Erreur marshal chunk: %v\n", jerr)
+			return
+		}
+		frame := append(payload, '\n')
+		if _, err := newStream.Write(frame); err != nil {
+			fmt.Printf("[SECONDARY SERVER] Erreur lors de l'écriture du chunk: %v\n", err)
+			return
+		}
+		fmt.Printf("[SECONDARY SERVER] Chunk envoyé: chunkID=%d, bytes=%d (frameLen=%d)\n", cmd.ChunkID, len(segment), len(frame))
+		fmt.Println("[SECONDARY SERVER] Attente avant fermeture...")
+		time.Sleep(200 * time.Millisecond)
 		return
 	}
-	defer func() {
-		fmt.Printf("[SECONDARY SERVER] Fermeture du nouveau stream %d\n", newStream.StreamID())
-		newStream.Close()
-	}()
-
-	// Configure le stream pour l'agrégation
-	fmt.Printf("[SECONDARY SERVER] Configuration du stream %d pour l'agrégation\n", newStream.StreamID())
-	newStream.SetOffset(offset)
-	newStream.SetRemoteStreamID(stream.RemoteStreamID()) // Stream KWIK cible
-	fmt.Printf("[SECONDARY SERVER] Stream KWIK cible: %d\n", stream.RemoteStreamID())
-	fmt.Printf("[SECONDARY SERVER] Stream configuré: offset=%d, remoteStreamID=1\n", offset)
-
-	// Envoie la réponse
-	response := "Hello how are you? it's ok for me"
-	fmt.Printf("[SECONDARY SERVER] Envoi de la réponse: '%s'\n", response)
-	_, err = newStream.Write([]byte(response))
-	if err != nil {
-		fmt.Printf("[SECONDARY SERVER] Erreur lors de l'écriture: %v\n", err)
-		return
-	}
-
-	fmt.Println("[SECONDARY SERVER] Réponse envoyée avec succès")
-	fmt.Println("[SECONDARY SERVER] Attente avant fermeture...")
-	time.Sleep(1 * time.Second)
 }

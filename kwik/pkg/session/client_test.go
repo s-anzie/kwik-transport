@@ -655,7 +655,7 @@ func TestClientSession_SendRawData_ValidPath(t *testing.T) {
 	session.state = SessionStateActive // Set session as active
 
 	// This should now work since SendRawData is implemented
-	err := session.SendRawData([]byte("test data"), "path-1")
+	err := session.SendRawData([]byte("test data"), "path-1", 1)
 
 	// The error might be related to missing connection or other setup, but not "not implemented"
 	if err != nil {
@@ -676,7 +676,7 @@ func TestClientSession_SendRawData_PathNotFound(t *testing.T) {
 	session := NewClientSession(mockPathManager, nil)
 	session.state = SessionStateActive // Set session as active
 
-	err := session.SendRawData([]byte("test data"), "invalid-path")
+	err := session.SendRawData([]byte("test data"), "invalid-path", 1)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "path not found")

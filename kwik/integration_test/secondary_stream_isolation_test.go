@@ -673,3 +673,15 @@ func (s *mockClientStream) SetWriteDeadline(t time.Time) error {
 func (s *mockClientStream) PathID() string {
 	return "mock-path-id"
 }
+
+func (s *mockClientStream) GetOffset () int {
+	return 0;
+}
+
+func (s *mockClientStream) RemoteStreamID () uint64 {
+	return 0;
+}
+
+func (s *mockClientStream) SetOffset (int) error { return nil }
+
+func (s *mockClientStream) SetRemoteStreamID (uint64) error { return nil }
