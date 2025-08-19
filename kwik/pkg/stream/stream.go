@@ -35,7 +35,6 @@ type ClientSession interface {
 
 	// New methods for data presentation manager integration
 	GetDataPresentationManager() DataPresentationManager
-	ReadFromPresentationStream(streamID uint64, buffer []byte, timeout time.Duration) (int, error)
 
 	// Expose metadata protocol for encapsulation/decapsulation
 	GetMetadataProtocol() *MetadataProtocolImpl
@@ -127,7 +126,7 @@ func (s *ClientStream) Read(p []byte) (int, error) {
 
 	// Always use DataPresentationManager; streams must be presented only here
 	if dpm := s.session.GetDataPresentationManager(); dpm != nil {
-		return s.session.ReadFromPresentationStream(s.id, p, 5*time.Second)
+		return dpm.ReadFromStreamWithTimeout(s.id, p, 5*time.Second)
 	}
 
 	// If DPM is unavailable, return no data (design decision: presentation-only)

@@ -88,15 +88,15 @@ DEBUG: Server control frame read error: timeout: no recent network activity
 make run-multipath-client
 [CLIENT] Démarrage du client multi-path demo
 [CLIENT] Connexion au serveur primaire localhost:4433...
-[KWIK] 2025/08/18 17:53:48.713107 [INFO] [comp=KWIK-SYSTEM] Wiring KWIK components together
-[KWIK] 2025/08/18 17:53:48.713227 [INFO] [comp=KWIK-SYSTEM] Setting up message routing between components
-[KWIK] 2025/08/18 17:53:48.713234 [INFO] [comp=KWIK-SYSTEM] All KWIK components wired successfully
-[KWIK] 2025/08/18 17:53:48.713239 [INFO] [comp=KWIK-SYSTEM] Starting KWIK system
-[KWIK] 2025/08/18 17:53:48.713245 [INFO] [comp=KWIK-SYSTEM] Session manager started
-[KWIK] 2025/08/18 17:53:48.713253 [INFO] [comp=KWIK-SYSTEM] KWIK system started successfully
-2025/08/18 17:53:48 failed to sufficiently increase receive buffer size (was: 208 kiB, wanted: 2048 kiB, got: 416 kiB). See https://github.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes for details.
-[KWIK] 2025/08/18 17:53:48.718253 [INFO] [comp=KWIK-SYSTEM] Client session created sessionID=kwik-session-186f6228a82e31ba66d28ab8466cb6ea address=localhost:4433 
-[KWIK] 2025/08/18 17:53:48.718265 [INFO] [comp=KWIK-SYSTEM] Client session created address=localhost:4433 sessionID=kwik-session-186f6228a82e31ba66d28ab8466cb6ea 
+[KWIK] 2025/08/18 18:11:20.012475 [INFO] [comp=KWIK-SYSTEM] Wiring KWIK components together
+[KWIK] 2025/08/18 18:11:20.012640 [INFO] [comp=KWIK-SYSTEM] Setting up message routing between components
+[KWIK] 2025/08/18 18:11:20.012646 [INFO] [comp=KWIK-SYSTEM] All KWIK components wired successfully
+[KWIK] 2025/08/18 18:11:20.012649 [INFO] [comp=KWIK-SYSTEM] Starting KWIK system
+[KWIK] 2025/08/18 18:11:20.012653 [INFO] [comp=KWIK-SYSTEM] Session manager started
+[KWIK] 2025/08/18 18:11:20.012664 [INFO] [comp=KWIK-SYSTEM] KWIK system started successfully
+2025/08/18 18:11:20 failed to sufficiently increase receive buffer size (was: 208 kiB, wanted: 2048 kiB, got: 416 kiB). See https://github.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes for details.
+[KWIK] 2025/08/18 18:11:20.018325 [INFO] [comp=KWIK-SYSTEM] Client session created sessionID=kwik-session-8b46d7e2472a93f497d7c0361835f3ed address=localhost:4433 
+[KWIK] 2025/08/18 18:11:20.018342 [INFO] [comp=KWIK-SYSTEM] Client session created address=localhost:4433 sessionID=kwik-session-8b46d7e2472a93f497d7c0361835f3ed 
 [CLIENT] Connexion établie avec succès
 [CLIENT] Ouverture d'un stream...
 [CLIENT] Stream 1 ouvert avec succès
@@ -105,37 +105,37 @@ make run-multipath-client
 [CLIENT] Message envoyé avec succès
 [CLIENT] Attente de l'établissement de chemins multiples...
 [CLIENT] Nombre de chemins actifs: 1
-DEBUG: Client received AddPathRequest with PathId: path-657e9e1fcd4ed3f2, TargetAddress: localhost:4434
+DEBUG: Client received AddPathRequest with PathId: path-c2969673783a7fc2, TargetAddress: localhost:4434
 DEBUG: Client attempting to create path to localhost:4434
-DEBUG: Client successfully created path to localhost:4434 in 3.597583ms
-DEBUG: Client starting authentication on secondary path path-657e9e1fcd4ed3f2
-DEBUG: Client creating SECONDARY authentication request for session kwik-session-186f6228a82e31ba66d28ab8466cb6ea
-DEBUG: Client authentication successful on secondary path path-657e9e1fcd4ed3f2
-DEBUG: Client starting integration of secondary path path-657e9e1fcd4ed3f2
-DEBUG: Client found managed path with original ID path-657e9e1fcd4ed3f2, secondary path has server ID path-657e9e1fcd4ed3f2
-DEBUG: Client starting automatic stream acceptance for secondary path path-657e9e1fcd4ed3f2
-DEBUG: Client integration successful for secondary path path-657e9e1fcd4ed3f2
-DEBUG: Client sending success response for path path-657e9e1fcd4ed3f2
-DEBUG: Client starting automatic stream acceptance loop for secondary path path-657e9e1fcd4ed3f2
-DEBUG: Client attempting to accept stream from secondary path path-657e9e1fcd4ed3f2
-DEBUG: Client sent AddPathResponse with success=true for path path-657e9e1fcd4ed3f2
+DEBUG: Client successfully created path to localhost:4434 in 3.354177ms
+DEBUG: Client starting authentication on secondary path path-c2969673783a7fc2
+DEBUG: Client creating SECONDARY authentication request for session kwik-session-8b46d7e2472a93f497d7c0361835f3ed
+DEBUG: Client authentication successful on secondary path path-c2969673783a7fc2
+DEBUG: Client starting integration of secondary path path-c2969673783a7fc2
+DEBUG: Client found managed path with original ID path-c2969673783a7fc2, secondary path has server ID path-c2969673783a7fc2
+DEBUG: Client starting automatic stream acceptance for secondary path path-c2969673783a7fc2
+DEBUG: Client integration successful for secondary path path-c2969673783a7fc2
+DEBUG: Client sending success response for path path-c2969673783a7fc2
+DEBUG: Client sent AddPathResponse with success=true for path path-c2969673783a7fc2
+DEBUG: Client starting automatic stream acceptance loop for secondary path path-c2969673783a7fc2
+DEBUG: Client attempting to accept stream from secondary path path-c2969673783a7fc2
 DEBUG: Stream 1 writing new data: dataSize=20, consumedSpace=0, increase=20, newUsedSize=20
-DEBUG: Client routing raw packet (53 bytes) to data plane of path path-657e9e1fcd4ed3f2
-DEBUG: Client accepted new stream from secondary path path-657e9e1fcd4ed3f2
-DEBUG: Client attempting to accept stream from secondary path path-657e9e1fcd4ed3f2
-DEBUG: Client handling secondary stream open from path path-657e9e1fcd4ed3f2
-DEBUG: Client starting secondary stream data processing for path path-657e9e1fcd4ed3f2
-DEBUG: Client starting secondary stream data processing loop for path path-657e9e1fcd4ed3f2
-DEBUG: Client attempting to read from secondary stream on path path-657e9e1fcd4ed3f2
-DEBUG: Client received path-657e9e1fcd4ed3f2 bytes from secondary stream on path 62: KWKM\�qs�$|Salut, ça fait longtemps
-DEBUG: Client processing encapsulated secondary data from path path-657e9e1fcd4ed3f2 (62 bytes)
-DEBUG: Client attempting to decapsulate data from path path-657e9e1fcd4ed3f2
-DEBUG: Client decapsulated data from path path-657e9e1fcd4ed3f2: KwikStreamID=1, Offset=20, DataLen=25
-DEBUG: Client attempting to aggregate secondary data from path path-657e9e1fcd4ed3f2
+DEBUG: Client routing raw packet (53 bytes) to data plane of path path-c2969673783a7fc2
+DEBUG: Client accepted new stream from secondary path path-c2969673783a7fc2
+DEBUG: Client attempting to accept stream from secondary path path-c2969673783a7fc2
+DEBUG: Client handling secondary stream open from path path-c2969673783a7fc2
+DEBUG: Client starting secondary stream data processing for path path-c2969673783a7fc2
+DEBUG: Client starting secondary stream data processing loop for path path-c2969673783a7fc2
+DEBUG: Client attempting to read from secondary stream on path path-c2969673783a7fc2
+DEBUG: Client received path-c2969673783a7fc2 bytes from secondary stream on path 62: KWKM\�f:�GSalut, ça fait longtemps
+DEBUG: Client processing encapsulated secondary data from path path-c2969673783a7fc2 (62 bytes)
+DEBUG: Client attempting to decapsulate data from path path-c2969673783a7fc2
+DEBUG: Client decapsulated data from path path-c2969673783a7fc2: KwikStreamID=1, Offset=20, DataLen=25
+DEBUG: Client attempting to aggregate secondary data from path path-c2969673783a7fc2
 DEBUG: Stream 1 writing new data: dataSize=25, consumedSpace=0, increase=25, newUsedSize=45
-DEBUG: Client successfully aggregated 25 bytes from path path-657e9e1fcd4ed3f2 to KWIK stream 1 at offset 20
-DEBUG: Client successfully processed secondary stream data from path path-657e9e1fcd4ed3f2
-DEBUG: Client attempting to read from secondary stream on path path-657e9e1fcd4ed3f2
+DEBUG: Client successfully aggregated 25 bytes from path path-c2969673783a7fc2 to KWIK stream 1 at offset 20
+DEBUG: Client successfully processed secondary stream data from path path-c2969673783a7fc2
+DEBUG: Client attempting to read from secondary stream on path path-c2969673783a7fc2
 [CLIENT] Nombre de chemins actifs: 2
 [CLIENT] Chemins multiples établis!
 [CLIENT] Début de la lecture des réponses...
@@ -143,26 +143,14 @@ DEBUG: Client attempting to read from secondary stream on path path-657e9e1fcd4e
 [CLIENT] Message 1 reçu: 'salut comment vas tuSalut, ça fait longtemps'
 [CLIENT] Tentative de lecture 2/2...
 [CLIENT] Lecture à 0 octet, continuer...
-[CLIENT] Tentative de lecture 2/2...
-[CLIENT] Lecture à 0 octet, continuer...
-[CLIENT] Tentative de lecture 2/2...
-[CLIENT] Lecture à 0 octet, continuer...
-[CLIENT] Tentative de lecture 2/2...
-[CLIENT] Lecture à 0 octet, continuer...
-[CLIENT] Tentative de lecture 2/2...
-[CLIENT] Lecture à 0 octet, continuer...
-[CLIENT] Tentative de lecture 2/2...
-[CLIENT] Lecture à 0 octet, continuer...
-[CLIENT] Tentative de lecture 2/2...
-[CLIENT] Lecture à 0 octet, continuer...
-[CLIENT] Tentative de lecture 2/2...
-[CLIENT] Lecture à 0 octet, continuer...
-[CLIENT] Tentative de lecture 2/2...
-[CLIENT] Lecture à 0 octet, continuer...
-[CLIENT] Tentative de lecture 2/2...
-[CLIENT] Lecture à 0 octet, continuer...
-[CLIENT] Tentative de lecture 2/2...
-[CLIENT] Lecture à 0 octet, continuer...
-[CLIENT] Tentative de lecture 2/2...
-[CLIENT] Lecture à 0 octet, continuer...
-^Ccursor.appimage: *** [Makefile:41: run-multipath-client] Interrompre
+[CLIENT] Tous les messages reçus, attente finale...
+[CLIENT] Fin du client
+[CLIENT] Fermeture du stream 1
+[CLIENT] Fermeture de la session
+[KWIK] 2025/08/18 18:11:23.520477 [DEBUG] [comp=KWIK-SYSTEM] Client session cleaned up after close sessionID=kwik-session-8b46d7e2472a93f497d7c0361835f3ed  [asm_amd64.s:1700:goexit]
+DEBUG: Client control frame read error: Application error 0x0 (local): path closed
+DEBUG: Client secondary stream from path path-c2969673783a7fc2 closed: Application error 0x0 (local): path closed
+DEBUG: Client failed to accept stream from secondary path path-c2969673783a7fc2: Application error 0x0 (local): path closed
+[KWIK] 2025/08/18 18:11:23.521149 [INFO] [comp=KWIK-SYSTEM] Stopping KWIK system
+[KWIK] 2025/08/18 18:11:23.521266 [INFO] [comp=KWIK-SYSTEM] Session manager stopped
+[KWIK] 2025/08/18 18:11:23.536531 [INFO] [comp=KWIK-SYSTEM] KWIK system stopped successfully

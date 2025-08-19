@@ -1159,14 +1159,6 @@ func (s *ClientSession) GetDataPresentationManager() stream.DataPresentationMana
 	return s.dataPresentationManager
 }
 
-// ReadFromPresentationStream reads data from a stream using the presentation manager
-func (s *ClientSession) ReadFromPresentationStream(streamID uint64, buffer []byte, timeout time.Duration) (int, error) {
-	if s.dataPresentationManager == nil {
-		return 0, utils.NewKwikError(utils.ErrStreamCreationFailed, "no data presentation manager available", nil)
-	}
-	return s.dataPresentationManager.ReadFromStreamWithTimeout(streamID, buffer, timeout)
-}
-
 // GetAggregatedDataForStream returns aggregated data from secondary streams for a KWIK stream
 func (s *ClientSession) GetAggregatedDataForStream(streamID uint64) ([]byte, error) {
 	if s.secondaryAggregator == nil {

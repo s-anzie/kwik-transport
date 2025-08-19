@@ -86,7 +86,7 @@ func handleStream(stream session.Stream, sess session.Session) {
 
 	// Ouvre un nouveau stream secondaire pour la réponse
 	// offset 20 pour s'aligner sur "salut comment vas tu" (20 octets)
-	offset := 20
+	offset := 21
 	fmt.Printf("[SECONDARY SERVER] Ouverture d'un nouveau stream pour la réponse (offset: %d)\n", offset)
 
 	newStream, err := sess.OpenStreamSync(context.Background())
@@ -107,7 +107,7 @@ func handleStream(stream session.Stream, sess session.Session) {
 	fmt.Printf("[SECONDARY SERVER] Stream configuré: offset=%d, remoteStreamID=1\n", offset)
 
 	// Envoie la réponse
-	response := "Salut, ça fait longtemps"
+	response := "Hello how are you? it's ok for me"
 	fmt.Printf("[SECONDARY SERVER] Envoi de la réponse: '%s'\n", response)
 	_, err = newStream.Write([]byte(response))
 	if err != nil {

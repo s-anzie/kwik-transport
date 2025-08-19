@@ -231,11 +231,11 @@ func (sb *StreamBufferImpl) WriteWithMetadata(data []byte, offset uint64, metada
 
 // Read reads available contiguous data into the buffer
 func (sb *StreamBufferImpl) Read(buffer []byte) (int, error) {
-	return sb.ReadContiguous(buffer)
+	return sb.readContiguous(buffer)
 }
 
 // ReadContiguous reads only contiguous data (stops at first gap)
-func (sb *StreamBufferImpl) ReadContiguous(buffer []byte) (int, error) {
+func (sb *StreamBufferImpl) readContiguous(buffer []byte) (int, error) {
 	startTime := time.Now()
 
 	sb.closeMutex.RLock()
@@ -547,32 +547,44 @@ func (sb *StreamBufferImpl) getContiguousDataFromPosition(startPos uint64, maxBy
 	sb.chunksMutex.RLock()
 	defer sb.chunksMutex.RUnlock()
 
-	var result []byte
-	currentPos := startPos
+	// Find the single chunk that contains startPos. We do NOT concatenate across
+	// chunk boundaries to preserve message/frame separation.
+	var containingChunk *DataChunk
+	var containingOffset uint64
 
-	for len(result) < maxBytes {
-		chunk, exists := sb.dataChunks[currentPos]
-		if !exists {
-			// Gap found, stop here
-			break
-		}
-
-		// Calculate how much data we can take from this chunk
-		remainingBytes := maxBytes - len(result)
-		chunkData := chunk.Data
-
-		if len(chunkData) <= remainingBytes {
-			// Take the entire chunk
-			result = append(result, chunkData...)
-			currentPos += uint64(len(chunkData))
-		} else {
-			// Take partial chunk
-			result = append(result, chunkData[:remainingBytes]...)
-			break
+	// Fast-path: exact match at startPos
+	if chunk, exists := sb.dataChunks[startPos]; exists {
+		containingChunk = chunk
+		containingOffset = startPos
+	} else {
+		// Fallback: search for the chunk whose range contains startPos
+		for offset, chunk := range sb.dataChunks {
+			end := offset + uint64(len(chunk.Data))
+			if startPos >= offset && startPos < end {
+				containingChunk = chunk
+				containingOffset = offset
+				break
+			}
 		}
 	}
 
-	return result
+	if containingChunk == nil || maxBytes <= 0 {
+		return nil
+	}
+
+	// Compute slice starting within the found chunk
+	startIndex := int(startPos - containingOffset)
+	if startIndex < 0 || startIndex >= len(containingChunk.Data) {
+		return nil
+	}
+
+	remainingInChunk := len(containingChunk.Data) - startIndex
+	if maxBytes < remainingInChunk {
+		remainingInChunk = maxBytes
+	}
+
+	// Return only data from this single chunk
+	return append([]byte{}, containingChunk.Data[startIndex:startIndex+remainingInChunk]...)
 }
 
 // updateGapsAfterWrite updates the gap tracking after a write operation

@@ -12,26 +12,26 @@ type DataPresentationManager interface {
 	CreateStreamBuffer(streamID uint64, metadata interface{}) error
 	RemoveStreamBuffer(streamID uint64) error
 	GetStreamBuffer(streamID uint64) (StreamBuffer, error)
-	
+
 	// Data reading
 	ReadFromStream(streamID uint64, buffer []byte) (int, error)
 	ReadFromStreamWithTimeout(streamID uint64, buffer []byte, timeout time.Duration) (int, error)
-	
+
 	// Data writing
 	WriteToStream(streamID uint64, data []byte, offset uint64, metadata interface{}) error
-	
+
 	// Receive window management
 	GetReceiveWindowStatus() *ReceiveWindowStatus
 	SetReceiveWindowSize(size uint64) error
-	
+
 	// Backpressure management
 	IsBackpressureActive(streamID uint64) bool
 	GetBackpressureStatus() *BackpressureStatus
-	
+
 	// Statistics and monitoring
 	GetStreamStats(streamID uint64) *StreamStats
 	GetGlobalStats() *GlobalPresentationStats
-	
+
 	// Lifecycle
 	Start() error
 	Stop() error
@@ -43,30 +43,28 @@ type StreamBuffer interface {
 	// Data writing (from aggregators)
 	Write(data []byte, offset uint64) error
 	WriteWithMetadata(data []byte, offset uint64, metadata *DataMetadata) error
-	
+
 	// Data reading (to application)
 	Read(buffer []byte) (int, error)
-	ReadContiguous(buffer []byte) (int, error)
-	
 	// Read position management
 	GetReadPosition() uint64
 	SetReadPosition(position uint64) error
 	AdvanceReadPosition(bytes int) error
-	
+
 	// Buffer state
 	GetAvailableBytes() int
 	GetContiguousBytes() int
 	HasGaps() bool
 	GetNextGapPosition() (uint64, bool)
-	
+
 	// Metadata
 	GetStreamMetadata() *StreamMetadata
 	UpdateStreamMetadata(metadata *StreamMetadata) error
-	
+
 	// Flow control
 	GetBufferUsage() *BufferUsage
 	IsBackpressureNeeded() bool
-	
+
 	// Cleanup
 	Cleanup() error
 	Close() error
@@ -78,19 +76,19 @@ type ReceiveWindowManager interface {
 	SetWindowSize(size uint64) error
 	GetWindowSize() uint64
 	GetAvailableWindow() uint64
-	
+
 	// Window allocation management
 	AllocateWindow(streamID uint64, size uint64) error
 	ReleaseWindow(streamID uint64, size uint64) error
-	
+
 	// Window sliding
 	SlideWindow(bytesConsumed uint64) error
-	
+
 	// Window state
 	GetWindowStatus() *ReceiveWindowStatus
 	IsWindowFull() bool
 	GetWindowUtilization() float64
-	
+
 	// Notifications
 	SetWindowFullCallback(callback func()) error
 	SetWindowAvailableCallback(callback func()) error
@@ -101,19 +99,19 @@ type BackpressureManager interface {
 	// Backpressure activation/deactivation
 	ActivateBackpressure(streamID uint64, reason BackpressureReason) error
 	DeactivateBackpressure(streamID uint64) error
-	
+
 	// Backpressure state
 	IsBackpressureActive(streamID uint64) bool
 	GetBackpressureReason(streamID uint64) BackpressureReason
-	
+
 	// Global backpressure
 	ActivateGlobalBackpressure(reason BackpressureReason) error
 	DeactivateGlobalBackpressure() error
 	IsGlobalBackpressureActive() bool
-	
+
 	// Notifications
 	SetBackpressureCallback(callback BackpressureCallback) error
-	
+
 	// Metrics
 	GetBackpressureStats() *BackpressureStats
 }
@@ -142,13 +140,13 @@ type DataMetadata struct {
 
 // ReceiveWindowStatus represents the current state of the receive window
 type ReceiveWindowStatus struct {
-	TotalSize             uint64            `json:"total_size"`
-	UsedSize              uint64            `json:"used_size"`
-	AvailableSize         uint64            `json:"available_size"`
-	Utilization           float64           `json:"utilization"`
-	StreamAllocations     map[uint64]uint64 `json:"stream_allocations"` // streamID -> allocated bytes
-	IsBackpressureActive  bool              `json:"is_backpressure_active"`
-	LastSlideTime         time.Time         `json:"last_slide_time"`
+	TotalSize            uint64            `json:"total_size"`
+	UsedSize             uint64            `json:"used_size"`
+	AvailableSize        uint64            `json:"available_size"`
+	Utilization          float64           `json:"utilization"`
+	StreamAllocations    map[uint64]uint64 `json:"stream_allocations"` // streamID -> allocated bytes
+	IsBackpressureActive bool              `json:"is_backpressure_active"`
+	LastSlideTime        time.Time         `json:"last_slide_time"`
 }
 
 // BufferUsage represents the usage statistics of a stream buffer
@@ -166,12 +164,12 @@ type BufferUsage struct {
 
 // BackpressureStatus represents the current backpressure state
 type BackpressureStatus struct {
-	GlobalActive   bool                             `json:"global_active"`
-	GlobalReason   BackpressureReason               `json:"global_reason"`
+	GlobalActive   bool                              `json:"global_active"`
+	GlobalReason   BackpressureReason                `json:"global_reason"`
 	StreamStatus   map[uint64]StreamBackpressureInfo `json:"stream_status"`
-	ActiveStreams  int                              `json:"active_streams"`
-	TotalStreams   int                              `json:"total_streams"`
-	LastActivation time.Time                        `json:"last_activation"`
+	ActiveStreams  int                               `json:"active_streams"`
+	TotalStreams   int                               `json:"total_streams"`
+	LastActivation time.Time                         `json:"last_activation"`
 }
 
 // StreamBackpressureInfo contains backpressure information for a specific stream
@@ -185,15 +183,15 @@ type StreamBackpressureInfo struct {
 
 // StreamStats contains statistics for a specific stream
 type StreamStats struct {
-	StreamID         uint64        `json:"stream_id"`
-	BytesWritten     uint64        `json:"bytes_written"`
-	BytesRead        uint64        `json:"bytes_read"`
-	WriteOperations  uint64        `json:"write_operations"`
-	ReadOperations   uint64        `json:"read_operations"`
-	GapEvents        uint64        `json:"gap_events"`
-	BackpressureEvents uint64      `json:"backpressure_events"`
-	AverageLatency   time.Duration `json:"average_latency"`
-	LastActivity     time.Time     `json:"last_activity"`
+	StreamID           uint64        `json:"stream_id"`
+	BytesWritten       uint64        `json:"bytes_written"`
+	BytesRead          uint64        `json:"bytes_read"`
+	WriteOperations    uint64        `json:"write_operations"`
+	ReadOperations     uint64        `json:"read_operations"`
+	GapEvents          uint64        `json:"gap_events"`
+	BackpressureEvents uint64        `json:"backpressure_events"`
+	AverageLatency     time.Duration `json:"average_latency"`
+	LastActivity       time.Time     `json:"last_activity"`
 }
 
 // GlobalPresentationStats contains global statistics for the presentation system
@@ -213,13 +211,13 @@ type GlobalPresentationStats struct {
 
 // BackpressureStats contains statistics about backpressure events
 type BackpressureStats struct {
-	TotalActivations     uint64                       `json:"total_activations"`
-	ActiveStreams        int                          `json:"active_streams"`
-	GlobalActivations    uint64                       `json:"global_activations"`
-	ReasonBreakdown      map[BackpressureReason]uint64 `json:"reason_breakdown"`
-	AverageDuration      time.Duration                `json:"average_duration"`
-	LastActivation       time.Time                    `json:"last_activation"`
-	CurrentlyActive      bool                         `json:"currently_active"`
+	TotalActivations  uint64                        `json:"total_activations"`
+	ActiveStreams     int                           `json:"active_streams"`
+	GlobalActivations uint64                        `json:"global_activations"`
+	ReasonBreakdown   map[BackpressureReason]uint64 `json:"reason_breakdown"`
+	AverageDuration   time.Duration                 `json:"average_duration"`
+	LastActivation    time.Time                     `json:"last_activation"`
+	CurrentlyActive   bool                          `json:"currently_active"`
 }
 
 // Enumerations

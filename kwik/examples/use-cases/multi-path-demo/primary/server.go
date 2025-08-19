@@ -90,7 +90,7 @@ func handleStream(stream session.Stream, sess session.Session) {
 	}
 
 	// Écrit la réponse primaire
-	partialResponse := "salut comment vas tu"
+	partialResponse := "salut comment vas tu?"
 	fmt.Printf("[PRIMARY SERVER] Envoi de la réponse primaire: '%s'\n", partialResponse)
 	stream.SetOffset(nextoffset)
 	_, err = stream.Write([]byte(partialResponse))
