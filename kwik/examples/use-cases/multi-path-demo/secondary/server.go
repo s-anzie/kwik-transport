@@ -11,6 +11,7 @@ import (
 	"kwik/pkg/session"
 	"log"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -59,6 +60,12 @@ func handleSession(sess session.Session) {
 			if err == io.EOF {
 				fmt.Println("[SECONDARY SERVER] Session fermée par le client")
 				return
+			}
+			// Tolère les timeouts/inactivité et continue la boucle d'acceptation
+			errStr := strings.ToLower(err.Error())
+			if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "no recent network activity") {
+				fmt.Printf("[SECONDARY SERVER] Timeout accept stream, on continue: %v\n", err)
+				continue
 			}
 			fmt.Printf("[SECONDARY SERVER] Erreur lors de l'acceptation de stream: %v\n", err)
 			return
@@ -141,7 +148,7 @@ func handleStream(stream session.Stream, sess session.Session) {
 		}
 		fmt.Printf("[SECONDARY SERVER] Chunk envoyé: chunkID=%d, bytes=%d (frameLen=%d)\n", cmd.ChunkID, len(segment), len(frame))
 		fmt.Println("[SECONDARY SERVER] Attente avant fermeture...")
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 		return
 	}
 }

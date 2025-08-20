@@ -28,6 +28,7 @@ enum ControlFrameType {
     RAW_MESSAGE_RESPONSE = 10;
     HEARTBEAT = 11;
     SESSION_CLOSE = 12;
+    DATA_CHUNK_ACK = 13; // Ack for delivered data chunks (transparent to app)
 }
 
 // Add path request - server requests client to connect to secondary server
@@ -173,4 +174,14 @@ message SessionClose {
     string reason = 1;
     uint32 timeout_ms = 2;         // Time to wait before force close
     bool migrate_streams = 3;      // Whether to attempt stream migration
+}
+
+// DataChunkAck - acknowledgment for a delivered data chunk (transparent to application)
+message DataChunkAck {
+    string path_id = 1;            // Path on which data was delivered
+    uint64 kwik_stream_id = 2;     // KWIK logical stream ID at client
+    uint32 chunk_id = 3;           // Application-level chunk identifier (if available)
+    uint64 offset = 4;             // Aggregated stream offset where chunk starts
+    uint32 size = 5;               // Size of data delivered
+    uint64 timestamp = 6;          // Ack timestamp
 }

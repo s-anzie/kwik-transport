@@ -67,7 +67,7 @@ type Config struct {
 	LogLevel        LogLevel
 	MetricsEnabled  bool
 	MetricsInterval time.Duration
-	
+
 	// Logging configuration
 	Logging *LogConfig
 }
@@ -156,7 +156,7 @@ func New(config *Config) (*KWIK, error) {
 	controlPlaneConfig := &control.ControlPlaneConfig{
 		MaxFrameSize:      4096,
 		FrameTimeout:      5 * time.Second,
-		HeartbeatInterval: 30 * time.Second,
+		HeartbeatInterval: 5 * time.Second,
 		MaxRetries:        3,
 		EnableCompression: false,
 		EnableEncryption:  false,

@@ -27,19 +27,4 @@ rechercher une formation par domaine et/ou type de diplôme.
 Tous les secteurs d’activité y sont présents, tant dans le privé que dans le public. C’est un excellent point de départ pour comment trouver une alternance.
 
 Site n°2 pour trouver une alternance : APEC
-L’APEC (Association Pour l’Emploi des Cadres) est spécialisée dans l’emploi des jeunes diplômés et des cadres. 
-La plateforme offre l’opportunité de trouver une alternance en ciblant les recherches, 
-par secteur géographique et par type de contrat. Apprentissage ou professionnalisation, 
-tout est fait pour vous accompagner au mieux selon votre profil.
-
-Site n°3 pour trouver une alternance : La Bonne Alternance
-La Bonne Alternance est une plateforme prise en charge par Pôle Emploi, établissement public dédié à 
-l’emploi en France. Elle fait appel à un algorithme, qui met en avant les entreprises les plus susceptibles 
-d’avoir besoin de vous. Pour cela, le site se base sur celles ayant recruté des alternants durant les 5 
-dernières années, à un poste similaire.
-
-Pour vous rapprocher d’une entreprise, rien de plus simple : vous pouvez envoyer une candidature spontanée 
-directement via le site. Un bon moyen de comment trouver une alternance sans attendre une annonce !
-
-Site n°4 pour trouver une alternance : Walt
-Walt est parfait pour vous orienter vers les meilleurs choix dans votre rec
+L’APEC (Association Pour l’Emploi des Cadres) est spécialisée dans l’emploi des jeunes diplômés et

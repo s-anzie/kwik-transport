@@ -12,6 +12,7 @@ import (
 	"kwik/pkg/session"
 	"log"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -33,6 +34,11 @@ func main() {
 	for {
 		session, err := listener.Accept(context.Background())
 		if err != nil {
+			errStr := strings.ToLower(err.Error())
+			if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "no recent network activity") {
+				fmt.Printf("[PRIMARY SERVER] Timeout accept session, on continue: %v\n", err)
+				continue
+			}
 			fmt.Printf("[PRIMARY SERVER] Erreur lors de l'acceptation de session: %v\n", err)
 			continue
 		}
@@ -168,7 +174,14 @@ func handleFileRequest(stream session.Stream, sess session.Session, req types.Re
 
 	// Laisse un court délai pour l'intégration du chemin secondaire côté client
 	// afin d'éviter l'envoi de commandes avant que le chemin ne soit prêt (trous d'offset)
-	time.Sleep(300 * time.Millisecond)
+	for i := 0; i < 10; i++ {
+		if serverSession, ok := sess.(*session.ServerSession); ok {
+			if pid := serverSession.GetPendingPathID("localhost:4434"); pid != "" {
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	// Récupère path secondaire si disponible
 	var pathID string

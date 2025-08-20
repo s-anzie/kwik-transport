@@ -1,12 +1,13 @@
 package transport
 
 import (
-	
+	"fmt"
 	"sync"
 	"time"
 
-	"github.com/quic-go/quic-go"
 	"kwik/internal/utils"
+
+	"github.com/quic-go/quic-go"
 )
 
 // PathState represents the detailed state of a path
@@ -30,21 +31,22 @@ type path struct {
 	connection    quic.Connection
 	controlStream quic.Stream
 	dataStreams   []quic.Stream
-	
+
 	// Secondary stream support
 	secondaryStreams map[uint64]quic.Stream // streamID -> stream
 	isSecondaryPath  bool                   // true if this path is for secondary servers
-	
+
 	// Metadata for path management
-	createdAt     time.Time
-	lastActivity  time.Time
-	errorCount    int
-	lastError     error
-	
+	createdAt    time.Time
+	lastActivity time.Time
+	errorCount   int
+	lastError    error
+
 	// Connection wrapper for KWIK-specific functionality
-	wrapper       *connectionWrapper
-	
+	wrapper *connectionWrapper
+
 	mutex         sync.RWMutex
+	lastHeartbeat time.Time
 }
 
 // ID returns the path identifier
@@ -85,12 +87,13 @@ func (p *path) GetConnection() quic.Connection {
 func (p *path) GetControlStream() (quic.Stream, error) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	
+
 	if p.controlStream == nil {
 		return nil, utils.NewKwikError(utils.ErrConnectionLost,
 			"control stream not available", nil)
 	}
-	
+
+	fmt.Printf("DEBUG: Returning control stream for path %s, streamID=%d\n", p.id, p.controlStream.StreamID())
 	return p.controlStream, nil
 }
 
@@ -98,7 +101,7 @@ func (p *path) GetControlStream() (quic.Stream, error) {
 func (p *path) GetDataStreams() []quic.Stream {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
-	
+
 	// Return copy to prevent external modification
 	streams := make([]quic.Stream, len(p.dataStreams))
 	copy(streams, p.dataStreams)
@@ -123,11 +126,11 @@ func (p *path) SetSecondaryPath(isSecondary bool) {
 func (p *path) AddSecondaryStream(streamID uint64, stream quic.Stream) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	
+
 	if p.secondaryStreams == nil {
 		p.secondaryStreams = make(map[uint64]quic.Stream)
 	}
-	
+
 	p.secondaryStreams[streamID] = stream
 	p.lastActivity = time.Now()
 }
@@ -136,7 +139,7 @@ func (p *path) AddSecondaryStream(streamID uint64, stream quic.Stream) {
 func (p *path) RemoveSecondaryStream(streamID uint64) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	
+
 	if p.secondaryStreams != nil {
 		delete(p.secondaryStreams, streamID)
 		p.lastActivity = time.Now()
@@ -147,11 +150,11 @@ func (p *path) RemoveSecondaryStream(streamID uint64) {
 func (p *path) GetSecondaryStream(streamID uint64) (quic.Stream, bool) {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
-	
+
 	if p.secondaryStreams == nil {
 		return nil, false
 	}
-	
+
 	stream, exists := p.secondaryStreams[streamID]
 	return stream, exists
 }
@@ -160,11 +163,11 @@ func (p *path) GetSecondaryStream(streamID uint64) (quic.Stream, bool) {
 func (p *path) GetSecondaryStreams() map[uint64]quic.Stream {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
-	
+
 	if p.secondaryStreams == nil {
 		return make(map[uint64]quic.Stream)
 	}
-	
+
 	// Return copy to prevent external modification
 	streams := make(map[uint64]quic.Stream)
 	for id, stream := range p.secondaryStreams {
@@ -177,11 +180,11 @@ func (p *path) GetSecondaryStreams() map[uint64]quic.Stream {
 func (p *path) GetSecondaryStreamCount() int {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
-	
+
 	if p.secondaryStreams == nil {
 		return 0
 	}
-	
+
 	return len(p.secondaryStreams)
 }
 
@@ -189,33 +192,33 @@ func (p *path) GetSecondaryStreamCount() int {
 func (p *path) Close() error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	
+
 	p.state = PathStateDead
-	
+
 	// Close control stream
 	if p.controlStream != nil {
 		p.controlStream.Close()
 	}
-	
+
 	// Close data streams
 	for _, stream := range p.dataStreams {
 		if stream != nil {
 			stream.Close()
 		}
 	}
-	
+
 	// Close secondary streams
 	for _, stream := range p.secondaryStreams {
 		if stream != nil {
 			stream.Close()
 		}
 	}
-	
+
 	// Close QUIC connection
 	if p.connection != nil {
 		return p.connection.CloseWithError(0, "path closed")
 	}
-	
+
 	return nil
 }
 
@@ -230,7 +233,7 @@ func (p *path) addDataStream(stream quic.Stream) {
 func (p *path) removeDataStream(stream quic.Stream) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	
+
 	for i, s := range p.dataStreams {
 		if s == stream {
 			// Remove stream from slice
@@ -246,25 +249,33 @@ func (p *path) setControlStream(stream quic.Stream) {
 	p.controlStream = stream
 }
 
+// getLastHeartbeat returns the last recorded heartbeat time
+func (p *path) getLastHeartbeat() time.Time {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	return p.lastHeartbeat
+}
+
 // CreateControlStreamAsClient creates a control stream as client (OpenStreamSync)
 func (p *path) CreateControlStreamAsClient() (quic.Stream, error) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	
+
 	if p.connection == nil {
 		return nil, utils.NewKwikError(utils.ErrConnectionLost, "connection is nil", nil)
 	}
-	
+
 	// Client creates the control stream
 	stream, err := p.connection.OpenStreamSync(p.connection.Context())
 	if err != nil {
-		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed, 
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
 			"failed to create control stream as client", err)
 	}
-	
+
 	// Set as control stream for the path
 	p.controlStream = stream
-	
+	fmt.Printf("DEBUG: Created control stream (client-side) for path %s, streamID=%d\n", p.id, stream.StreamID())
+
 	return stream, nil
 }
 
@@ -272,21 +283,22 @@ func (p *path) CreateControlStreamAsClient() (quic.Stream, error) {
 func (p *path) AcceptControlStreamAsServer() (quic.Stream, error) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	
+
 	if p.connection == nil {
 		return nil, utils.NewKwikError(utils.ErrConnectionLost, "connection is nil", nil)
 	}
-	
+
 	// Server accepts the control stream created by client
 	stream, err := p.connection.AcceptStream(p.connection.Context())
 	if err != nil {
-		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed, 
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
 			"failed to accept control stream as server", err)
 	}
-	
+
 	// Set as control stream for the path
 	p.controlStream = stream
-	
+	fmt.Printf("DEBUG: Accepted control stream (server-side) for path %s, streamID=%d\n", p.id, stream.StreamID())
+
 	return stream, nil
 }
 
@@ -316,21 +328,21 @@ func (cw *connectionWrapper) GetConnection() quic.Connection {
 func (cw *connectionWrapper) CreateControlStream() (quic.Stream, error) {
 	cw.mutex.Lock()
 	defer cw.mutex.Unlock()
-	
+
 	if cw.connection == nil {
 		return nil, utils.NewKwikError(utils.ErrConnectionLost, "connection is nil", nil)
 	}
-	
+
 	// Open control stream (should be stream ID 0)
 	stream, err := cw.connection.OpenStreamSync(cw.connection.Context())
 	if err != nil {
-		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed, 
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
 			"failed to create control stream", err)
 	}
-	
+
 	// Set as control stream for the path
 	cw.path.setControlStream(stream)
-	
+
 	return stream, nil
 }
 
@@ -338,21 +350,21 @@ func (cw *connectionWrapper) CreateControlStream() (quic.Stream, error) {
 func (cw *connectionWrapper) CreateDataStream() (quic.Stream, error) {
 	cw.mutex.Lock()
 	defer cw.mutex.Unlock()
-	
+
 	if cw.connection == nil {
 		return nil, utils.NewKwikError(utils.ErrConnectionLost, "connection is nil", nil)
 	}
-	
+
 	// Open data stream
 	stream, err := cw.connection.OpenStreamSync(cw.connection.Context())
 	if err != nil {
-		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed, 
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
 			"failed to create data stream", err)
 	}
-	
+
 	// Add to path's data streams
 	cw.path.addDataStream(stream)
-	
+
 	return stream, nil
 }
 
@@ -360,11 +372,11 @@ func (cw *connectionWrapper) CreateDataStream() (quic.Stream, error) {
 func (cw *connectionWrapper) IsHealthy() bool {
 	cw.mutex.RLock()
 	defer cw.mutex.RUnlock()
-	
+
 	if cw.connection == nil {
 		return false
 	}
-	
+
 	// Check connection context
 	select {
 	case <-cw.connection.Context().Done():
@@ -378,11 +390,11 @@ func (cw *connectionWrapper) IsHealthy() bool {
 func (cw *connectionWrapper) Close() error {
 	cw.mutex.Lock()
 	defer cw.mutex.Unlock()
-	
+
 	if cw.connection != nil {
 		return cw.connection.CloseWithError(0, "connection wrapper closed")
 	}
-	
+
 	return nil
 }
 
@@ -458,17 +470,17 @@ func (p *path) GetWrapper() *connectionWrapper {
 func (p *path) IsHealthy() bool {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
-	
+
 	// Check if path is in a healthy state
 	if p.state != PathStateActive {
 		return false
 	}
-	
+
 	// Check if connection wrapper is healthy
 	if p.wrapper != nil {
 		return p.wrapper.IsHealthy()
 	}
-	
+
 	// Check if connection is still valid
 	if p.connection != nil {
 		select {
@@ -478,7 +490,7 @@ func (p *path) IsHealthy() bool {
 			return true
 		}
 	}
-	
+
 	return false
 }
 

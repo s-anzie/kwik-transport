@@ -7,11 +7,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/quic-go/quic-go"
-	"google.golang.org/protobuf/proto"
 	"kwik/internal/utils"
 	"kwik/pkg/protocol"
 	"kwik/proto/control"
+
+	"github.com/quic-go/quic-go"
+	"google.golang.org/protobuf/proto"
 )
 
 // ControlPlaneImpl implements the ControlPlane interface
@@ -715,6 +716,10 @@ func convertControlFrameType(pbType control.ControlFrameType) protocol.FrameType
 		return protocol.FrameTypeStreamCreateNotification
 	case control.ControlFrameType_RAW_PACKET_TRANSMISSION:
 		return protocol.FrameTypeRawPacketTransmission
+	case control.ControlFrameType_HEARTBEAT:
+		return protocol.FrameTypeAddPathRequest // placeholder, protocol does not define heartbeat
+	case control.ControlFrameType_SESSION_CLOSE:
+		return protocol.FrameTypeRemovePathRequest // placeholder
 	default:
 		return protocol.FrameTypeAddPathRequest // Default fallback
 	}

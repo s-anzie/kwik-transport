@@ -3,8 +3,10 @@ package session
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,6 +71,10 @@ type ClientSession struct {
 
 	// Configuration
 	config *SessionConfig
+
+	// Heartbeat management
+	heartbeatSequence   uint64
+	lastHeartbeatByPath map[string]time.Time
 }
 
 // SessionConfig holds configuration for a KWIK session
@@ -128,6 +134,8 @@ func NewClientSession(pathManager transport.PathManager, config *SessionConfig) 
 		ctx:                     ctx,
 		cancel:                  cancel,
 		config:                  config,
+		heartbeatSequence:       0,
+		lastHeartbeatByPath:     make(map[string]time.Time),
 	}
 
 	// Wire the secondary aggregator to the presentation manager so reads use the same buffer path
@@ -212,6 +220,9 @@ func Dial(ctx context.Context, address string, config *SessionConfig) (Session, 
 	// NOTE: We start handleIncomingStreams AFTER authentication is complete
 	// to avoid the control stream being blocked by the Read() in handleControlFrames
 	go session.handleIncomingStreams()
+
+	// Start control-plane heartbeat loop
+	go session.startHeartbeat()
 
 	return session, nil
 }
@@ -543,43 +554,8 @@ func (s *ClientSession) handleIncomingStreams() {
 
 // handleControlFrames processes incoming control frames from the server
 func (s *ClientSession) handleControlFrames() {
-
-	// Get control stream from primary path
-	controlStream, err := s.primaryPath.GetControlStream()
-	if err != nil {
-		return
-	}
-
-	// Buffer for reading control frames
-	buffer := make([]byte, 4096)
-
-	for {
-		select {
-		case <-s.ctx.Done():
-			return // Session is closing
-		default:
-			// Read control frame from stream
-			n, err := controlStream.Read(buffer)
-			if err != nil {
-				fmt.Printf("DEBUG: Client control frame read error: %v\n", err)
-				time.Sleep(100 * time.Millisecond) // Avoid tight loop
-				continue
-			}
-
-			if n == 0 {
-				continue // No data available
-			}
-			// Parse control frame
-			var frame control.ControlFrame
-			err = proto.Unmarshal(buffer[:n], &frame)
-			if err != nil {
-				continue
-			}
-
-			// Process frame based on type
-			s.processControlFrame(&frame)
-		}
-	}
+	// Backward-compat: delegate to per-path reader on primary
+	s.startControlReaderForPath(s.primaryPath)
 }
 
 // processControlFrame processes a single control frame
@@ -602,6 +578,46 @@ func (s *ClientSession) processControlFrame(frame *control.ControlFrame) {
 		s.handleSessionClose(frame)
 	default:
 		// TODO: Log unknown frame type
+	}
+}
+
+// startControlReaderForPath starts a control-plane reader loop for the given path
+func (s *ClientSession) startControlReaderForPath(path transport.Path) {
+	if path == nil {
+		return
+	}
+	controlStream, err := path.GetControlStream()
+	if err != nil || controlStream == nil {
+		return
+	}
+	buffer := make([]byte, 4096)
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+			// Set a generous read deadline to avoid idle timeouts
+			_ = controlStream.SetReadDeadline(time.Now().Add(2 * utils.DefaultKeepAliveInterval))
+			n, err := controlStream.Read(buffer)
+			if err != nil {
+				// Ignore timeouts and continue; they are expected when idle
+				if strings.Contains(strings.ToLower(err.Error()), "timeout") {
+					time.Sleep(5 * time.Millisecond)
+					continue
+				}
+				fmt.Printf("DEBUG: Client control frame read error on path %s: %v\n", path.ID(), err)
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			if n == 0 {
+				continue
+			}
+			var frame control.ControlFrame
+			if err := proto.Unmarshal(buffer[:n], &frame); err != nil {
+				continue
+			}
+			s.processControlFrame(&frame)
+		}
 	}
 }
 
@@ -878,7 +894,60 @@ func (s *ClientSession) handleRawPacketTransmission(frame *control.ControlFrame)
 }
 
 func (s *ClientSession) handleHeartbeat(frame *control.ControlFrame) {
-	// TODO: Implement in future tasks
+	if frame == nil || len(frame.Payload) == 0 {
+		return
+	}
+
+	var hb control.Heartbeat
+	if err := proto.Unmarshal(frame.Payload, &hb); err != nil {
+		return
+	}
+
+	// Record last heartbeat time per path for visibility/health
+	pathID := frame.SourcePathId
+	if pathID == "" {
+		pathID = s.primaryPath.ID()
+	}
+	s.mutex.Lock()
+	s.lastHeartbeatByPath[pathID] = time.Now()
+	s.mutex.Unlock()
+
+	fmt.Printf("DEBUG: Client received HEARTBEAT seq=%d from path=%s\n", hb.SequenceNumber, pathID)
+
+	// If echo data present (8 bytes timestamp), compute RTT
+	if len(hb.EchoData) == 8 {
+		sendTs := int64(binary.BigEndian.Uint64(hb.EchoData))
+		rtt := time.Since(time.Unix(0, sendTs))
+		fmt.Printf("DEBUG: Client computed RTT=%s on path=%s\n", rtt.String(), pathID)
+		return
+	}
+
+	// If no echo data, respond with an echo to allow peer to compute RTT
+	if controlStream, err := s.primaryPath.GetControlStream(); err == nil && controlStream != nil {
+		// Echo back with EchoData = received timestamp
+		echo := &control.Heartbeat{
+			SequenceNumber: hb.SequenceNumber,
+			Timestamp:      uint64(time.Now().UnixNano()),
+			EchoData:       make([]byte, 8),
+		}
+		binary.BigEndian.PutUint64(echo.EchoData, hb.Timestamp)
+		payload, err := proto.Marshal(echo)
+		if err != nil {
+			return
+		}
+		resp := &control.ControlFrame{
+			FrameId:      generateFrameID(),
+			Type:         control.ControlFrameType_HEARTBEAT,
+			Payload:      payload,
+			Timestamp:    uint64(time.Now().UnixNano()),
+			SourcePathId: pathID,
+			TargetPathId: "",
+		}
+		if data, err := proto.Marshal(resp); err == nil {
+			fmt.Printf("DEBUG: Client sending HEARTBEAT echo seq=%d to path=%s\n", hb.SequenceNumber, pathID)
+			_, _ = controlStream.Write(data)
+		}
+	}
 }
 
 func (s *ClientSession) handleSessionClose(frame *control.ControlFrame) {
@@ -1351,6 +1420,10 @@ func (s *ClientSession) integrateSecondaryPath(secondaryPath transport.Path, ori
 	fmt.Printf("DEBUG: Client starting automatic stream acceptance for secondary path %s\n", secondaryPath.ID())
 	go s.autoAcceptSecondaryStreams(secondaryPath)
 
+	// Start control-plane reader for this secondary path
+	fmt.Printf("DEBUG: Client starting control-frame reader for secondary path %s\n", secondaryPath.ID())
+	go s.startControlReaderForPath(secondaryPath)
+
 	return nil
 }
 
@@ -1676,6 +1749,37 @@ func (s *ClientSession) processEncapsulatedSecondaryData(pathID string, encapsul
 	fmt.Printf("DEBUG: Client successfully aggregated %d bytes from path %s to KWIK stream %d at offset %d\n",
 		len(data), pathID, metadata.KwikStreamID, metadata.Offset)
 
+	// Send control-plane ACK for delivered chunk on the same path
+	// Try to locate the path by ID
+	active := s.pathManager.GetActivePaths()
+	for _, p := range active {
+		if p.ID() == pathID {
+			if ctrl, e := p.GetControlStream(); e == nil && ctrl != nil {
+				ack := &control.DataChunkAck{
+					PathId:       pathID,
+					KwikStreamId: uint64(secondaryStreamID),
+					ChunkId:      0,
+					Offset:       uint64(metadata.Offset),
+					Size:         uint32(len(data)),
+					Timestamp:    uint64(time.Now().UnixNano()),
+				}
+				if payloadBytes, e2 := proto.Marshal(ack); e2 == nil {
+					frame := &control.ControlFrame{
+						FrameId:      generateFrameID(),
+						Type:         control.ControlFrameType_DATA_CHUNK_ACK,
+						Payload:      payloadBytes,
+						Timestamp:    uint64(time.Now().UnixNano()),
+						SourcePathId: pathID,
+					}
+					if dataOut, e3 := proto.Marshal(frame); e3 == nil {
+						_, _ = ctrl.Write(dataOut)
+					}
+				}
+			}
+			break
+		}
+	}
+
 	return nil
 }
 
@@ -1700,8 +1804,14 @@ func (s *ClientSession) autoAcceptSecondaryStreams(path transport.Path) {
 			fmt.Printf("DEBUG: Client attempting to accept stream from secondary path %s\n", path.ID())
 			quicStream, err := conn.AcceptStream(context.Background())
 			if err != nil {
+				errStr := strings.ToLower(err.Error())
+				if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "no recent network activity") {
+					fmt.Printf("DEBUG: Client accept on secondary path %s timeout, continue\n", path.ID())
+					time.Sleep(10 * time.Millisecond)
+					continue
+				}
 				fmt.Printf("DEBUG: Client failed to accept stream from secondary path %s: %v\n", path.ID(), err)
-				// If the connection is closed or there's an error, stop this goroutine
+				// For fatal errors, exit loop
 				return
 			}
 
@@ -1748,6 +1858,32 @@ func (s *ClientSession) startPrimaryIngestion(streamID uint64, quicStream quic.S
 		if s.secondaryAggregator != nil {
 			_ = s.secondaryAggregator.AggregateSecondaryDataWithPresentation(secondaryData)
 		}
+
+		// Send control-plane ACK for delivered chunk on primary path
+		if s.primaryPath != nil {
+			if ctrl, e := s.primaryPath.GetControlStream(); e == nil && ctrl != nil {
+				ack := &control.DataChunkAck{
+					PathId:       pathID,
+					KwikStreamId: uint64(streamID),
+					ChunkId:      0,
+					Offset:       uint64(metadata.Offset),
+					Size:         uint32(len(payload)),
+					Timestamp:    uint64(time.Now().UnixNano()),
+				}
+				if payloadBytes, e2 := proto.Marshal(ack); e2 == nil {
+					frame := &control.ControlFrame{
+						FrameId:      generateFrameID(),
+						Type:         control.ControlFrameType_DATA_CHUNK_ACK,
+						Payload:      payloadBytes,
+						Timestamp:    uint64(time.Now().UnixNano()),
+						SourcePathId: pathID,
+					}
+					if data, e3 := proto.Marshal(frame); e3 == nil {
+						_, _ = ctrl.Write(data)
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -1763,4 +1899,98 @@ func generatePathID() string {
 	bytes := make([]byte, 8)
 	rand.Read(bytes)
 	return fmt.Sprintf("path-%x", bytes)
+}
+
+// startHeartbeat periodically sends heartbeat frames on all active paths' control streams
+func (s *ClientSession) startHeartbeat() {
+	fmt.Printf("DEBUG: Client starting heartbeat loop (session=%s)\n", s.sessionID)
+	interval := utils.DefaultKeepAliveInterval
+
+	t := time.NewTicker(interval)
+	defer t.Stop()
+
+	// Start liveness monitor
+	go s.monitorHeartbeatLiveness(3 * interval)
+
+	// Send an initial heartbeat immediately
+	s.sendHeartbeatOnAllPaths()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-t.C:
+			s.sendHeartbeatOnAllPaths()
+		}
+	}
+}
+
+func (s *ClientSession) sendHeartbeatOnAllPaths() {
+	activePaths := s.pathManager.GetActivePaths()
+	for _, p := range activePaths {
+		// Get control stream
+		controlStream, err := p.GetControlStream()
+		if err != nil || controlStream == nil {
+			continue
+		}
+
+		// Build heartbeat payload
+		s.mutex.Lock()
+		s.heartbeatSequence++
+		seq := s.heartbeatSequence
+		s.mutex.Unlock()
+
+		now := time.Now().UnixNano()
+		hb := &control.Heartbeat{
+			SequenceNumber: seq,
+			Timestamp:      uint64(now),
+			EchoData:       make([]byte, 8),
+		}
+		binary.BigEndian.PutUint64(hb.EchoData, uint64(now))
+		payload, err := proto.Marshal(hb)
+		if err != nil {
+			continue
+		}
+
+		frame := &control.ControlFrame{
+			FrameId:      generateFrameID(),
+			Type:         control.ControlFrameType_HEARTBEAT,
+			Payload:      payload,
+			Timestamp:    uint64(time.Now().UnixNano()),
+			SourcePathId: p.ID(),
+			TargetPathId: "",
+		}
+
+		data, err := proto.Marshal(frame)
+		if err != nil {
+			continue
+		}
+
+		// Best-effort write; ignore transient errors
+		fmt.Printf("DEBUG: Client sending HEARTBEAT seq=%d on path=%s\n", seq, p.ID())
+		_, _ = controlStream.Write(data)
+	}
+}
+
+// monitorHeartbeatLiveness marks paths dead if no heartbeat has been received for threshold duration
+func (s *ClientSession) monitorHeartbeatLiveness(threshold time.Duration) {
+	ticker := time.NewTicker(threshold / 2)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now()
+			active := s.pathManager.GetActivePaths()
+			for _, p := range active {
+				s.mutex.RLock()
+				last, ok := s.lastHeartbeatByPath[p.ID()]
+				s.mutex.RUnlock()
+				if !ok || now.Sub(last) > threshold {
+					_ = s.pathManager.MarkPathDead(p.ID())
+				}
+			}
+		}
+	}
 }
