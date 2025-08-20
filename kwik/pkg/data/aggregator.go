@@ -29,7 +29,7 @@ type DataAggregatorImpl struct {
 	streamsMutex      sync.RWMutex
 
 	// Secondary stream aggregation
-	secondaryAggregator *SecondaryStreamAggregator
+	secondaryAggregator *StreamAggregator
 	offsetManager       *MultiSourceOffsetManager
 
 	// Stream mappings for secondary streams
@@ -50,13 +50,13 @@ type AggregatorConfig struct {
 
 // AggregatedStreamState represents the state of an aggregated stream
 type AggregatedStreamState struct {
-	StreamID      uint64
-	Buffer        []byte
-	Offset        uint64
-	LastActivity  time.Time
-	PathBuffers   map[string][]byte
-	Stats         *AggregationStats
-	mutex         sync.RWMutex
+	StreamID     uint64
+	Buffer       []byte
+	Offset       uint64
+	LastActivity time.Time
+	PathBuffers  map[string][]byte
+	Stats        *AggregationStats
+	mutex        sync.RWMutex
 }
 
 // NewDataAggregator creates a new data aggregator
@@ -64,7 +64,7 @@ func NewDataAggregator(logger DataLogger) DataAggregator {
 	return &DataAggregatorImpl{
 		pathStreams:         make(map[string]DataStream),
 		aggregatedStreams:   make(map[uint64]*AggregatedStreamState),
-		secondaryAggregator: NewSecondaryStreamAggregator(logger),
+		secondaryAggregator: NewStreamAggregator(logger),
 		offsetManager:       NewMultiSourceOffsetManager(),
 		streamMappings:      make(map[uint64]uint64),
 		config: &AggregatorConfig{
@@ -212,6 +212,7 @@ func (da *DataAggregatorImpl) GetAggregationStats(streamID uint64) (*Aggregation
 
 	return stats, nil
 }
+
 // AggregateSecondaryData aggregates data from a secondary stream into the appropriate KWIK stream
 func (da *DataAggregatorImpl) AggregateSecondaryData(kwikStreamID uint64, secondaryData *SecondaryStreamData) error {
 	if secondaryData == nil {
@@ -230,7 +231,7 @@ func (da *DataAggregatorImpl) AggregateSecondaryData(kwikStreamID uint64, second
 
 	if mappedKwikStreamID != kwikStreamID {
 		return utils.NewKwikError(utils.ErrInvalidFrame,
-			fmt.Sprintf("secondary stream %d mapped to KWIK stream %d, not %d", 
+			fmt.Sprintf("secondary stream %d mapped to KWIK stream %d, not %d",
 				secondaryData.StreamID, mappedKwikStreamID, kwikStreamID), nil)
 	}
 
@@ -240,7 +241,7 @@ func (da *DataAggregatorImpl) AggregateSecondaryData(kwikStreamID uint64, second
 	}
 
 	// Update offset manager with the new data
-	if err := da.offsetManager.UpdateOffset(kwikStreamID, secondaryData.PathID, 
+	if err := da.offsetManager.UpdateOffset(kwikStreamID, secondaryData.PathID,
 		secondaryData.StreamID, secondaryData.Offset, secondaryData.Data); err != nil {
 		return fmt.Errorf("offset update failed: %w", err)
 	}
@@ -271,7 +272,7 @@ func (da *DataAggregatorImpl) SetStreamMapping(kwikStreamID uint64, secondaryStr
 	if existingKwikID, exists := da.streamMappings[secondaryStreamID]; exists {
 		if existingKwikID != kwikStreamID {
 			return utils.NewKwikError(utils.ErrStreamCreationFailed,
-				fmt.Sprintf("secondary stream %d already mapped to KWIK stream %d", 
+				fmt.Sprintf("secondary stream %d already mapped to KWIK stream %d",
 					secondaryStreamID, existingKwikID), nil)
 		}
 		return nil // Mapping already exists and is correct
@@ -352,7 +353,7 @@ func (da *DataAggregatorImpl) updateAggregatedStreamFromSecondary(kwikStreamID u
 		if err := da.CreateAggregatedStream(kwikStreamID); err != nil {
 			return fmt.Errorf("failed to create aggregated stream: %w", err)
 		}
-		
+
 		da.streamsMutex.RLock()
 		streamState = da.aggregatedStreams[kwikStreamID]
 		da.streamsMutex.RUnlock()

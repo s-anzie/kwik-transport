@@ -39,6 +39,7 @@ const (
 	ControlFrameType_HEARTBEAT                  ControlFrameType = 11
 	ControlFrameType_SESSION_CLOSE              ControlFrameType = 12
 	ControlFrameType_DATA_CHUNK_ACK             ControlFrameType = 13 // Ack for delivered data chunks (transparent to app)
+	ControlFrameType_PACKET_ACK                 ControlFrameType = 14 // Ack for delivered transport packet
 )
 
 // Enum value maps for ControlFrameType.
@@ -58,6 +59,7 @@ var (
 		11: "HEARTBEAT",
 		12: "SESSION_CLOSE",
 		13: "DATA_CHUNK_ACK",
+		14: "PACKET_ACK",
 	}
 	ControlFrameType_value = map[string]int32{
 		"ADD_PATH_REQUEST":           0,
@@ -74,6 +76,7 @@ var (
 		"HEARTBEAT":                  11,
 		"SESSION_CLOSE":              12,
 		"DATA_CHUNK_ACK":             13,
+		"PACKET_ACK":                 14,
 	}
 )
 
@@ -1471,6 +1474,67 @@ func (x *DataChunkAck) GetTimestamp() uint64 {
 	return 0
 }
 
+// PacketAck - acknowledgment for a delivered transport packet
+type PacketAck struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PacketId      uint64                 `protobuf:"varint,1,opt,name=packet_id,json=packetId,proto3" json:"packet_id,omitempty"`
+	PathId        string                 `protobuf:"bytes,2,opt,name=path_id,json=pathId,proto3" json:"path_id,omitempty"`
+	Timestamp     uint64                 `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PacketAck) Reset() {
+	*x = PacketAck{}
+	mi := &file_proto_control_control_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PacketAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PacketAck) ProtoMessage() {}
+
+func (x *PacketAck) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_control_control_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PacketAck.ProtoReflect.Descriptor instead.
+func (*PacketAck) Descriptor() ([]byte, []int) {
+	return file_proto_control_control_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *PacketAck) GetPacketId() uint64 {
+	if x != nil {
+		return x.PacketId
+	}
+	return 0
+}
+
+func (x *PacketAck) GetPathId() string {
+	if x != nil {
+		return x.PathId
+	}
+	return ""
+}
+
+func (x *PacketAck) GetTimestamp() uint64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
 var File_proto_control_control_proto protoreflect.FileDescriptor
 
 const file_proto_control_control_proto_rawDesc = "" +
@@ -1584,7 +1648,11 @@ const file_proto_control_control_proto_rawDesc = "" +
 	"\bchunk_id\x18\x03 \x01(\rR\achunkId\x12\x16\n" +
 	"\x06offset\x18\x04 \x01(\x04R\x06offset\x12\x12\n" +
 	"\x04size\x18\x05 \x01(\rR\x04size\x12\x1c\n" +
-	"\ttimestamp\x18\x06 \x01(\x04R\ttimestamp*\xef\x02\n" +
+	"\ttimestamp\x18\x06 \x01(\x04R\ttimestamp\"_\n" +
+	"\tPacketAck\x12\x1b\n" +
+	"\tpacket_id\x18\x01 \x01(\x04R\bpacketId\x12\x17\n" +
+	"\apath_id\x18\x02 \x01(\tR\x06pathId\x12\x1c\n" +
+	"\ttimestamp\x18\x03 \x01(\x04R\ttimestamp*\xff\x02\n" +
 	"\x10ControlFrameType\x12\x14\n" +
 	"\x10ADD_PATH_REQUEST\x10\x00\x12\x15\n" +
 	"\x11ADD_PATH_RESPONSE\x10\x01\x12\x17\n" +
@@ -1600,7 +1668,9 @@ const file_proto_control_control_proto_rawDesc = "" +
 	"\x12\r\n" +
 	"\tHEARTBEAT\x10\v\x12\x11\n" +
 	"\rSESSION_CLOSE\x10\f\x12\x12\n" +
-	"\x0eDATA_CHUNK_ACK\x10\r*\xb1\x01\n" +
+	"\x0eDATA_CHUNK_ACK\x10\r\x12\x0e\n" +
+	"\n" +
+	"PACKET_ACK\x10\x0e*\xb1\x01\n" +
 	"\n" +
 	"PathStatus\x12\x17\n" +
 	"\x13CONTROL_PATH_ACTIVE\x10\x00\x12\x15\n" +
@@ -1632,7 +1702,7 @@ func file_proto_control_control_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_control_control_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_proto_control_control_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_proto_control_control_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_proto_control_control_proto_goTypes = []any{
 	(ControlFrameType)(0),            // 0: kwik.control.ControlFrameType
 	(PathStatus)(0),                  // 1: kwik.control.PathStatus
@@ -1654,17 +1724,18 @@ var file_proto_control_control_proto_goTypes = []any{
 	(*Heartbeat)(nil),                // 17: kwik.control.Heartbeat
 	(*SessionClose)(nil),             // 18: kwik.control.SessionClose
 	(*DataChunkAck)(nil),             // 19: kwik.control.DataChunkAck
-	nil,                              // 20: kwik.control.AddPathRequest.MetadataEntry
-	nil,                              // 21: kwik.control.StreamCreateNotification.MetadataEntry
+	(*PacketAck)(nil),                // 20: kwik.control.PacketAck
+	nil,                              // 21: kwik.control.AddPathRequest.MetadataEntry
+	nil,                              // 22: kwik.control.StreamCreateNotification.MetadataEntry
 }
 var file_proto_control_control_proto_depIdxs = []int32{
 	0,  // 0: kwik.control.ControlFrame.type:type_name -> kwik.control.ControlFrameType
-	20, // 1: kwik.control.AddPathRequest.metadata:type_name -> kwik.control.AddPathRequest.MetadataEntry
+	21, // 1: kwik.control.AddPathRequest.metadata:type_name -> kwik.control.AddPathRequest.MetadataEntry
 	1,  // 2: kwik.control.PathStatusNotification.status:type_name -> kwik.control.PathStatus
 	10, // 3: kwik.control.PathStatusNotification.metrics:type_name -> kwik.control.PathMetrics
 	2,  // 4: kwik.control.AuthenticationRequest.role:type_name -> kwik.control.SessionRole
 	3,  // 5: kwik.control.StreamCreateNotification.stream_type:type_name -> kwik.control.StreamType
-	21, // 6: kwik.control.StreamCreateNotification.metadata:type_name -> kwik.control.StreamCreateNotification.MetadataEntry
+	22, // 6: kwik.control.StreamCreateNotification.metadata:type_name -> kwik.control.StreamCreateNotification.MetadataEntry
 	10, // 7: kwik.control.Heartbeat.current_metrics:type_name -> kwik.control.PathMetrics
 	8,  // [8:8] is the sub-list for method output_type
 	8,  // [8:8] is the sub-list for method input_type
@@ -1684,7 +1755,7 @@ func file_proto_control_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_control_control_proto_rawDesc), len(file_proto_control_control_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   18,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -2,21 +2,33 @@ package presentation
 
 import (
 	"fmt"
-	"log"
 	"sync"
 	"time"
 )
 
+// StreamBufferLogger provides minimal logging for the presentation error handler
+type StreamBufferLogger interface {
+	Debug(msg string, keysAndValues ...interface{})
+	Info(msg string, keysAndValues ...interface{})
+	Warn(msg string, keysAndValues ...interface{})
+	Error(msg string, keysAndValues ...interface{})
+}
+
 // StreamBufferErrorHandler gère les erreurs spécifiques aux StreamBuffers
 type StreamBufferErrorHandler struct {
-	mu                    sync.RWMutex
-	corruptedStreams     map[uint64]time.Time
-	recoveryAttempts     map[uint64]int
-	maxRecoveryAttempts  int
-	gapTimeouts          map[uint64]time.Time
-	maxGapTimeout        time.Duration
-	errorCallbacks       []func(StreamBufferError)
+	mu                  sync.RWMutex
+	corruptedStreams    map[uint64]time.Time
+	recoveryAttempts    map[uint64]int
+	maxRecoveryAttempts int
+	gapTimeouts         map[uint64]time.Time
+	maxGapTimeout       time.Duration
+	errorCallbacks      []func(StreamBufferError)
+
+	logger StreamBufferLogger
 }
+
+// SetLogger sets the logger for the error handler
+func (h *StreamBufferErrorHandler) SetLogger(l StreamBufferLogger) { h.logger = l }
 
 // StreamBufferError représente une erreur de StreamBuffer
 type StreamBufferError struct {
@@ -83,17 +95,19 @@ func (h *StreamBufferErrorHandler) HandleBufferOverflow(streamID uint64, bufferS
 		Timestamp:   time.Now(),
 		Recoverable: true,
 		Context: map[string]interface{}{
-			"buffer_size":      bufferSize,
-			"attempted_write":  attemptedWrite,
-			"overflow_amount":  attemptedWrite - bufferSize,
+			"buffer_size":     bufferSize,
+			"attempted_write": attemptedWrite,
+			"overflow_amount": attemptedWrite - bufferSize,
 		},
 	}
 
-	log.Printf("[STREAM_BUFFER_ERROR] %s for stream %d: %s", err.ErrorType, streamID, err.Message)
-	
+	if h.logger != nil {
+		h.logger.Error("STREAM_BUFFER_ERROR", "type", err.ErrorType.String(), "stream", streamID, "message", err.Message)
+	}
+
 	// Notifier les callbacks
 	h.notifyCallbacks(err)
-	
+
 	// Stratégie de récupération : activer la contre-pression
 	return fmt.Errorf("buffer overflow detected for stream %d, backpressure activated", streamID)
 }
@@ -105,7 +119,7 @@ func (h *StreamBufferErrorHandler) HandleDataCorruption(streamID uint64, offset 
 
 	// Marquer le stream comme corrompu
 	h.corruptedStreams[streamID] = time.Now()
-	
+
 	err := StreamBufferError{
 		StreamID:    streamID,
 		ErrorType:   StreamBufferErrorDataCorruption,
@@ -118,12 +132,13 @@ func (h *StreamBufferErrorHandler) HandleDataCorruption(streamID uint64, offset 
 			"actual_checksum":   actualChecksum,
 		},
 	}
+	if h.logger != nil {
+		h.logger.Error("STREAM_BUFFER_ERROR", "type", err.ErrorType.String(), "stream", streamID, "message", err.Message)
+	}
 
-	log.Printf("[STREAM_BUFFER_ERROR] %s for stream %d: %s", err.ErrorType, streamID, err.Message)
-	
 	// Notifier les callbacks
 	h.notifyCallbacks(err)
-	
+
 	// Isoler le stream corrompu
 	return fmt.Errorf("data corruption detected for stream %d, stream isolated", streamID)
 }
@@ -149,15 +164,16 @@ func (h *StreamBufferErrorHandler) HandlePersistentGap(streamID uint64, gapStart
 					"gap_size":     gapEnd - gapStart,
 				},
 			}
+			if h.logger != nil {
+				h.logger.Warn("STREAM_BUFFER_ERROR", "type", err.ErrorType.String(), "stream", streamID, "message", err.Message)
+			}
 
-			log.Printf("[STREAM_BUFFER_ERROR] %s for stream %d: %s", err.ErrorType, streamID, err.Message)
-			
 			// Notifier les callbacks
 			h.notifyCallbacks(err)
-			
+
 			// Nettoyer le timeout
 			delete(h.gapTimeouts, streamID)
-			
+
 			return fmt.Errorf("persistent gap detected for stream %d from %d to %d", streamID, gapStart, gapEnd)
 		}
 	} else {
@@ -180,12 +196,13 @@ func (h *StreamBufferErrorHandler) HandleReadTimeout(streamID uint64, timeout ti
 			"timeout_duration": timeout,
 		},
 	}
+	if h.logger != nil {
+		h.logger.Warn("STREAM_BUFFER_ERROR", "type", err.ErrorType.String(), "stream", streamID, "message", err.Message)
+	}
 
-	log.Printf("[STREAM_BUFFER_ERROR] %s for stream %d: %s", err.ErrorType, streamID, err.Message)
-	
 	// Notifier les callbacks
 	h.notifyCallbacks(err)
-	
+
 	return fmt.Errorf("read timeout for stream %d after %v", streamID, timeout)
 }
 
@@ -193,7 +210,7 @@ func (h *StreamBufferErrorHandler) HandleReadTimeout(streamID uint64, timeout ti
 func (h *StreamBufferErrorHandler) IsStreamCorrupted(streamID uint64) bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	
+
 	_, exists := h.corruptedStreams[streamID]
 	return exists
 }
@@ -209,13 +226,14 @@ func (h *StreamBufferErrorHandler) AttemptRecovery(streamID uint64) error {
 	}
 
 	h.recoveryAttempts[streamID] = attempts + 1
-	
+
 	// Nettoyer les erreurs récupérables
 	delete(h.corruptedStreams, streamID)
 	delete(h.gapTimeouts, streamID)
-	
-	log.Printf("[STREAM_BUFFER_RECOVERY] Attempting recovery %d/%d for stream %d", attempts+1, h.maxRecoveryAttempts, streamID)
-	
+	if h.logger != nil {
+		h.logger.Info("STREAM_BUFFER_RECOVERY Attempting recovery", "attempt", attempts+1, "max", h.maxRecoveryAttempts, "stream", streamID)
+	}
+
 	return nil
 }
 
@@ -227,15 +245,16 @@ func (h *StreamBufferErrorHandler) CleanupStream(streamID uint64) {
 	delete(h.corruptedStreams, streamID)
 	delete(h.recoveryAttempts, streamID)
 	delete(h.gapTimeouts, streamID)
-	
-	log.Printf("[STREAM_BUFFER_CLEANUP] Cleaned up error state for stream %d", streamID)
+	if h.logger != nil {
+		h.logger.Info("STREAM_BUFFER_CLEANUP Cleaned up error state", "stream", streamID)
+	}
 }
 
 // AddErrorCallback ajoute un callback pour les erreurs
 func (h *StreamBufferErrorHandler) AddErrorCallback(callback func(StreamBufferError)) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	
+
 	h.errorCallbacks = append(h.errorCallbacks, callback)
 }
 
@@ -245,7 +264,9 @@ func (h *StreamBufferErrorHandler) notifyCallbacks(err StreamBufferError) {
 		go func(cb func(StreamBufferError)) {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("[STREAM_BUFFER_ERROR] Callback panic: %v", r)
+					if h.logger != nil {
+						h.logger.Error("STREAM_BUFFER_ERROR Callback panic", "error", r)
+					}
 				}
 			}()
 			cb(err)
@@ -259,14 +280,14 @@ func (h *StreamBufferErrorHandler) GetErrorStats() map[string]interface{} {
 	defer h.mu.RUnlock()
 
 	return map[string]interface{}{
-		"corrupted_streams_count":   len(h.corruptedStreams),
-		"recovery_attempts_count":   len(h.recoveryAttempts),
-		"gap_timeouts_count":        len(h.gapTimeouts),
-		"max_recovery_attempts":     h.maxRecoveryAttempts,
-		"max_gap_timeout":           h.maxGapTimeout,
-		"corrupted_streams":         h.corruptedStreams,
-		"recovery_attempts":         h.recoveryAttempts,
-		"gap_timeouts":              h.gapTimeouts,
+		"corrupted_streams_count": len(h.corruptedStreams),
+		"recovery_attempts_count": len(h.recoveryAttempts),
+		"gap_timeouts_count":      len(h.gapTimeouts),
+		"max_recovery_attempts":   h.maxRecoveryAttempts,
+		"max_gap_timeout":         h.maxGapTimeout,
+		"corrupted_streams":       h.corruptedStreams,
+		"recovery_attempts":       h.recoveryAttempts,
+		"gap_timeouts":            h.gapTimeouts,
 	}
 }
 

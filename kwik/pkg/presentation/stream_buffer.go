@@ -164,8 +164,8 @@ func (sb *StreamBufferImpl) WriteWithMetadata(data []byte, offset uint64, metada
 		// We're writing beyond consumed data, increase usedSize by the difference
 		increase := uint64(len(data)) - consumedSpace
 		sb.usedSize += increase
-		fmt.Printf("DEBUG: Stream %d writing new data: dataSize=%d, consumedSpace=%d, increase=%d, newUsedSize=%d\n",
-			sb.streamID, len(data), consumedSpace, increase, sb.usedSize)
+		// fmt.Printf("DEBUG: Stream %d writing new data: dataSize=%d, consumedSpace=%d, increase=%d, newUsedSize=%d\n",
+		// 	sb.streamID, len(data), consumedSpace, increase, sb.usedSize)
 	}
 	sb.sizeMutex.Unlock()
 

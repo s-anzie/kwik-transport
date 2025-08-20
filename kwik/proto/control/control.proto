@@ -29,6 +29,7 @@ enum ControlFrameType {
     HEARTBEAT = 11;
     SESSION_CLOSE = 12;
     DATA_CHUNK_ACK = 13; // Ack for delivered data chunks (transparent to app)
+    PACKET_ACK = 14;     // Ack for delivered transport packet
 }
 
 // Add path request - server requests client to connect to secondary server
@@ -184,4 +185,11 @@ message DataChunkAck {
     uint64 offset = 4;             // Aggregated stream offset where chunk starts
     uint32 size = 5;               // Size of data delivered
     uint64 timestamp = 6;          // Ack timestamp
+}
+
+// PacketAck - acknowledgment for a delivered transport packet
+message PacketAck {
+    uint64 packet_id = 1;
+    string path_id = 2;
+    uint64 timestamp = 3;
 }

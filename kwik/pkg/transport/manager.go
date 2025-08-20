@@ -8,9 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/quic-go/quic-go"
 	kwiктls "kwik/internal/tls"
 	"kwik/internal/utils"
+
+	"github.com/quic-go/quic-go"
 )
 
 // pathManager implements the PathManager interface
@@ -28,6 +29,9 @@ type pathManager struct {
 	healthTicker           *time.Ticker
 	healthStopChan         chan struct{}
 	healthMutex            sync.RWMutex
+
+	// Logger
+	logger PathLogger
 }
 
 // NewPathManager creates a new path manager
@@ -36,6 +40,16 @@ func NewPathManager() PathManager {
 		paths:       make(map[string]*path),
 		activePaths: make(map[string]*path),
 		deadPaths:   make(map[string]*path),
+	}
+}
+
+// SetLogger sets the logger for the path manager and existing paths
+func (pm *pathManager) SetLogger(logger PathLogger) {
+	pm.mutex.Lock()
+	defer pm.mutex.Unlock()
+	pm.logger = logger
+	for _, p := range pm.paths {
+		p.logger = logger
 	}
 }
 
@@ -67,6 +81,7 @@ func (pm *pathManager) CreatePath(address string) (Path, error) {
 		connection:   conn,
 		createdAt:    time.Now(),
 		lastActivity: time.Now(),
+		logger:       pm.logger,
 	}
 
 	// Create connection wrapper with path reference
@@ -97,6 +112,7 @@ func (pm *pathManager) CreatePathFromConnection(conn quic.Connection) (Path, err
 		connection:   conn,
 		createdAt:    time.Now(),
 		lastActivity: time.Now(),
+		logger:       pm.logger,
 	}
 
 	// Create connection wrapper with path reference
@@ -550,11 +566,11 @@ func (pm *pathManager) healthMonitoringLoop() {
 		ticker := pm.healthTicker
 		stopChan := pm.healthStopChan
 		pm.healthMutex.RUnlock()
-		
+
 		if ticker == nil || stopChan == nil {
 			return // Health monitoring was stopped
 		}
-		
+
 		select {
 		case <-ticker.C:
 			pm.performHealthCheck()
@@ -711,32 +727,6 @@ func (pm *pathManager) getConsecutiveFailures(p *path) int {
 	// TODO: Implement actual consecutive failure tracking
 	// For now, return error count as approximation
 	return p.GetErrorCount()
-}
-
-// establishControlPlaneStream establishes the control plane stream for a path
-func (pm *pathManager) establishControlPlaneStream(p *path) error {
-	if p.wrapper == nil {
-		return utils.NewKwikError(utils.ErrConnectionLost, "path wrapper is nil", nil)
-	}
-	
-	// Create control plane stream using the connection wrapper
-	controlStream, err := p.wrapper.CreateControlStream()
-	if err != nil {
-		return utils.NewKwikError(utils.ErrStreamCreationFailed,
-			"failed to create control plane stream", err)
-	}
-	
-	// TODO: Send initial handshake/authentication message over control stream
-	// This would include:
-	// 1. Protocol version negotiation
-	// 2. Session ID exchange
-	// 3. Authentication if required
-	// 4. Path capabilities advertisement
-	
-	// For now, just ensure the stream is established
-	_ = controlStream
-	
-	return nil
 }
 
 // generateClientTLSConfig generates a TLS config for client connections

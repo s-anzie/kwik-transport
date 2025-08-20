@@ -86,7 +86,14 @@ func DefaultLogConfig() *LogConfig {
 		GlobalLevel: LogLevelInfo,
 		Format:      "text",
 		Output:      "stdout",
-		Components:  make(map[string]LogLevel),
+		Components: map[string]LogLevel{
+			"SESSION":   LogLevelInfo,
+			"CONTROL":   LogLevelInfo,
+			"TRANSPORT": LogLevelInfo,
+			"DATA":      LogLevelInfo,
+			"STREAM":    LogLevelDebug,
+			"DPM":       LogLevelDebug,
+		},
 	}
 }
 
@@ -143,6 +150,23 @@ func New(config *Config) (*KWIK, error) {
 	}
 	logger := NewEnhancedLogger(logLevel, "KWIK-SYSTEM")
 
+	// Apply component-level overrides
+	componentLoggers := make(map[string]Logger)
+	if config.Logging != nil && len(config.Logging.Components) > 0 {
+		for comp, lvl := range config.Logging.Components {
+			l := logger.WithComponent(comp)
+			l.SetLevel(lvl)
+			componentLoggers[comp] = l
+		}
+	}
+	// Helper to get component logger or fallback to base
+	getCompLogger := func(name string) Logger {
+		if l, ok := componentLoggers[name]; ok {
+			return l
+		}
+		return logger.WithComponent(name)
+	}
+
 	// Create metrics system
 	var metrics *SystemMetrics
 	if config.MetricsEnabled {
@@ -151,6 +175,8 @@ func New(config *Config) (*KWIK, error) {
 
 	// Create path manager with integrated health monitoring
 	pathManager := transport.NewPathManager()
+	// Inject logger into transport layer
+	pathManager.SetLogger(getCompLogger("TRANSPORT"))
 
 	// Create control plane with message routing
 	controlPlaneConfig := &control.ControlPlaneConfig{
@@ -186,7 +212,7 @@ func New(config *Config) (*KWIK, error) {
 	streamMultiplexer := stream.NewLogicalStreamManager(controlPlane, nil, streamConfig)
 
 	// Create session manager
-	sessionManager := NewSessionManager(config, logger)
+	sessionManager := NewSessionManager(config, getCompLogger("SESSION"))
 
 	kwik := &KWIK{
 		sessionManager:    sessionManager,

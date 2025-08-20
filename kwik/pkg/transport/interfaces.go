@@ -16,7 +16,7 @@ type PathManager interface {
 	GetActivePaths() []Path
 	GetDeadPaths() []Path
 	MarkPathDead(pathID string) error
-	
+
 	// Advanced path control
 	GetPathCount() int
 	GetActivePathCount() int
@@ -27,7 +27,7 @@ type PathManager interface {
 	GetPathsByState(state PathState) []Path
 	ValidatePathHealth() []string
 	Close() error
-	
+
 	// Path failure detection and notification system
 	StartHealthMonitoring() error
 	StopHealthMonitoring() error
@@ -35,6 +35,9 @@ type PathManager interface {
 	GetPathHealthMetrics(pathID string) (*PathHealthMetrics, error)
 	SetHealthCheckInterval(interval time.Duration)
 	SetFailureThreshold(threshold int)
+
+	// Logging
+	SetLogger(logger PathLogger)
 }
 
 // PathStatusNotificationHandler handles path status change notifications
@@ -46,14 +49,14 @@ type PathStatusNotificationHandler interface {
 
 // PathHealthMetrics contains health metrics for a path
 type PathHealthMetrics struct {
-	PathID           string
-	LastActivity     time.Time
-	ErrorCount       int
-	LastError        error
-	ResponseTime     time.Duration
-	PacketLossRate   float64
-	ConnectionState  string
-	HealthScore      float64
+	PathID              string
+	LastActivity        time.Time
+	ErrorCount          int
+	LastError           error
+	ResponseTime        time.Duration
+	PacketLossRate      float64
+	ConnectionState     string
+	HealthScore         float64
 	ConsecutiveFailures int
 }
 
@@ -68,11 +71,11 @@ type Path interface {
 	GetControlStream() (quic.Stream, error)
 	GetDataStreams() []quic.Stream
 	Close() error
-	
+
 	// New methods for proper control stream management
 	CreateControlStreamAsClient() (quic.Stream, error)
 	AcceptControlStreamAsServer() (quic.Stream, error)
-	
+
 	// Secondary stream support methods
 	IsSecondaryPath() bool
 	SetSecondaryPath(isSecondary bool)
@@ -81,6 +84,9 @@ type Path interface {
 	GetSecondaryStream(streamID uint64) (quic.Stream, bool)
 	GetSecondaryStreams() map[uint64]quic.Stream
 	GetSecondaryStreamCount() int
+
+	// Logging
+	SetLogger(logger PathLogger)
 }
 
 // ConnectionWrapper wraps a QUIC connection with KWIK-specific functionality

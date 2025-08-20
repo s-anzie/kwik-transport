@@ -8,7 +8,31 @@ import (
 	"time"
 )
 
+// KwikMetadataLoggerAdapter adapts central logger to MetadataLogger
+type KwikMetadataLoggerAdapter struct {
+	base interface {
+		Debug(string, ...interface{})
+		Info(string, ...interface{})
+		Warn(string, ...interface{})
+		Error(string, ...interface{})
+	}
+}
 
+func (a *KwikMetadataLoggerAdapter) Debug(msg string, args ...interface{}) {
+	a.base.Debug(fmt.Sprintf(msg, args...))
+}
+func (a *KwikMetadataLoggerAdapter) Info(msg string, args ...interface{}) {
+	a.base.Info(fmt.Sprintf(msg, args...))
+}
+func (a *KwikMetadataLoggerAdapter) Warn(msg string, args ...interface{}) {
+	a.base.Warn(fmt.Sprintf(msg, args...))
+}
+func (a *KwikMetadataLoggerAdapter) Error(msg string, args ...interface{}) {
+	a.base.Error(fmt.Sprintf(msg, args...))
+}
+func (a *KwikMetadataLoggerAdapter) Critical(msg string, args ...interface{}) {
+	a.base.Error(fmt.Sprintf("CRITICAL: "+msg, args...))
+}
 
 // MetadataErrorHandler handles errors specific to metadata protocol operations
 type MetadataErrorHandler struct {
@@ -1066,16 +1090,17 @@ func min(a, b int) int {
 	}
 	return b
 }
+
 // Helper function to check if a string contains a substring
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || (len(s) > len(substr) && 
-		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || 
-		 func() bool {
-			 for i := 1; i <= len(s)-len(substr); i++ {
-				 if s[i:i+len(substr)] == substr {
-					 return true
-				 }
-			 }
-			 return false
-		 }())))
+	return len(s) >= len(substr) && (s == substr || (len(s) > len(substr) &&
+		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
+			func() bool {
+				for i := 1; i <= len(s)-len(substr); i++ {
+					if s[i:i+len(substr)] == substr {
+						return true
+					}
+				}
+				return false
+			}())))
 }

@@ -5,22 +5,26 @@ import (
 	"time"
 
 	"kwik/internal/utils"
+	"kwik/pkg/stream"
 	"kwik/proto/control"
+
 	"google.golang.org/protobuf/proto"
 )
 
 // AuthenticationManager handles authentication for KWIK sessions
 type AuthenticationManager struct {
-	sessionID     string
-	isClient      bool
+	sessionID       string
+	isClient        bool
 	isAuthenticated bool
-	credentials   []byte
-	clientVersion string
-	serverVersion string
+	credentials     []byte
+	clientVersion   string
+	serverVersion   string
 	enabledFeatures []string
 	sessionTimeout  time.Duration
-	createdAt     time.Time
-	sessionRole   control.SessionRole  // Role of this session (PRIMARY or SECONDARY)
+	createdAt       time.Time
+	sessionRole     control.SessionRole // Role of this session (PRIMARY or SECONDARY)
+
+	logger stream.StreamLogger
 }
 
 // NewAuthenticationManager creates a new authentication manager
@@ -37,6 +41,9 @@ func NewAuthenticationManager(sessionID string, isClient bool) *AuthenticationMa
 		createdAt:       time.Now(),
 	}
 }
+
+// SetLogger sets the logger for the authentication manager
+func (am *AuthenticationManager) SetLogger(l stream.StreamLogger) { am.logger = l }
 
 // CreateAuthenticationRequest creates an authentication request frame
 func (am *AuthenticationManager) CreateAuthenticationRequest(role control.SessionRole) (*control.ControlFrame, error) {
@@ -123,11 +130,13 @@ func (am *AuthenticationManager) HandleAuthenticationRequest(frame *control.Cont
 	// Validate session role and ID based on authentication type
 	success := true
 	errorMessage := ""
-	
+
 	// Handle role-based authentication logic
-	fmt.Printf("DEBUG: AuthManager handling authentication request with role: %v, sessionID: %s, isAuthenticated: %t\n", 
-		authReq.Role, authReq.SessionId, am.isAuthenticated)
-	
+	if am.logger != nil {
+		am.logger.Debug(fmt.Sprintf("AuthManager handling authentication request with role: %v, sessionID: %s, isAuthenticated: %t",
+			authReq.Role, authReq.SessionId, am.isAuthenticated))
+	}
+
 	if authReq.Role == control.SessionRole_PRIMARY {
 		// Primary path authentication - this is the main session
 		if am.isAuthenticated {
@@ -144,26 +153,34 @@ func (am *AuthenticationManager) HandleAuthenticationRequest(frame *control.Cont
 		// The secondary server should accept the client's session ID and role
 		if !am.isAuthenticated {
 			// First authentication on this secondary server - accept the session ID
-			fmt.Printf("DEBUG: AuthManager accepting SECONDARY authentication for session %s\n", authReq.SessionId)
+			if am.logger != nil {
+				am.logger.Debug(fmt.Sprintf("AuthManager accepting SECONDARY authentication for session %s", authReq.SessionId))
+			}
 			am.sessionID = authReq.SessionId
 			am.sessionRole = control.SessionRole_SECONDARY
 		} else if authReq.SessionId != am.sessionID {
 			success = false
 			errorMessage = "session ID mismatch for secondary path"
-			fmt.Printf("DEBUG: AuthManager rejecting SECONDARY auth - session ID mismatch: expected %s, got %s\n", 
-				am.sessionID, authReq.SessionId)
+			if am.logger != nil {
+				am.logger.Debug(fmt.Sprintf("AuthManager rejecting SECONDARY auth - session ID mismatch: expected %s, got %s",
+					am.sessionID, authReq.SessionId))
+			}
 		} else {
 			// Valid secondary path authentication with matching session ID
-			fmt.Printf("DEBUG: AuthManager accepting SECONDARY authentication for existing session %s\n", authReq.SessionId)
+			if am.logger != nil {
+				am.logger.Debug(fmt.Sprintf("AuthManager accepting SECONDARY authentication for existing session %s", authReq.SessionId))
+			}
 			am.sessionRole = control.SessionRole_SECONDARY
 		}
 	} else {
 		success = false
 		errorMessage = "invalid session role"
 	}
-	
-	fmt.Printf("DEBUG: AuthManager authentication result: success=%t, errorMessage=%s, finalRole=%v\n", 
-		success, errorMessage, am.sessionRole)
+
+	if am.logger != nil {
+		am.logger.Debug(fmt.Sprintf("AuthManager authentication result: success=%t, errorMessage=%s, finalRole=%v",
+			success, errorMessage, am.sessionRole))
+	}
 
 	// Validate client version compatibility
 	if success && !am.isVersionCompatible(authReq.ClientVersion) {
@@ -261,18 +278,18 @@ func (am *AuthenticationManager) isVersionCompatible(version string) bool {
 // filterSupportedFeatures filters the requested features to only include supported ones
 func (am *AuthenticationManager) filterSupportedFeatures(requestedFeatures []string) []string {
 	var enabledFeatures []string
-	
+
 	for _, feature := range requestedFeatures {
 		if utils.IsFeatureSupported(feature) {
 			enabledFeatures = append(enabledFeatures, feature)
 		}
 	}
-	
+
 	// Ensure we have at least the default features
 	if len(enabledFeatures) == 0 {
 		enabledFeatures = utils.GetDefaultEnabledFeatures()
 	}
-	
+
 	return enabledFeatures
 }
 

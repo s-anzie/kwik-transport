@@ -1,3 +1,0 @@
-This is a small test file for FTPA demonstration.
-It contains multiple lines to test basic functionality.
-File created at: mar. 19 août 2025 14:53:36 CEST

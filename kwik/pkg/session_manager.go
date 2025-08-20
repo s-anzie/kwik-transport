@@ -135,6 +135,8 @@ func (sm *SessionManager) CreateClientSession(ctx context.Context, address strin
 
 	// Store session
 	sessionID := clientSession.GetSessionID()
+	// Inject logger for this session
+	clientSession.SetLogger(sm.logger.WithComponent("SESSION").WithSession(sessionID))
 	sm.clientSessions[sessionID] = clientSession
 
 	// Set up session cleanup on close

@@ -141,6 +141,10 @@ func (m *MockPathManager) SetFailureThreshold(threshold int) {
 	m.Called(threshold)
 }
 
+func (m *MockPathManager) SetLogger(logger transport.PathLogger) {
+	m.Called(logger)
+}
+
 // MockPath is a mock implementation of transport.Path
 type MockPath struct {
 	mock.Mock
@@ -262,6 +266,10 @@ func (m *MockPath) GetSecondaryStreams() map[uint64]quic.Stream {
 func (m *MockPath) GetSecondaryStreamCount() int {
 	args := m.Called()
 	return args.Int(0)
+}
+
+func (m *MockPath) SetLogger(logger transport.PathLogger) {
+	m.Called(logger)
 }
 
 // MockStream is a mock implementation for control streams

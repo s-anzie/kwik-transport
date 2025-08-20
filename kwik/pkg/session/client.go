@@ -52,10 +52,13 @@ type ClientSession struct {
 	streams      map[uint64]*stream.ClientStream
 	streamsMutex sync.RWMutex
 
+	// Track application streams to avoid internal ingestion conflicts
+	appStreams map[uint64]bool
+
 	// Secondary stream management
 	secondaryStreamHandler stream.SecondaryStreamHandler
 	streamAggregator       data.DataAggregator
-	secondaryAggregator    *data.SecondaryStreamAggregator
+	aggregator             *data.StreamAggregator
 	metadataProtocol       *stream.MetadataProtocolImpl
 
 	// Data presentation management
@@ -75,6 +78,9 @@ type ClientSession struct {
 	// Heartbeat management
 	heartbeatSequence   uint64
 	lastHeartbeatByPath map[string]time.Time
+
+	// Logger for this session
+	logger stream.StreamLogger
 }
 
 // SessionConfig holds configuration for a KWIK session
@@ -114,6 +120,7 @@ func NewClientSession(pathManager transport.PathManager, config *SessionConfig) 
 
 	// Create data presentation manager
 	presentationConfig := presentation.DefaultPresentationConfig()
+	presentationConfig.EnableDebugLogging = true
 	dataPresentationManager := presentation.NewDataPresentationManager(presentationConfig)
 
 	session := &ClientSession{
@@ -125,23 +132,39 @@ func NewClientSession(pathManager transport.PathManager, config *SessionConfig) 
 		authManager:             NewAuthenticationManager(sessionID, true), // true = isClient
 		nextStreamID:            1,                                         // Start stream IDs from 1 (QUIC-compatible)
 		streams:                 make(map[uint64]*stream.ClientStream),
+		appStreams:              make(map[uint64]bool),
 		secondaryStreamHandler:  stream.NewSecondaryStreamHandler(nil), // Use default config
 		streamAggregator:        data.NewDataAggregator(&DefaultSessionLogger{}),
-		secondaryAggregator:     data.NewSecondaryStreamAggregator(&DefaultSessionLogger{}), // Initialize secondary stream aggregator
-		metadataProtocol:        stream.NewMetadataProtocol(),                               // Initialize metadata protocol
-		dataPresentationManager: dataPresentationManager,                                    // Initialize data presentation manager
-		acceptChan:              make(chan *stream.ClientStream, 100),                       // Buffered channel
+		aggregator:              data.NewStreamAggregator(&DefaultSessionLogger{}), // Initialize secondary stream aggregator
+		metadataProtocol:        stream.NewMetadataProtocol(),                      // Initialize metadata protocol
+		dataPresentationManager: dataPresentationManager,                           // Initialize data presentation manager
+		acceptChan:              make(chan *stream.ClientStream, 100),              // Buffered channel
 		ctx:                     ctx,
 		cancel:                  cancel,
 		config:                  config,
 		heartbeatSequence:       0,
 		lastHeartbeatByPath:     make(map[string]time.Time),
+		logger:                  &DefaultSessionLogger{},
 	}
 
 	// Wire the secondary aggregator to the presentation manager so reads use the same buffer path
-	session.secondaryAggregator.SetPresentationManager(dataPresentationManager)
+	session.aggregator.SetPresentationManager(dataPresentationManager)
+
+	// Propagate logger to sub-components that support it
+	session.authManager.SetLogger(session.logger)
+	session.dataPresentationManager.SetLogger(session.logger)
 
 	return session
+}
+
+// GetLogger returns the stream-compatible logger for this session
+func (s *ClientSession) GetLogger() stream.StreamLogger {
+	return s.logger
+}
+
+// SetLogger sets the stream-compatible logger for this session
+func (s *ClientSession) SetLogger(l stream.StreamLogger) {
+	s.logger = l
 }
 
 // Dial establishes a connection to the primary server (QUIC-compatible)
@@ -170,7 +193,7 @@ func Dial(ctx context.Context, address string, config *SessionConfig) (Session, 
 	// This MUST be the very first stream (ID 0)
 	_, err = primaryPath.CreateControlStreamAsClient()
 	if err != nil {
-		fmt.Printf("DEBUG: Client FAILED to create control stream: %v\n", err)
+		session.logger.Debug(fmt.Sprintf("Client FAILED to create control stream: %v", err))
 		session.Close() // Clean up on failure
 		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
 			"failed to create control stream as client", err)
@@ -178,9 +201,9 @@ func Dial(ctx context.Context, address string, config *SessionConfig) (Session, 
 
 	// IMMEDIATELY send authentication after control stream creation
 	// This ensures the server can read the authentication request right away
-	err = session.PerformAuthentication(ctx)
+	err = session.performAuthentication(ctx)
 	if err != nil {
-		fmt.Printf("DEBUG: Client authentication FAILED: %v\n", err)
+		session.logger.Debug(fmt.Sprintf("Client authentication FAILED: %v", err))
 		session.Close() // Clean up on authentication failure
 		return nil, utils.NewKwikError(utils.ErrAuthenticationFailed,
 			"authentication failed during primary path establishment", err)
@@ -273,8 +296,20 @@ func (s *ClientSession) OpenStreamSync(ctx context.Context) (Stream, error) {
 		}
 	}
 
-	// Start ingestion of primary path data for this stream (decapsulation -> DPM)
-	go s.startPrimaryIngestion(streamID, quicStream, s.primaryPath.ID())
+	// Mark as application stream to avoid internal ingestion stealing
+	s.streamsMutex.Lock()
+	s.appStreams[streamID] = true
+	s.streamsMutex.Unlock()
+
+	// Start ingestion of primary path data for this stream (decapsulation -> DPM) only for non-app streams
+	go func(id uint64, qs quic.Stream, pid string) {
+		s.streamsMutex.RLock()
+		isApp := s.appStreams[id]
+		s.streamsMutex.RUnlock()
+		if !isApp {
+			s.startPrimaryIngestion(id, qs, pid)
+		}
+	}(streamID, quicStream, s.primaryPath.ID())
 
 	s.streamsMutex.Lock()
 	s.streams[streamID] = clientStream
@@ -605,7 +640,7 @@ func (s *ClientSession) startControlReaderForPath(path transport.Path) {
 					time.Sleep(5 * time.Millisecond)
 					continue
 				}
-				fmt.Printf("DEBUG: Client control frame read error on path %s: %v\n", path.ID(), err)
+				s.logger.Debug(fmt.Sprintf("Client control frame read error on path %s: %v", path.ID(), err))
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
@@ -645,27 +680,27 @@ func (s *ClientSession) handleAddPathRequest(frame *control.ControlFrame) {
 
 	// Validate path ID
 	if addPathReq.PathId == "" {
-		fmt.Printf("DEBUG: Client received AddPathRequest with empty PathId\n")
+		s.logger.Debug("Client received AddPathRequest with empty PathId")
 		s.sendAddPathResponse("", false, "path ID is empty", "INVALID_PATH_ID")
 		return
 	}
 
-	fmt.Printf("DEBUG: Client received AddPathRequest with PathId: %s, TargetAddress: %s\n",
-		addPathReq.PathId, addPathReq.TargetAddress)
+	s.logger.Debug(fmt.Sprintf("Client received AddPathRequest with PathId: %s, TargetAddress: %s",
+		addPathReq.PathId, addPathReq.TargetAddress))
 	// Attempt to create secondary path
 	startTime := time.Now()
-	fmt.Printf("DEBUG: Client attempting to create path to %s\n", addPathReq.TargetAddress)
+	s.logger.Debug(fmt.Sprintf("Client attempting to create path to %s", addPathReq.TargetAddress))
 	secondaryPath, err := s.pathManager.CreatePath(addPathReq.TargetAddress)
 	connectionTime := time.Since(startTime)
 
 	if err != nil {
-		fmt.Printf("DEBUG: Client failed to create path to %s: %v\n", addPathReq.TargetAddress, err)
+		s.logger.Debug(fmt.Sprintf("Client failed to create path to %s: %v", addPathReq.TargetAddress, err))
 		s.sendAddPathResponse("", false,
 			fmt.Sprintf("failed to create path to %s: %v", addPathReq.TargetAddress, err),
 			"CONNECTION_FAILED")
 		return
 	}
-	fmt.Printf("DEBUG: Client successfully created path to %s in %v\n", addPathReq.TargetAddress, connectionTime)
+	s.logger.Debug(fmt.Sprintf("Client successfully created path to %s in %v", addPathReq.TargetAddress, connectionTime))
 
 	// Store the original path ID for path manager operations
 	originalPathID := secondaryPath.ID()
@@ -685,37 +720,37 @@ func (s *ClientSession) handleAddPathRequest(frame *control.ControlFrame) {
 	}
 
 	// Perform authentication on secondary path using existing session ID
-	fmt.Printf("DEBUG: Client starting authentication on secondary path %s\n", secondaryPath.ID())
+	s.logger.Debug(fmt.Sprintf("Client starting authentication on secondary path %s", secondaryPath.ID()))
 	err = s.performSecondaryPathAuthentication(context.Background(), secondaryPath)
 	if err != nil {
 		// Authentication failed, remove the path and send failure response
-		fmt.Printf("DEBUG: Client authentication failed on secondary path: %v\n", err)
+		s.logger.Debug(fmt.Sprintf("Client authentication failed on secondary path: %v", err))
 		s.pathManager.RemovePath(secondaryPath.ID())
 		s.sendAddPathResponse("", false,
 			fmt.Sprintf("authentication failed on secondary path: %v", err),
 			"AUTHENTICATION_FAILED")
 		return
 	}
-	fmt.Printf("DEBUG: Client authentication successful on secondary path %s\n", secondaryPath.ID())
+	s.logger.Debug(fmt.Sprintf("Client authentication successful on secondary path %s", secondaryPath.ID()))
 
 	// Integrate secondary path into session aggregate (Requirement 3.7)
-	fmt.Printf("DEBUG: Client starting integration of secondary path %s\n", secondaryPath.ID())
+	s.logger.Debug(fmt.Sprintf("Client starting integration of secondary path %s", secondaryPath.ID()))
 	err = s.integrateSecondaryPath(secondaryPath, originalPathID)
 	if err != nil {
 		// Integration failed, remove the path using the original ID
-		fmt.Printf("DEBUG: Client integration failed for secondary path: %v\n", err)
+		s.logger.Debug(fmt.Sprintf("Client integration failed for secondary path: %v", err))
 		s.pathManager.RemovePath(originalPathID)
 		s.sendAddPathResponse("", false,
 			fmt.Sprintf("failed to integrate secondary path: %v", err),
 			"INTEGRATION_FAILED")
 		return
 	}
-	fmt.Printf("DEBUG: Client integration successful for secondary path %s\n", secondaryPath.ID())
+	s.logger.Debug(fmt.Sprintf("Client integration successful for secondary path %s", secondaryPath.ID()))
 
 	// Send success response with actual connection time
-	fmt.Printf("DEBUG: Client sending success response for path %s\n", secondaryPath.ID())
+	s.logger.Debug(fmt.Sprintf("Client sending success response for path %s", secondaryPath.ID()))
 	s.sendAddPathResponseWithTime(secondaryPath.ID(), true, "", "", connectionTime)
-	fmt.Printf("DEBUG: Client sent AddPathResponse with success=true for path %s\n", secondaryPath.ID())
+	s.logger.Debug(fmt.Sprintf("Client sent AddPathResponse with success=true for path %s", secondaryPath.ID()))
 
 }
 
@@ -881,7 +916,7 @@ func (s *ClientSession) handleRawPacketTransmission(frame *control.ControlFrame)
 
 	// Verify target path is active
 	if !targetPath.IsActive() {
-		fmt.Printf("DEBUG: Client target path %s is not active\n", rawPacketReq.TargetPathId)
+		s.logger.Debug(fmt.Sprintf("Client target path %s is not active", rawPacketReq.TargetPathId))
 		return
 	}
 
@@ -912,13 +947,13 @@ func (s *ClientSession) handleHeartbeat(frame *control.ControlFrame) {
 	s.lastHeartbeatByPath[pathID] = time.Now()
 	s.mutex.Unlock()
 
-	fmt.Printf("DEBUG: Client received HEARTBEAT seq=%d from path=%s\n", hb.SequenceNumber, pathID)
+	s.logger.Debug(fmt.Sprintf("Client received HEARTBEAT seq=%d from path=%s", hb.SequenceNumber, pathID))
 
 	// If echo data present (8 bytes timestamp), compute RTT
 	if len(hb.EchoData) == 8 {
 		sendTs := int64(binary.BigEndian.Uint64(hb.EchoData))
 		rtt := time.Since(time.Unix(0, sendTs))
-		fmt.Printf("DEBUG: Client computed RTT=%s on path=%s\n", rtt.String(), pathID)
+		s.logger.Debug(fmt.Sprintf("Client computed RTT=%s on path=%s", rtt.String(), pathID))
 		return
 	}
 
@@ -944,7 +979,7 @@ func (s *ClientSession) handleHeartbeat(frame *control.ControlFrame) {
 			TargetPathId: "",
 		}
 		if data, err := proto.Marshal(resp); err == nil {
-			fmt.Printf("DEBUG: Client sending HEARTBEAT echo seq=%d to path=%s\n", hb.SequenceNumber, pathID)
+			s.logger.Debug(fmt.Sprintf("Client sending HEARTBEAT echo seq=%d to path=%s", hb.SequenceNumber, pathID))
 			_, _ = controlStream.Write(data)
 		}
 	}
@@ -995,8 +1030,8 @@ func (s *ClientSession) OnPathRecovered(pathID string, metrics *transport.PathHe
 	// 4. Notifying application layer
 }
 
-// PerformAuthentication performs authentication over the control plane stream
-func (s *ClientSession) PerformAuthentication(ctx context.Context) error {
+// performAuthentication performs authentication over the control plane stream
+func (s *ClientSession) performAuthentication(ctx context.Context) error {
 	// Get control stream from primary path
 	controlStream, err := s.primaryPath.GetControlStream()
 	if err != nil {
@@ -1203,7 +1238,7 @@ func (s *ClientSession) RemoveStream(streamID uint64) {
 		err := s.dataPresentationManager.RemoveStreamBuffer(streamID)
 		if err != nil {
 			// Log error but don't fail the removal
-			fmt.Printf("DEBUG: Failed to remove stream buffer %d: %v\n", streamID, err)
+			s.logger.Debug(fmt.Sprintf("Failed to remove stream buffer %d: %v", streamID, err))
 		}
 	}
 }
@@ -1213,9 +1248,9 @@ func (s *ClientSession) GetContext() context.Context {
 	return s.ctx
 }
 
-// GetSecondaryStreamAggregator returns the secondary stream aggregator
-func (s *ClientSession) GetSecondaryStreamAggregator() *data.SecondaryStreamAggregator {
-	return s.secondaryAggregator
+// GetStreamAggregator returns the secondary stream aggregator
+func (s *ClientSession) GetStreamAggregator() *data.StreamAggregator {
+	return s.aggregator
 }
 
 // GetMetadataProtocol returns the metadata protocol instance
@@ -1230,27 +1265,27 @@ func (s *ClientSession) GetDataPresentationManager() stream.DataPresentationMana
 
 // GetAggregatedDataForStream returns aggregated data from secondary streams for a KWIK stream
 func (s *ClientSession) GetAggregatedDataForStream(streamID uint64) ([]byte, error) {
-	if s.secondaryAggregator == nil {
+	if s.aggregator == nil {
 		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed, "no secondary aggregator available", nil)
 	}
 
 	// Get aggregated data from the secondary stream aggregator
-	return s.secondaryAggregator.GetAggregatedData(streamID)
+	return s.aggregator.GetAggregatedData(streamID)
 }
 
 // ConsumeAggregatedDataForStream consumes and removes aggregated data from the aggregator
 func (s *ClientSession) ConsumeAggregatedDataForStream(streamID uint64, bytesToConsume int) ([]byte, error) {
-	if s.secondaryAggregator == nil {
+	if s.aggregator == nil {
 		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed, "no secondary aggregator available", nil)
 	}
 
 	// Consume aggregated data from the secondary stream aggregator (with forward sliding)
-	return s.secondaryAggregator.ConsumeAggregatedData(streamID, bytesToConsume)
+	return s.aggregator.ConsumeAggregatedData(streamID, bytesToConsume)
 }
 
-// DepositPrimaryDataInAggregator deposits primary stream data into the aggregator
-func (s *ClientSession) DepositPrimaryDataInAggregator(streamID uint64, data []byte, offset uint64) error {
-	if s.secondaryAggregator == nil {
+// AggregatePrimaryData deposits primary stream data into the aggregator
+func (s *ClientSession) AggregateData(streamID uint64, data []byte, offset uint64) error {
+	if s.aggregator == nil {
 		return utils.NewKwikError(utils.ErrStreamCreationFailed, "no secondary aggregator available", nil)
 	}
 
@@ -1266,10 +1301,10 @@ func (s *ClientSession) DepositPrimaryDataInAggregator(streamID uint64, data []b
 	}
 
 	// Deposit primary data into the aggregator
-	fmt.Printf("DEBUG: ClientSession depositing %d bytes of primary data for KWIK stream %d at offset %d\n",
-		len(data), streamID, offset)
+	s.logger.Debug(fmt.Sprintf("ClientSession depositing %d bytes of primary data for KWIK stream %d at offset %d",
+		len(data), streamID, offset))
 
-	return s.secondaryAggregator.AggregateSecondaryDataWithPresentation(primaryData)
+	return s.aggregator.AggregateData(primaryData)
 }
 
 // performSecondaryPathAuthentication performs authentication on a secondary path using existing session ID
@@ -1283,7 +1318,7 @@ func (s *ClientSession) performSecondaryPathAuthentication(ctx context.Context, 
 
 	// Create authentication request using existing session ID with SECONDARY role
 	// This is the key difference from primary path authentication
-	fmt.Printf("DEBUG: Client creating SECONDARY authentication request for session %s\n", s.sessionID)
+	s.logger.Debug(fmt.Sprintf("Client creating SECONDARY authentication request for session %s", s.sessionID))
 	authFrame, err := s.authManager.CreateAuthenticationRequest(control.SessionRole_SECONDARY)
 	if err != nil {
 		return utils.NewKwikError(utils.ErrInvalidFrame,
@@ -1406,7 +1441,7 @@ func (s *ClientSession) integrateSecondaryPath(secondaryPath transport.Path, ori
 	}
 
 	// The path is found in the path manager - integration is successful
-	fmt.Printf("DEBUG: Client found managed path with original ID %s, secondary path has server ID %s\n", managedPath.ID(), secondaryPath.ID())
+	s.logger.Debug(fmt.Sprintf("Client found managed path with original ID %s, secondary path has server ID %s", managedPath.ID(), secondaryPath.ID()))
 
 	// At this point, the path is already integrated into the PathManager by CreatePath()
 	// The path is now available for:
@@ -1417,11 +1452,11 @@ func (s *ClientSession) integrateSecondaryPath(secondaryPath transport.Path, ori
 
 	// Start automatic stream acceptance for this secondary path
 	// This runs in background and automatically handles all streams from secondary servers
-	fmt.Printf("DEBUG: Client starting automatic stream acceptance for secondary path %s\n", secondaryPath.ID())
+	s.logger.Debug(fmt.Sprintf("Client starting automatic stream acceptance for secondary path %s", secondaryPath.ID()))
 	go s.autoAcceptSecondaryStreams(secondaryPath)
 
 	// Start control-plane reader for this secondary path
-	fmt.Printf("DEBUG: Client starting control-frame reader for secondary path %s\n", secondaryPath.ID())
+	s.logger.Debug(fmt.Sprintf("Client starting control-frame reader for secondary path %s", secondaryPath.ID()))
 	go s.startControlReaderForPath(secondaryPath)
 
 	return nil
@@ -1471,7 +1506,7 @@ func (s *ClientSession) routeRawPacketToDataPlane(data []byte, targetPath transp
 		}
 	}
 
-	fmt.Printf("DEBUG: Client routing raw packet (%d bytes) to data plane of path %s\n", len(data), targetPath.ID())
+	s.logger.Debug(fmt.Sprintf("Client routing raw packet (%d bytes) to data plane of path %s", len(data), targetPath.ID()))
 
 	// Write raw packet data directly to the data plane stream
 	// This ensures the raw packet reaches the target server's data plane without interpretation
@@ -1630,19 +1665,19 @@ func (s *ClientSession) getStreamAggregator() data.DataAggregator {
 // handleSecondaryStreamOpen handles a new secondary stream from a secondary server
 // This method processes streams internally without exposing them to the public interface
 func (s *ClientSession) handleSecondaryStreamOpen(pathID string, quicStream quic.Stream) error {
-	fmt.Printf("DEBUG: Client handling secondary stream open from path %s\n", pathID)
+	s.logger.Debug(fmt.Sprintf("Client handling secondary stream open from path %s", pathID))
 
 	// Handle the secondary stream using the secondary stream handler
 	_, err := s.secondaryStreamHandler.HandleSecondaryStream(pathID, quicStream)
 	if err != nil {
-		fmt.Printf("DEBUG: Client failed to handle secondary stream from path %s: %v\n", pathID, err)
+		s.logger.Debug(fmt.Sprintf("Client failed to handle secondary stream from path %s: %v", pathID, err))
 		// Log error and close the stream
 		quicStream.Close()
 		return utils.NewKwikError(utils.ErrStreamCreationFailed,
 			fmt.Sprintf("failed to handle secondary stream from path %s", pathID), err)
 	}
 
-	fmt.Printf("DEBUG: Client starting secondary stream data processing for path %s\n", pathID)
+	s.logger.Debug(fmt.Sprintf("Client starting secondary stream data processing for path %s", pathID))
 	// Start processing the secondary stream data in a goroutine
 	go s.processSecondaryStreamData(pathID, quicStream)
 
@@ -1652,38 +1687,38 @@ func (s *ClientSession) handleSecondaryStreamOpen(pathID string, quicStream quic
 // processSecondaryStreamData processes data from a secondary stream
 func (s *ClientSession) processSecondaryStreamData(pathID string, quicStream quic.Stream) {
 	defer quicStream.Close()
-	fmt.Printf("DEBUG: Client starting secondary stream data processing loop for path %s\n", pathID)
+	s.logger.Debug(fmt.Sprintf("Client starting secondary stream data processing loop for path %s", pathID))
 
 	buffer := make([]byte, 4096)
 	for {
 		select {
 		case <-s.ctx.Done():
-			fmt.Printf("DEBUG: Client secondary stream processing stopping for path %s (session closing)\n", pathID)
+			s.logger.Debug(fmt.Sprintf("Client secondary stream processing stopping for path %s (session closing)", pathID))
 			return // Session is closing
 		default:
 			// Read data from the secondary stream
-			fmt.Printf("DEBUG: Client attempting to read from secondary stream on path %s\n", pathID)
+			s.logger.Debug(fmt.Sprintf("Client attempting to read from secondary stream on path %s", pathID))
 			n, err := quicStream.Read(buffer)
 			if err != nil {
 				// Stream closed or error occurred
-				fmt.Printf("DEBUG: Client secondary stream from path %s closed: %v\n", pathID, err)
+				s.logger.Debug(fmt.Sprintf("Client secondary stream from path %s closed: %v", pathID, err))
 				return
 			}
 
 			if n == 0 {
-				fmt.Printf("DEBUG: Client no data available from secondary stream on path %s\n", pathID)
+				s.logger.Debug(fmt.Sprintf("Client no data available from secondary stream on path %s", pathID))
 				continue // No data available
 			}
 
-			fmt.Printf("DEBUG: Client received %d bytes from secondary stream on path %s:\n", n, pathID)
+			s.logger.Debug(fmt.Sprintf("Client received %d bytes from secondary stream on path %s:", n, pathID))
 
 			// Process the encapsulated data according to the metadata protocol
 			err = s.processEncapsulatedSecondaryData(pathID, buffer[:n])
 			if err != nil {
-				fmt.Printf("DEBUG: Client error processing secondary stream data from path %s: %v\n", pathID, err)
+				s.logger.Debug(fmt.Sprintf("Client error processing secondary stream data from path %s: %v", pathID, err))
 				// Continue processing other data even if one frame fails
 			} else {
-				fmt.Printf("DEBUG: Client successfully processed secondary stream data from path %s\n", pathID)
+				s.logger.Debug(fmt.Sprintf("Client successfully processed secondary stream data from path %s", pathID))
 			}
 		}
 	}
@@ -1691,131 +1726,102 @@ func (s *ClientSession) processSecondaryStreamData(pathID string, quicStream qui
 
 // processEncapsulatedSecondaryData decapsulates and aggregates secondary stream data
 func (s *ClientSession) processEncapsulatedSecondaryData(pathID string, encapsulatedData []byte) error {
-	fmt.Printf("DEBUG: Client processing encapsulated secondary data from path %s (%d bytes)\n", pathID, len(encapsulatedData))
+	s.logger.Debug(fmt.Sprintf("Client processing encapsulated secondary data from path %s (%d bytes)", pathID, len(encapsulatedData)))
 
-	// Get the metadata protocol instance
+	// Parse transport packet [PacketID:8][FrameCount:2] + frames
+	if len(encapsulatedData) < 10 {
+		return nil
+	}
+	packetID := uint64(0)
+	for i := 0; i < 8; i++ {
+		packetID = (packetID << 8) | uint64(encapsulatedData[i])
+	}
+	frameCount := int(uint16(encapsulatedData[8])<<8 | uint16(encapsulatedData[9]))
+	off := 10
 	metadataProtocol := s.metadataProtocol
 	if metadataProtocol == nil {
-		fmt.Printf("DEBUG: Client no metadata protocol available for path %s\n", pathID)
 		return utils.NewKwikError(utils.ErrStreamCreationFailed, "no metadata protocol available", nil)
 	}
-
-	fmt.Printf("DEBUG: Client attempting to decapsulate data from path %s\n", pathID)
-	// Decapsulate the metadata and data
-	metadata, data, err := metadataProtocol.DecapsulateData(encapsulatedData)
-	if err != nil {
-		fmt.Printf("DEBUG: Client failed to decapsulate data from path %s: %v\n", pathID, err)
-		return utils.NewKwikError(utils.ErrInvalidFrame,
-			fmt.Sprintf("failed to decapsulate secondary stream data: %v", err), err)
+	for f := 0; f < frameCount; f++ {
+		if off+4 > len(encapsulatedData) {
+			break
+		}
+		flen := int(uint32(encapsulatedData[off])<<24 | uint32(encapsulatedData[off+1])<<16 | uint32(encapsulatedData[off+2])<<8 | uint32(encapsulatedData[off+3]))
+		off += 4
+		if off+flen > len(encapsulatedData) {
+			break
+		}
+		inner := encapsulatedData[off : off+flen]
+		off += flen
+		metadata, data, err := metadataProtocol.DecapsulateData(inner)
+		if err != nil {
+			return utils.NewKwikError(utils.ErrInvalidFrame, fmt.Sprintf("failed to decapsulate secondary stream data: %v", err), err)
+		}
+		secondaryStreamID := metadata.SecondaryStreamID
+		if secondaryStreamID == 0 {
+			secondaryStreamID = metadata.KwikStreamID
+		}
+		secondaryData := &stream.SecondaryStreamData{StreamID: secondaryStreamID, PathID: pathID, Data: data, Offset: metadata.Offset, KwikStreamID: metadata.KwikStreamID, Timestamp: time.Now(), SequenceNum: 0}
+		aggregator := s.aggregator
+		if aggregator == nil {
+			return utils.NewKwikError(utils.ErrStreamCreationFailed, "no secondary aggregator available", nil)
+		}
+		if err = aggregator.AggregateData(secondaryData); err != nil {
+			return utils.NewKwikError(utils.ErrStreamCreationFailed, fmt.Sprintf("failed to aggregate secondary stream data: %v", err), err)
+		}
 	}
-
-	fmt.Printf("DEBUG: Client decapsulated data from path %s: KwikStreamID=%d, Offset=%d, DataLen=%d\n",
-		pathID, metadata.KwikStreamID, metadata.Offset, len(data))
-
-	// Determine a valid secondary stream ID; fallback to KWIK stream ID if missing in metadata
-	secondaryStreamID := metadata.SecondaryStreamID
-	if secondaryStreamID == 0 {
-		secondaryStreamID = metadata.KwikStreamID
-	}
-
-	// Create SecondaryStreamData structure for aggregation
-	// Use the resolved secondary stream ID
-	secondaryData := &stream.SecondaryStreamData{
-		StreamID:     secondaryStreamID, // Use the actual secondary stream ID from metadata
-		PathID:       pathID,
-		Data:         data,
-		Offset:       metadata.Offset,
-		KwikStreamID: metadata.KwikStreamID,
-		Timestamp:    time.Now(),
-		SequenceNum:  0, // Could be derived from metadata if needed
-	}
-
-	// Get the secondary stream aggregator
-	aggregator := s.secondaryAggregator
-	if aggregator == nil {
-		fmt.Printf("DEBUG: Client no secondary aggregator available for path %s\n", pathID)
-		return utils.NewKwikError(utils.ErrStreamCreationFailed, "no secondary aggregator available", nil)
-	}
-
-	fmt.Printf("DEBUG: Client attempting to aggregate secondary data from path %s\n", pathID)
-	// Aggregate the secondary stream data via presentation manager
-	err = aggregator.AggregateSecondaryDataWithPresentation(secondaryData)
-	if err != nil {
-		fmt.Printf("DEBUG: Client failed to aggregate secondary data from path %s: %v\n", pathID, err)
-		return utils.NewKwikError(utils.ErrStreamCreationFailed,
-			fmt.Sprintf("failed to aggregate secondary stream data: %v", err), err)
-	}
-
-	fmt.Printf("DEBUG: Client successfully aggregated %d bytes from path %s to KWIK stream %d at offset %d\n",
-		len(data), pathID, metadata.KwikStreamID, metadata.Offset)
-
-	// Send control-plane ACK for delivered chunk on the same path
-	// Try to locate the path by ID
+	// Ack after all frames processed
 	active := s.pathManager.GetActivePaths()
 	for _, p := range active {
 		if p.ID() == pathID {
 			if ctrl, e := p.GetControlStream(); e == nil && ctrl != nil {
-				ack := &control.DataChunkAck{
-					PathId:       pathID,
-					KwikStreamId: uint64(secondaryStreamID),
-					ChunkId:      0,
-					Offset:       uint64(metadata.Offset),
-					Size:         uint32(len(data)),
-					Timestamp:    uint64(time.Now().UnixNano()),
-				}
-				if payloadBytes, e2 := proto.Marshal(ack); e2 == nil {
-					frame := &control.ControlFrame{
-						FrameId:      generateFrameID(),
-						Type:         control.ControlFrameType_DATA_CHUNK_ACK,
-						Payload:      payloadBytes,
-						Timestamp:    uint64(time.Now().UnixNano()),
-						SourcePathId: pathID,
-					}
-					if dataOut, e3 := proto.Marshal(frame); e3 == nil {
-						_, _ = ctrl.Write(dataOut)
+				ack := &control.PacketAck{PacketId: packetID, PathId: pathID, Timestamp: uint64(time.Now().UnixNano())}
+				if bytes, e2 := proto.Marshal(ack); e2 == nil {
+					frame := &control.ControlFrame{FrameId: generateFrameID(), Type: control.ControlFrameType_PACKET_ACK, Payload: bytes, Timestamp: uint64(time.Now().UnixNano()), SourcePathId: pathID}
+					if out, e3 := proto.Marshal(frame); e3 == nil {
+						_, _ = ctrl.Write(out)
 					}
 				}
 			}
 			break
 		}
 	}
-
 	return nil
 }
 
 // autoAcceptSecondaryStreams automatically accepts and processes streams from a secondary path
 // This runs in background and handles all streams from secondary servers transparently
 func (s *ClientSession) autoAcceptSecondaryStreams(path transport.Path) {
-	fmt.Printf("DEBUG: Client starting automatic stream acceptance loop for secondary path %s\n", path.ID())
+	s.logger.Debug(fmt.Sprintf("Client starting automatic stream acceptance loop for secondary path %s", path.ID()))
 
 	conn := path.GetConnection()
 	if conn == nil {
-		fmt.Printf("DEBUG: Client no QUIC connection available for secondary path %s\n", path.ID())
+		s.logger.Debug(fmt.Sprintf("Client no QUIC connection available for secondary path %s", path.ID()))
 		return
 	}
 
 	for {
 		select {
 		case <-s.ctx.Done():
-			fmt.Printf("DEBUG: Client stopping automatic stream acceptance for secondary path %s (session closing)\n", path.ID())
+			s.logger.Debug(fmt.Sprintf("Client stopping automatic stream acceptance for secondary path %s (session closing)", path.ID()))
 			return
 		default:
 			// Accept streams from this secondary path
-			fmt.Printf("DEBUG: Client attempting to accept stream from secondary path %s\n", path.ID())
+			s.logger.Debug(fmt.Sprintf("Client attempting to accept stream from secondary path %s", path.ID()))
 			quicStream, err := conn.AcceptStream(context.Background())
 			if err != nil {
 				errStr := strings.ToLower(err.Error())
 				if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "no recent network activity") {
-					fmt.Printf("DEBUG: Client accept on secondary path %s timeout, continue\n", path.ID())
+					s.logger.Debug(fmt.Sprintf("Client accept on secondary path %s timeout, continue", path.ID()))
 					time.Sleep(10 * time.Millisecond)
 					continue
 				}
-				fmt.Printf("DEBUG: Client failed to accept stream from secondary path %s: %v\n", path.ID(), err)
+				s.logger.Debug(fmt.Sprintf("Client failed to accept stream from secondary path %s: %v", path.ID(), err))
 				// For fatal errors, exit loop
 				return
 			}
 
-			fmt.Printf("DEBUG: Client accepted new stream from secondary path %s\n", path.ID())
+			s.logger.Debug(fmt.Sprintf("Client accepted new stream from secondary path %s", path.ID()))
 
 			// Handle this secondary stream internally (don't expose to application)
 			go s.handleSecondaryStreamOpen(path.ID(), quicStream)
@@ -1826,60 +1832,58 @@ func (s *ClientSession) autoAcceptSecondaryStreams(path transport.Path) {
 // startPrimaryIngestion reads metadata-encapsulated frames from the primary QUIC stream
 // and deposits the decoded payload into the DataPresentationManager via the aggregator
 func (s *ClientSession) startPrimaryIngestion(streamID uint64, quicStream quic.Stream, pathID string) {
-	buffer := make([]byte, 4096)
+	buffer := make([]byte, 65536)
 	for {
 		n, err := quicStream.Read(buffer)
 		if err != nil || n == 0 {
 			return
 		}
 
-		// Decapsulate
-		mp := s.metadataProtocol
-		if mp == nil {
+		// Parse transport packet: [PacketID:8][FrameCount:2] + repeated([FrameLen:4][FrameBytes])
+		if n < 10 {
 			continue
 		}
-		metadata, payload, derr := mp.DecapsulateData(buffer[:n])
-		if derr != nil || metadata == nil || len(payload) == 0 {
-			continue
+		packetID := uint64(0)
+		for i := 0; i < 8; i++ {
+			packetID = (packetID << 8) | uint64(buffer[i])
+		}
+		frameCount := int(uint16(buffer[8])<<8 | uint16(buffer[9]))
+		off := 10
+		for f := 0; f < frameCount; f++ {
+			if off+4 > n {
+				break
+			}
+			flen := int(uint32(buffer[off])<<24 | uint32(buffer[off+1])<<16 | uint32(buffer[off+2])<<8 | uint32(buffer[off+3]))
+			off += 4
+			if off+flen > n {
+				break
+			}
+			payloadBytes := buffer[off : off+flen]
+			off += flen
+
+			mp := s.metadataProtocol
+			if mp == nil {
+				continue
+			}
+			metadata, payload, derr := mp.DecapsulateData(payloadBytes)
+			if derr != nil || metadata == nil || len(payload) == 0 {
+				continue
+			}
+
+			secondaryData := &stream.SecondaryStreamData{StreamID: streamID, PathID: pathID, Data: payload, Offset: metadata.Offset, KwikStreamID: metadata.KwikStreamID, Timestamp: time.Now(), SequenceNum: 0}
+			if s.aggregator != nil {
+				_ = s.aggregator.AggregateData(secondaryData)
+			}
 		}
 
-		// Build secondary data (use non-zero StreamID)
-		secondaryData := &stream.SecondaryStreamData{
-			StreamID:     streamID,
-			PathID:       pathID,
-			Data:         payload,
-			Offset:       metadata.Offset,
-			KwikStreamID: metadata.KwikStreamID,
-			Timestamp:    time.Now(),
-			SequenceNum:  0,
-		}
-
-		// Deposit via presentation-enabled path
-		if s.secondaryAggregator != nil {
-			_ = s.secondaryAggregator.AggregateSecondaryDataWithPresentation(secondaryData)
-		}
-
-		// Send control-plane ACK for delivered chunk on primary path
+		// Send PacketAck over control plane
 		if s.primaryPath != nil {
 			if ctrl, e := s.primaryPath.GetControlStream(); e == nil && ctrl != nil {
-				ack := &control.DataChunkAck{
-					PathId:       pathID,
-					KwikStreamId: uint64(streamID),
-					ChunkId:      0,
-					Offset:       uint64(metadata.Offset),
-					Size:         uint32(len(payload)),
-					Timestamp:    uint64(time.Now().UnixNano()),
-				}
-				if payloadBytes, e2 := proto.Marshal(ack); e2 == nil {
-					frame := &control.ControlFrame{
-						FrameId:      generateFrameID(),
-						Type:         control.ControlFrameType_DATA_CHUNK_ACK,
-						Payload:      payloadBytes,
-						Timestamp:    uint64(time.Now().UnixNano()),
-						SourcePathId: pathID,
-					}
-					if data, e3 := proto.Marshal(frame); e3 == nil {
-						_, _ = ctrl.Write(data)
+				ack := &control.PacketAck{PacketId: packetID, PathId: pathID, Timestamp: uint64(time.Now().UnixNano())}
+				if bytes, e2 := proto.Marshal(ack); e2 == nil {
+					frame := &control.ControlFrame{FrameId: generateFrameID(), Type: control.ControlFrameType_PACKET_ACK, Payload: bytes, Timestamp: uint64(time.Now().UnixNano()), SourcePathId: pathID}
+					if out, e3 := proto.Marshal(frame); e3 == nil {
+						_, _ = ctrl.Write(out)
 					}
 				}
 			}
@@ -1903,7 +1907,7 @@ func generatePathID() string {
 
 // startHeartbeat periodically sends heartbeat frames on all active paths' control streams
 func (s *ClientSession) startHeartbeat() {
-	fmt.Printf("DEBUG: Client starting heartbeat loop (session=%s)\n", s.sessionID)
+	s.logger.Debug(fmt.Sprintf("Client starting heartbeat loop (session=%s)", s.sessionID))
 	interval := utils.DefaultKeepAliveInterval
 
 	t := time.NewTicker(interval)
@@ -1967,7 +1971,7 @@ func (s *ClientSession) sendHeartbeatOnAllPaths() {
 		}
 
 		// Best-effort write; ignore transient errors
-		fmt.Printf("DEBUG: Client sending HEARTBEAT seq=%d on path=%s\n", seq, p.ID())
+		s.logger.Debug(fmt.Sprintf("Client sending HEARTBEAT seq=%d on path=%s", seq, p.ID()))
 		_, _ = controlStream.Write(data)
 	}
 }

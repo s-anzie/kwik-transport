@@ -78,7 +78,7 @@ type ServerSession struct {
 	acceptChan chan *ServerStream
 
 	// Secondary stream aggregation
-	secondaryAggregator *data.SecondaryStreamAggregator
+	secondaryAggregator *data.StreamAggregator
 	metadataProtocol    *stream.MetadataProtocolImpl
 
 	// Synchronization
@@ -100,7 +100,16 @@ type ServerSession struct {
 	// Heartbeat management
 	heartbeatSequence   uint64
 	lastHeartbeatByPath map[string]time.Time
+
+	// Logger
+	logger stream.StreamLogger
 }
+
+// SetLogger sets the logger for this server session
+func (s *ServerSession) SetLogger(l stream.StreamLogger) { s.logger = l }
+
+// GetLogger returns the logger for this server session
+func (s *ServerSession) GetLogger() stream.StreamLogger { return s.logger }
 
 // ServerStream represents a server-side KWIK stream
 type ServerStream struct {
@@ -123,6 +132,11 @@ type ServerStream struct {
 	pendingSegments map[uint64]*PendingSegment
 	retransmitOnce  sync.Once
 	retransmitStop  chan struct{}
+
+	// Packet aggregation buffer (raw frames: metadata-encapsulated)
+	packetFrameRaw       [][]byte
+	packetBufferBytes    int
+	packetFlushScheduled bool
 }
 
 // PendingSegment tracks a sent segment awaiting ACK
@@ -152,8 +166,8 @@ func NewServerSession(sessionID string, pathManager transport.PathManager, confi
 		serverRole:           ServerRolePrimary,                          // Default to primary role
 		streams:              make(map[uint64]*ServerStream),
 		acceptChan:           make(chan *ServerStream, 100),
-		secondaryAggregator:  data.NewSecondaryStreamAggregator(&DefaultServerLogger{}), // Initialize secondary stream aggregator
-		metadataProtocol:     stream.NewMetadataProtocol(),                              // Initialize metadata protocol
+		secondaryAggregator:  data.NewStreamAggregator(&DefaultServerLogger{}), // Initialize secondary stream aggregator
+		metadataProtocol:     stream.NewMetadataProtocol(),                     // Initialize metadata protocol
 		ctx:                  ctx,
 		cancel:               cancel,
 		config:               config,
@@ -161,6 +175,7 @@ func NewServerSession(sessionID string, pathManager transport.PathManager, confi
 		addPathResponseChans: make(map[string]chan *control.AddPathResponse), // Initialize response channels
 		heartbeatSequence:    0,
 		lastHeartbeatByPath:  make(map[string]time.Time),
+		logger:               &DefaultServerLogger{},
 	}
 
 	return session
@@ -412,7 +427,7 @@ func (s *ServerSession) OpenStreamSync(ctx context.Context) (Stream, error) {
 		return s.openPrimaryStream(ctx, streamID)
 	} else {
 		// SECONDARY SERVER: Open internal stream for aggregation
-		fmt.Printf("[SECONDARY] Opening secondary stream %d for aggregation\n", streamID)
+		s.logger.Info(fmt.Sprintf("[SECONDARY] Opening secondary stream %d for aggregation", streamID))
 		return s.openSecondaryStreamInternal(ctx, streamID)
 	}
 }
@@ -487,7 +502,7 @@ func (s *ServerSession) openSecondaryStreamInternal(ctx context.Context, streamI
 		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed, "failed to create secondary QUIC stream", err)
 	}
 
-	fmt.Printf("[SECONDARY] Created QUIC stream for secondary stream %d\n", streamID)
+	s.logger.Info(fmt.Sprintf("[SECONDARY] Created QUIC stream for secondary stream %d", streamID))
 
 	// Create secondary stream wrapper that will handle metadata encapsulation
 	serverStream := &ServerStream{
@@ -507,7 +522,7 @@ func (s *ServerSession) openSecondaryStreamInternal(ctx context.Context, streamI
 	s.streams[streamID] = serverStream
 	s.streamsMutex.Unlock()
 
-	fmt.Printf("[SECONDARY] Secondary stream %d created and ready for aggregation\n", streamID)
+	s.logger.Info(fmt.Sprintf("[SECONDARY] Secondary stream %d created and ready for aggregation", streamID))
 	return serverStream, nil
 }
 
@@ -688,25 +703,6 @@ func (s *ServerSession) createVirtualPath(pathID string, address string) error {
 	return nil
 }
 
-// createVirtualPathInManager creates a virtual path directly in the path manager
-func (s *ServerSession) createVirtualPathInManager(pm interface{}, pathID string, address string) error {
-	// This is a temporary workaround to create a virtual path entry
-	// In a proper implementation, we would extend the PathManager interface
-	// to support virtual paths that don't have actual QUIC connections
-
-	// For now, we'll create a minimal path entry that can be found by SendRawData
-	// but doesn't have an actual connection (since the connection is on the client side)
-
-	// We need to access the internal path manager structure to add a virtual path
-	// This is a hack but necessary for the current implementation
-
-	// Since we can't easily extend the path manager interface right now,
-	// we'll modify the SendRawData method to handle pending paths specially
-	// The path ID is already stored in pendingPathIDs, so SendRawData can check there
-
-	return nil
-}
-
 // GetPendingPathID retrieves the path ID for a pending path by address
 func (s *ServerSession) GetPendingPathID(address string) string {
 	s.pathIDsMutex.RLock()
@@ -715,8 +711,8 @@ func (s *ServerSession) GetPendingPathID(address string) string {
 	return s.pendingPathIDs[address]
 }
 
-// GetSecondaryStreamAggregator returns the secondary stream aggregator
-func (s *ServerSession) GetSecondaryStreamAggregator() *data.SecondaryStreamAggregator {
+// GetStreamAggregator returns the secondary stream aggregator
+func (s *ServerSession) GetStreamAggregator() *data.StreamAggregator {
 	return s.secondaryAggregator
 }
 
@@ -730,7 +726,7 @@ func (s *ServerSession) SetServerRole(role ServerRole) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.serverRole = role
-	fmt.Printf("[SERVER] Role set to: %s\n", role.String())
+	s.logger.Info(fmt.Sprintf("[SERVER] Role set to: %s", role.String()))
 }
 
 // GetServerRole returns the current server role
@@ -776,24 +772,24 @@ func (s *ServerSession) handleControlFrames() {
 	defer func() {
 		if r := recover(); r != nil {
 			// Log panic and continue
-			fmt.Printf("DEBUG: Server control frame handler panic: %v\n", r)
+			s.logger.Debug(fmt.Sprintf("Server control frame handler panic: %v", r))
 		}
 	}()
 
 	// Get control stream from primary path
 	controlStream, err := s.primaryPath.GetControlStream()
 	if err != nil {
-		fmt.Printf("DEBUG: Server failed to get control stream for frame handling: %v\n", err)
+		s.logger.Debug(fmt.Sprintf("Server failed to get control stream for frame handling: %v", err))
 		return
 	}
 
-	fmt.Println("DEBUG: Server control frame handler started, listening for client responses...")
+	s.logger.Debug(fmt.Sprintf("Server control frame handler started, listening for client responses..."))
 
 	for {
 		// Check if session is still active
 		select {
 		case <-s.ctx.Done():
-			fmt.Println("DEBUG: Server control frame handler stopping (session closed)")
+			s.logger.Debug(fmt.Sprintf("Server control frame handler stopping (session closed)"))
 			return
 		default:
 		}
@@ -808,21 +804,21 @@ func (s *ServerSession) handleControlFrames() {
 				time.Sleep(5 * time.Millisecond)
 				continue
 			}
-			fmt.Printf("DEBUG: Server control frame read error: %v\n", err)
+			s.logger.Debug(fmt.Sprintf("Server control frame read error: %v", err))
 			return
 		}
 
-		fmt.Printf("DEBUG: Server received control frame (%d bytes)\n", n)
+		s.logger.Debug(fmt.Sprintf("Server received control frame (%d bytes)", n))
 
 		// Parse control frame
 		var frame control.ControlFrame
 		err = proto.Unmarshal(buffer[:n], &frame)
 		if err != nil {
-			fmt.Printf("DEBUG: Server failed to parse control frame: %v\n", err)
+			s.logger.Debug(fmt.Sprintf("Server failed to parse control frame: %v", err))
 			continue
 		}
 
-		fmt.Printf("DEBUG: Server processing control frame type: %s\n", frame.Type)
+		s.logger.Debug(fmt.Sprintf("Server processing control frame type: %s", frame.Type))
 
 		// Handle different control frame types
 		switch frame.Type {
@@ -834,8 +830,10 @@ func (s *ServerSession) handleControlFrames() {
 			s.handleHeartbeat(&frame)
 		case control.ControlFrameType_DATA_CHUNK_ACK:
 			s.handleDataChunkAck(&frame)
+		case control.ControlFrameType_PACKET_ACK:
+			s.handlePacketAck(&frame)
 		default:
-			fmt.Printf("DEBUG: Server ignoring unknown control frame type: %s\n", frame.Type)
+			s.logger.Debug(fmt.Sprintf("Server ignoring unknown control frame type: %s", frame.Type))
 		}
 	}
 }
@@ -846,11 +844,11 @@ func (s *ServerSession) handleAddPathResponse(frame *control.ControlFrame) {
 	var response control.AddPathResponse
 	err := proto.Unmarshal(frame.Payload, &response)
 	if err != nil {
-		fmt.Printf("DEBUG: Server failed to parse AddPathResponse: %v\n", err)
+		s.logger.Debug(fmt.Sprintf("Server failed to parse AddPathResponse: %v", err))
 		return
 	}
 
-	fmt.Printf("DEBUG: Server received AddPathResponse for path %s, success: %t\n", response.PathId, response.Success)
+	s.logger.Debug(fmt.Sprintf("Server received AddPathResponse for path %s, success: %t", response.PathId, response.Success))
 
 	// Find the response channel for this pathID
 	s.responseChannelsMutex.RLock()
@@ -858,16 +856,16 @@ func (s *ServerSession) handleAddPathResponse(frame *control.ControlFrame) {
 	s.responseChannelsMutex.RUnlock()
 
 	if !exists {
-		fmt.Printf("DEBUG: Server no response channel found for path %s\n", response.PathId)
+		s.logger.Debug(fmt.Sprintf("Server no response channel found for path %s", response.PathId))
 		return
 	}
 
 	// Send response to waiting AddPath method
 	select {
 	case responseChan <- &response:
-		fmt.Printf("DEBUG: Server routed AddPathResponse to waiting channel for path %s\n", response.PathId)
+		s.logger.Debug(fmt.Sprintf("Server routed AddPathResponse to waiting channel for path %s", response.PathId))
 	default:
-		fmt.Printf("DEBUG: Server response channel full or closed for path %s\n", response.PathId)
+		s.logger.Debug(fmt.Sprintf("Server response channel full or closed for path %s", response.PathId))
 	}
 }
 
@@ -880,13 +878,13 @@ func (s *ServerSession) handleHeartbeat(frame *control.ControlFrame) {
 	if err := proto.Unmarshal(frame.Payload, &hb); err != nil {
 		return
 	}
-	fmt.Printf("DEBUG: Server received HEARTBEAT seq=%d from path=%s\n", hb.SequenceNumber, frame.SourcePathId)
+	s.logger.Debug(fmt.Sprintf("Server received HEARTBEAT seq=%d from path=%s", hb.SequenceNumber, frame.SourcePathId))
 
 	// Compute RTT if echo present
 	if len(hb.EchoData) == 8 {
 		sendTs := int64(binary.BigEndian.Uint64(hb.EchoData))
 		rtt := time.Since(time.Unix(0, sendTs))
-		fmt.Printf("DEBUG: Server computed RTT=%s on path=%s\n", rtt.String(), frame.SourcePathId)
+		s.logger.Debug(fmt.Sprintf("Server computed RTT=%s on path=%s", rtt.String(), frame.SourcePathId))
 		return
 	}
 
@@ -920,7 +918,7 @@ func (s *ServerSession) handleHeartbeat(frame *control.ControlFrame) {
 		TargetPathId: frame.SourcePathId,
 	}
 	if data, err := proto.Marshal(resp); err == nil {
-		fmt.Printf("DEBUG: Server sending HEARTBEAT echo seq=%d to path=%s\n", hb.SequenceNumber, frame.SourcePathId)
+		s.logger.Debug(fmt.Sprintf("Server sending HEARTBEAT echo seq=%d to path=%s", hb.SequenceNumber, frame.SourcePathId))
 		_, _ = controlStream.Write(data)
 	}
 }
@@ -931,12 +929,12 @@ func (s *ServerSession) handlePathStatusNotification(frame *control.ControlFrame
 	var notification control.PathStatusNotification
 	err := proto.Unmarshal(frame.Payload, &notification)
 	if err != nil {
-		fmt.Printf("DEBUG: Server failed to parse PathStatusNotification: %v\n", err)
+		s.logger.Debug(fmt.Sprintf("Server failed to parse PathStatusNotification: %v", err))
 		return
 	}
 
-	fmt.Printf("DEBUG: Server received PathStatusNotification for path %s, status: %s\n",
-		notification.PathId, notification.Status)
+	s.logger.Debug(fmt.Sprintf("Server received PathStatusNotification for path %s, status: %s",
+		notification.PathId, notification.Status.String()))
 
 	// TODO: Handle path status changes
 	// This could update internal path state, trigger notifications, etc.
@@ -948,8 +946,8 @@ func (s *ServerSession) handleDataChunkAck(frame *control.ControlFrame) {
 	if err := proto.Unmarshal(frame.Payload, &ack); err != nil {
 		return
 	}
-	fmt.Printf("DEBUG: Server received DataChunkAck: path=%s stream=%d offset=%d size=%d\n",
-		ack.PathId, ack.KwikStreamId, ack.Offset, ack.Size)
+	s.logger.Debug(fmt.Sprintf("Server received DataChunkAck: path=%s stream=%d offset=%d size=%d",
+		ack.PathId, ack.KwikStreamId, ack.Offset, ack.Size))
 	// Route ACK to the corresponding ServerStream by matching remoteStreamID
 	s.streamsMutex.RLock()
 	for _, srvStream := range s.streams {
@@ -959,6 +957,27 @@ func (s *ServerSession) handleDataChunkAck(frame *control.ControlFrame) {
 		if match {
 			srvStream.handleAck(ack.Offset, ack.Size)
 		}
+	}
+	s.streamsMutex.RUnlock()
+}
+
+// handlePacketAck processes PacketAck frames from client
+func (s *ServerSession) handlePacketAck(frame *control.ControlFrame) {
+	var ack control.PacketAck
+	if err := proto.Unmarshal(frame.Payload, &ack); err != nil {
+		return
+	}
+	// Remove pending packet by packet_id in all streams
+	s.streamsMutex.RLock()
+	for _, srvStream := range s.streams {
+		srvStream.mutex.Lock()
+		if srvStream.pendingSegments != nil {
+			if _, ok := srvStream.pendingSegments[ack.PacketId]; ok {
+				delete(srvStream.pendingSegments, ack.PacketId)
+				s.logger.Debug(fmt.Sprintf("DEBUG: PACKET_ACK received: packet=%d on path=%s", ack.PacketId, ack.PathId))
+			}
+		}
+		srvStream.mutex.Unlock()
 	}
 	s.streamsMutex.RUnlock()
 }
@@ -1305,23 +1324,23 @@ func (s *ServerSession) SendRawData(data []byte, pathID string, remoteStreamID u
 		// pendingPathIDs is a map of address -> pathID, so we need to check the values
 		s.pathIDsMutex.RLock()
 		found := false
-		fmt.Printf("DEBUG: SendRawData checking for pathID %s in pendingPathIDs\n", pathID)
+		s.logger.Debug(fmt.Sprintf("SendRawData checking for pathID %s in pendingPathIDs", pathID))
 		for address, pendingID := range s.pendingPathIDs {
-			fmt.Printf("DEBUG: pendingPathIDs[%s] = %s\n", address, pendingID)
+			s.logger.Debug(fmt.Sprintf("pendingPathIDs[%s] = %s", address, pendingID))
 			if pendingID == pathID {
 				found = true
-				fmt.Printf("DEBUG: Found matching pathID %s for address %s\n", pathID, address)
+				s.logger.Debug(fmt.Sprintf("Found matching pathID %s for address %s", pathID, address))
 				break
 			}
 		}
 		s.pathIDsMutex.RUnlock()
 
 		if !found {
-			fmt.Printf("DEBUG: PathID %s not found in pendingPathIDs, returning error\n", pathID)
+			s.logger.Debug(fmt.Sprintf("PathID %s not found in pendingPathIDs, returning error", pathID))
 			return utils.NewPathNotFoundError(pathID)
 		}
 
-		fmt.Printf("DEBUG: PathID %s found in pendingPathIDs, proceeding with SendRawData\n", pathID)
+		s.logger.Debug(fmt.Sprintf("PathID %s found in pendingPathIDs, proceeding with SendRawData", pathID))
 
 		// This is a pending path (client-side secondary path)
 		// We can proceed with sending the raw data via control plane
@@ -1369,8 +1388,7 @@ func (s *ServerSession) SendRawData(data []byte, pathID string, remoteStreamID u
 		}
 
 		finalData = encapsulatedData
-		fmt.Printf("[PRIMARY] SendRawData encapsulated %d bytes for KWIK stream %d\n",
-			len(data), remoteStreamID)
+		s.logger.Info(fmt.Sprintf("[PRIMARY] SendRawData encapsulated %d bytes for KWIK stream %d", len(data), remoteStreamID))
 	} else {
 		// No metadata encapsulation needed
 		finalData = data
@@ -1575,22 +1593,6 @@ func (s *ServerSession) checkPathHealth() {
 	}
 }
 
-// handleAuthentication handles server-side authentication over the control plane stream
-func (s *ServerSession) handleAuthentication(ctx context.Context) error {
-	// For demo purposes, we'll assume authentication is handled by the underlying QUIC connection
-	// In a production environment, this would implement proper authentication protocols
-
-	// Mark session as authenticated after successful QUIC connection establishment
-	if s.authManager != nil {
-		s.authManager.MarkAuthenticated()
-	}
-
-	// Give a moment for the connection to stabilize
-	time.Sleep(100 * time.Millisecond)
-
-	return nil
-}
-
 // GetSessionID returns the session ID (for external access)
 func (s *ServerSession) GetSessionID() string {
 	return s.sessionID
@@ -1657,8 +1659,8 @@ func (s *ServerStream) Write(p []byte) (int, error) {
 	}
 
 	// Debug: Log the write attempt and conditions
-	fmt.Printf("DEBUG: ServerStream %d Write() - serverRole=%s, remoteStreamID=%d, isSecondaryStream=%t\n",
-		s.id, s.session.serverRole.String(), s.remoteStreamID, s.isSecondaryStream)
+	s.session.logger.Debug(fmt.Sprintf("ServerStream %d Write() - serverRole=%s, remoteStreamID=%d, isSecondaryStream=%t",
+		s.id, s.session.serverRole.String(), s.remoteStreamID, s.isSecondaryStream))
 
 	// Always encapsulate data with metadata for uniform client-side processing
 	return s.writeWithMetadata(p)
@@ -1683,34 +1685,80 @@ func (s *ServerStream) writeWithMetadata(data []byte) (int, error) {
 			fmt.Sprintf("failed to encapsulate stream data: %v", err), err)
 	}
 
-	// Write encapsulated data to the underlying QUIC stream
-	_, err = s.quicStream.Write(encapsulatedData)
-	if err != nil {
-		return 0, err
+	// Aggregate frame into packet buffer and schedule flush
+	mtu := int(utils.DefaultMaxPacketSize)
+	frameLen := len(encapsulatedData)
+	// If adding would exceed MTU and we have content, flush first
+	if s.packetBufferBytes+4+frameLen > mtu && s.packetBufferBytes > 0 {
+		if err := s.flushPacketLocked(); err != nil {
+			return 0, err
+		}
+	}
+	// Append with length-prefix
+	s.packetFrameRaw = append(s.packetFrameRaw, encapsulatedData)
+	s.packetBufferBytes += 4 + frameLen
+	// Schedule timed flush if not already scheduled
+	if !s.packetFlushScheduled {
+		s.packetFlushScheduled = true
+		go func() {
+			time.Sleep(2 * time.Millisecond)
+			s.mutex.Lock()
+			defer s.mutex.Unlock()
+			_ = s.flushPacketLocked()
+			s.packetFlushScheduled = false
+		}()
 	}
 
 	// Update offset for next write
 	s.offset += len(data)
 
 	// Log for debugging
-	fmt.Printf("[SERVER] Stream %d wrote %d bytes (payload) to KWIK stream %d at offset %d\n",
-		s.id, len(data), s.remoteStreamID, s.offset-len(data))
+	s.session.logger.Info(fmt.Sprintf("[SERVER] Stream %d wrote %d bytes (payload) to KWIK stream %d at offset %d",
+		s.id, len(data), s.remoteStreamID, s.offset-len(data)))
 
-	// Track pending segment for retransmission until ACK
-	if s.pendingSegments == nil {
-		s.pendingSegments = make(map[uint64]*PendingSegment)
-	}
-	s.pendingSegments[currentOffset] = &PendingSegment{
-		offset:       currentOffset,
-		size:         len(data),
-		encapsulated: encapsulatedData,
-		lastSent:     time.Now(),
-		retries:      0,
-	}
-	s.startRetransmitter()
+	// Pending tracking is done when packet is flushed (in flushPacketLocked)
 
 	// Return the original data length (not encapsulated length)
 	return len(data), nil
+}
+
+// flushPacketLocked assembles buffered frames into a transport packet and sends it
+func (s *ServerStream) flushPacketLocked() error {
+	if s.quicStream == nil {
+		return utils.NewKwikError(utils.ErrConnectionLost, "no underlying QUIC stream", nil)
+	}
+	if len(s.packetFrameRaw) == 0 {
+		return nil
+	}
+	// Transport packet format: [PacketID:8][FrameCount:2] + repeated([FrameLen:4][FrameBytes])
+	packetID := generateFrameID()
+	header := make([]byte, 10)
+	for i := 0; i < 8; i++ {
+		header[i] = byte(packetID >> (8 * (7 - i)))
+	}
+	frameCount := uint16(len(s.packetFrameRaw))
+	header[8] = byte(frameCount >> 8)
+	header[9] = byte(frameCount)
+	body := make([]byte, 0, s.packetBufferBytes)
+	for _, fb := range s.packetFrameRaw {
+		l := len(fb)
+		body = append(body, byte(l>>24), byte(l>>16), byte(l>>8), byte(l))
+		body = append(body, fb...)
+	}
+	raw := append(header, body...)
+	if _, err := s.quicStream.Write(raw); err != nil {
+		return err
+	}
+	// Register pending
+	if s.pendingSegments == nil {
+		s.pendingSegments = make(map[uint64]*PendingSegment)
+	}
+	s.pendingSegments[packetID] = &PendingSegment{offset: packetID, size: len(raw), encapsulated: raw, lastSent: time.Now(), retries: 0}
+	s.startRetransmitter()
+	// Reset buffer
+	s.packetFrameRaw = nil
+	s.packetBufferBytes = 0
+	return nil
 }
 
 // startRetransmitter starts a background loop to retransmit unacked segments
@@ -1732,11 +1780,11 @@ func (s *ServerStream) startRetransmitter() {
 							_, _ = s.quicStream.Write(seg.encapsulated)
 							seg.lastSent = time.Now()
 							seg.retries++
-							fmt.Printf("DEBUG: Retransmitted segment stream=%d offset=%d retries=%d\n", s.id, off, seg.retries)
+							s.session.logger.Debug(fmt.Sprintf("Retransmitted segment stream=%d offset=%d retries=%d", s.id, off, seg.retries))
 						} else if seg.retries >= 3 {
 							// Give up
 							delete(s.pendingSegments, off)
-							fmt.Printf("DEBUG: Dropping segment stream=%d offset=%d after max retries\n", s.id, off)
+							s.session.logger.Debug(fmt.Sprintf("Dropping segment stream=%d offset=%d after max retries", s.id, off))
 						}
 					}
 					s.mutex.Unlock()
@@ -1753,7 +1801,7 @@ func (s *ServerStream) handleAck(offset uint64, size uint32) {
 	if s.pendingSegments != nil {
 		if _, ok := s.pendingSegments[offset]; ok {
 			delete(s.pendingSegments, offset)
-			fmt.Printf("DEBUG: ACK received for stream=%d offset=%d\n", s.id, offset)
+			s.session.logger.Debug(fmt.Sprintf("ACK received for stream=%d offset=%d", s.id, offset))
 		}
 	}
 }
@@ -1853,8 +1901,8 @@ func (s *ServerStream) updateAggregationMapping() error {
 			fmt.Sprintf("failed to set stream mapping: %v", err), err)
 	}
 
-	fmt.Printf("[SECONDARY] Stream %d mapped to KWIK stream %d at offset %d (aggregator configured)\n",
-		s.id, s.remoteStreamID, s.offset)
+	s.session.logger.Info(fmt.Sprintf("[SECONDARY] Stream %d mapped to KWIK stream %d at offset %d (aggregator configured)",
+		s.id, s.remoteStreamID, s.offset))
 
 	return nil
 }
@@ -1893,9 +1941,10 @@ func (s *ServerStream) CancelWrite(errorCode uint64) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.state == stream.StreamStateOpen {
+	switch s.state {
+	case stream.StreamStateOpen:
 		s.state = stream.StreamStateHalfClosedLocal
-	} else if s.state == stream.StreamStateHalfClosedRemote {
+	case stream.StreamStateHalfClosedRemote:
 		s.state = stream.StreamStateClosed
 	}
 
@@ -1907,9 +1956,10 @@ func (s *ServerStream) CancelRead(errorCode uint64) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.state == stream.StreamStateOpen {
+	switch s.state {
+	case stream.StreamStateOpen:
 		s.state = stream.StreamStateHalfClosedRemote
-	} else if s.state == stream.StreamStateHalfClosedLocal {
+	case stream.StreamStateHalfClosedLocal:
 		s.state = stream.StreamStateClosed
 	}
 
@@ -1963,7 +2013,7 @@ func (s *ServerSession) handleAuthenticationWithSessionID(ctx context.Context) (
 	// Get control stream from primary path
 	controlStream, err := s.primaryPath.GetControlStream()
 	if err != nil {
-		fmt.Printf("DEBUG: Server failed to get control stream: %v\n", err)
+		s.logger.Debug(fmt.Sprintf("Server failed to get control stream: %v", err))
 		return "", utils.NewKwikError(utils.ErrStreamCreationFailed,
 			"failed to get control stream for authentication", err)
 	}
@@ -2024,12 +2074,13 @@ func (s *ServerSession) handleAuthenticationWithSessionID(ctx context.Context) (
 
 	// Debug: Log the received authentication request details
 	roleStr := "UNKNOWN"
-	if authReq.Role == control.SessionRole_PRIMARY {
+	switch authReq.Role {
+	case control.SessionRole_PRIMARY:
 		roleStr = "PRIMARY"
-	} else if authReq.Role == control.SessionRole_SECONDARY {
+	case control.SessionRole_SECONDARY:
 		roleStr = "SECONDARY"
 	}
-	fmt.Printf("DEBUG: Server received authentication request with role: %s, session ID: %s\n", roleStr, authReq.SessionId)
+	s.logger.Debug(fmt.Sprintf("Server received authentication request with role: %s, session ID: %s", roleStr, authReq.SessionId))
 
 	// Use AuthenticationManager to handle the authentication request with role support
 	responseFrame, err := s.authManager.HandleAuthenticationRequest(&frame)
@@ -2053,7 +2104,7 @@ func (s *ServerSession) handleAuthenticationWithSessionID(ctx context.Context) (
 	} else if s.authManager.GetSessionRole() == control.SessionRole_SECONDARY {
 		roleStr = "SECONDARY"
 	}
-	fmt.Printf("DEBUG: Server authenticated client with role: %s, session ID: %s\n", roleStr, clientSessionID)
+	s.logger.Debug(fmt.Sprintf("Server authenticated client with role: %s, session ID: %s", roleStr, clientSessionID))
 
 	// Serialize and send response
 	frameData, err := proto.Marshal(responseFrame)
@@ -2134,16 +2185,9 @@ func (s *ServerSession) openSecondaryStream(ctx context.Context) (stream.Seconda
 	return secondaryStream, nil
 }
 
-// getServerRole returns the role of this server session
-func (s *ServerSession) getServerRole() ServerRole {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
-	return s.serverRole
-}
-
 // startHeartbeat periodically sends heartbeat frames on all active paths' control streams (server side)
 func (s *ServerSession) startHeartbeat() {
-	fmt.Printf("DEBUG: Server starting heartbeat loop (session=%s)\n", s.sessionID)
+	s.logger.Debug(fmt.Sprintf("Server starting heartbeat loop (session=%s)", s.sessionID))
 	interval := utils.DefaultKeepAliveInterval
 	if s.config != nil && s.config.IdleTimeout > 0 {
 		interval = s.config.IdleTimeout
@@ -2159,6 +2203,12 @@ func (s *ServerSession) startHeartbeat() {
 	s.sendHeartbeatOnAllPaths()
 
 	for {
+		// Check session state outside of select, since select cases must be channel operations
+		if s.state != SessionStateActive {
+			s.logger.Debug(fmt.Sprintf("Server session %s is not active, stopping heartbeat", s.sessionID))
+			time.Sleep(1 * time.Second) // Give some time before stopping
+			continue
+		}
 		select {
 		case <-s.ctx.Done():
 			return
@@ -2205,7 +2255,7 @@ func (s *ServerSession) sendHeartbeatOnAllPaths() {
 		if err != nil {
 			continue
 		}
-		fmt.Printf("DEBUG: Server sending HEARTBEAT seq=%d on path=%s\n", seq, p.ID())
+		s.logger.Debug(fmt.Sprintf("Server sending HEARTBEAT seq=%d on path=%s", seq, p.ID()))
 		_, _ = controlStream.Write(data)
 	}
 }

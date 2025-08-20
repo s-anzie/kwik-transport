@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -9,6 +8,14 @@ import (
 
 	"github.com/quic-go/quic-go"
 )
+
+// PathLogger is a minimal logger interface to avoid import cycles
+type PathLogger interface {
+	Debug(msg string, keysAndValues ...interface{})
+	Info(msg string, keysAndValues ...interface{})
+	Warn(msg string, keysAndValues ...interface{})
+	Error(msg string, keysAndValues ...interface{})
+}
 
 // PathState represents the detailed state of a path
 type PathState int
@@ -47,6 +54,8 @@ type path struct {
 
 	mutex         sync.RWMutex
 	lastHeartbeat time.Time
+
+	logger PathLogger
 }
 
 // ID returns the path identifier
@@ -93,7 +102,9 @@ func (p *path) GetControlStream() (quic.Stream, error) {
 			"control stream not available", nil)
 	}
 
-	fmt.Printf("DEBUG: Returning control stream for path %s, streamID=%d\n", p.id, p.controlStream.StreamID())
+	if p.logger != nil {
+		p.logger.Debug("Returning control stream", "path", p.id, "streamID", p.controlStream.StreamID())
+	}
 	return p.controlStream, nil
 }
 
@@ -188,6 +199,13 @@ func (p *path) GetSecondaryStreamCount() int {
 	return len(p.secondaryStreams)
 }
 
+// SetLogger sets the logger for this path
+func (p *path) SetLogger(logger PathLogger) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	p.logger = logger
+}
+
 // Close closes the path and its connection
 func (p *path) Close() error {
 	p.mutex.Lock()
@@ -274,7 +292,9 @@ func (p *path) CreateControlStreamAsClient() (quic.Stream, error) {
 
 	// Set as control stream for the path
 	p.controlStream = stream
-	fmt.Printf("DEBUG: Created control stream (client-side) for path %s, streamID=%d\n", p.id, stream.StreamID())
+	if p.logger != nil {
+		p.logger.Debug("Created control stream (client-side)", "path", p.id, "streamID", stream.StreamID())
+	}
 
 	return stream, nil
 }
@@ -297,7 +317,9 @@ func (p *path) AcceptControlStreamAsServer() (quic.Stream, error) {
 
 	// Set as control stream for the path
 	p.controlStream = stream
-	fmt.Printf("DEBUG: Accepted control stream (server-side) for path %s, streamID=%d\n", p.id, stream.StreamID())
+	if p.logger != nil {
+		p.logger.Debug("Accepted control stream (server-side)", "path", p.id, "streamID", stream.StreamID())
+	}
 
 	return stream, nil
 }

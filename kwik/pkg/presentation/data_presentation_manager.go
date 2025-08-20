@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"kwik/pkg/stream"
 )
 
 // DataPresentationManagerImpl implements the DataPresentationManager interface
@@ -30,6 +32,9 @@ type DataPresentationManagerImpl struct {
 	// State
 	running bool
 	mutex   sync.RWMutex
+
+	// Logger
+	logger stream.StreamLogger
 }
 
 // GlobalPresentationStatsImpl implements detailed global statistics
@@ -112,6 +117,7 @@ func NewDataPresentationManager(config *PresentationConfig) *DataPresentationMan
 		},
 		workerStop: make(chan struct{}),
 		running:    false,
+		logger:     nil,
 	}
 
 	// Set up backpressure callback
@@ -119,6 +125,9 @@ func NewDataPresentationManager(config *PresentationConfig) *DataPresentationMan
 
 	return dpm
 }
+
+// SetLogger sets the logger for DPM
+func (dpm *DataPresentationManagerImpl) SetLogger(l stream.StreamLogger) { dpm.logger = l }
 
 // CreateStreamBuffer creates a new stream buffer
 func (dpm *DataPresentationManagerImpl) CreateStreamBuffer(streamID uint64, metadata interface{}) error {
@@ -300,6 +309,12 @@ func (dpm *DataPresentationManagerImpl) ReadFromStreamWithTimeout(streamID uint6
 		dpm.windowManager.SlideWindow(uint64(n))
 	}
 
+	if dpm.config.EnableDebugLogging {
+		if dpm.logger != nil {
+			dpm.logger.Debug(fmt.Sprintf("DPM ReadFromStream stream=%d n=%d err=%v", streamID, n, err))
+		}
+	}
+
 	return n, err
 }
 
@@ -446,9 +461,13 @@ func (dpm *DataPresentationManagerImpl) handleBackpressureEvent(streamID uint64,
 	// Log if debug logging is enabled
 	if dpm.config.EnableDebugLogging {
 		if active {
-			fmt.Printf("DEBUG: Backpressure activated for stream %d: %s\n", streamID, reason.String())
+			if dpm.logger != nil {
+				dpm.logger.Debug(fmt.Sprintf("Backpressure activated for stream %d: %s", streamID, reason.String()))
+			}
 		} else {
-			fmt.Printf("DEBUG: Backpressure deactivated for stream %d\n", streamID)
+			if dpm.logger != nil {
+				dpm.logger.Debug(fmt.Sprintf("Backpressure deactivated for stream %d", streamID))
+			}
 		}
 	}
 }
@@ -663,6 +682,11 @@ func (dpm *DataPresentationManagerImpl) WriteToStream(streamID uint64, data []by
 		writeErr = streamBuffer.WriteWithMetadata(data, offset, dataMetadata)
 	} else {
 		writeErr = streamBuffer.Write(data, offset)
+	}
+	if dpm.config.EnableDebugLogging {
+		if dpm.logger != nil {
+			dpm.logger.Debug(fmt.Sprintf("DPM WriteToStream stream=%d len=%d offset=%d err=%v", streamID, len(data), offset, writeErr))
+		}
 	}
 
 	// Update statistics

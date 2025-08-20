@@ -21,11 +21,11 @@ import (
 // MockDataLogger implements DataLogger for testing
 type MockDataLogger struct{}
 
-func (m *MockDataLogger) Debug(msg string, keysAndValues ...interface{}) {}
-func (m *MockDataLogger) Info(msg string, keysAndValues ...interface{})  {}
-func (m *MockDataLogger) Warn(msg string, keysAndValues ...interface{})  {}
-func (m *MockDataLogger) Error(msg string, keysAndValues ...interface{}) {}
-func (m *MockDataLogger) Critical(msg string, keysAndValues ...interface{}){}
+func (m *MockDataLogger) Debug(msg string, keysAndValues ...interface{})    {}
+func (m *MockDataLogger) Info(msg string, keysAndValues ...interface{})     {}
+func (m *MockDataLogger) Warn(msg string, keysAndValues ...interface{})     {}
+func (m *MockDataLogger) Error(msg string, keysAndValues ...interface{})    {}
+func (m *MockDataLogger) Critical(msg string, keysAndValues ...interface{}) {}
 
 // Package-level counter for mock stream IDs
 var mockStreamIDCounter uint64 = 0
@@ -237,12 +237,12 @@ func TestPrimaryPlusTwoSecondaryServers_Integration(t *testing.T) {
 	t.Log("Testing secondary server stream creation...")
 	secondary1Stream, err := secondary1.OpenSecondaryStream(context.Background())
 	require.NoError(t, err)
-	assert.NotEqual(t, uint64(0), secondary1Stream.GetStreamID()) // Should have internal stream ID
+	assert.NotEqual(t, uint64(0), secondary1Stream.GetStreamID())  // Should have internal stream ID
 	assert.Equal(t, uint64(0), secondary1Stream.GetKwikStreamID()) // Should not be mapped to KWIK stream yet
 
 	secondary2Stream, err := secondary2.OpenSecondaryStream(context.Background())
 	require.NoError(t, err)
-	assert.NotEqual(t, uint64(0), secondary2Stream.GetStreamID()) // Should have internal stream ID
+	assert.NotEqual(t, uint64(0), secondary2Stream.GetStreamID())  // Should have internal stream ID
 	assert.Equal(t, uint64(0), secondary2Stream.GetKwikStreamID()) // Should not be mapped to KWIK stream yet
 	t.Log("Secondary server stream creation successful")
 
@@ -369,7 +369,7 @@ func TestTransparentAggregation_Integration(t *testing.T) {
 
 	// Create aggregator for testing
 	mockLogger := &MockDataLogger{}
-	aggregator := data.NewSecondaryStreamAggregator(mockLogger)
+	aggregator := data.NewStreamAggregator(mockLogger)
 
 	// Create primary stream
 	primaryStream, err := session.OpenStreamSync(context.Background())
@@ -587,30 +587,30 @@ func TestPerformanceRequirements_Integration(t *testing.T) {
 	runtime.ReadMemStats(&m2)
 
 	// Add detailed logging to debug memory calculation
-	t.Logf("Memory stats - Initial: %d bytes, Baseline: %d bytes, Final: %d bytes", 
+	t.Logf("Memory stats - Initial: %d bytes, Baseline: %d bytes, Final: %d bytes",
 		m1.Alloc, mBaseline.Alloc, m2.Alloc)
 
 	// Calculate memory increase from baseline, handling potential underflow
 	var memoryUsed uint64
 	var memoryIncrease float64
-	
+
 	if m2.Alloc >= mBaseline.Alloc {
 		memoryUsed = m2.Alloc - mBaseline.Alloc
-		
+
 		if mBaseline.Alloc > 1024*1024 { // Only calculate percentage if baseline is > 1MB
 			memoryIncrease = float64(memoryUsed) / float64(mBaseline.Alloc) * 100
-			t.Logf("Memory usage increase: %.2f%% (%d bytes, baseline: %d bytes)", 
+			t.Logf("Memory usage increase: %.2f%% (%d bytes, baseline: %d bytes)",
 				memoryIncrease, memoryUsed, mBaseline.Alloc)
-			
+
 			// Validate memory requirement (≤ 50% increase for test streams)
 			assert.LessOrEqual(t, memoryIncrease, 50.0,
 				"Memory increase should be ≤ 50%% for %d test streams", testStreams)
 		} else {
 			// For small baseline, just check absolute usage
 			memoryUsedMB := float64(memoryUsed) / (1024 * 1024)
-			t.Logf("Memory usage: %.2f MB (%d bytes, baseline too small for percentage)", 
+			t.Logf("Memory usage: %.2f MB (%d bytes, baseline too small for percentage)",
 				memoryUsedMB, memoryUsed)
-			
+
 			// Validate absolute memory usage (≤ 10MB for 100 streams should be reasonable)
 			assert.LessOrEqual(t, memoryUsed, uint64(10*1024*1024),
 				"Memory usage should be ≤ 10MB for %d test streams", testStreams)
@@ -618,9 +618,9 @@ func TestPerformanceRequirements_Integration(t *testing.T) {
 	} else {
 		// Memory decreased (GC was very effective), this is actually good
 		memoryFreed := mBaseline.Alloc - m2.Alloc
-		t.Logf("Memory actually decreased by %d bytes (%.2f MB) - GC was very effective", 
+		t.Logf("Memory actually decreased by %d bytes (%.2f MB) - GC was very effective",
 			memoryFreed, float64(memoryFreed)/(1024*1024))
-		
+
 		// If memory decreased, the test passes (no memory leak)
 		t.Log("Memory usage test passed - no memory increase detected")
 	}

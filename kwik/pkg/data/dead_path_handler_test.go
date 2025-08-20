@@ -4,9 +4,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/quic-go/quic-go"
 	"kwik/pkg/transport"
 	datapb "kwik/proto/data"
+
+	"github.com/quic-go/quic-go"
 )
 
 // MockPathManager implements transport.PathManager for testing
@@ -40,13 +41,14 @@ func (mp *MockPath) CreateControlStreamAsClient() (quic.Stream, error) { return 
 func (mp *MockPath) AcceptControlStreamAsServer() (quic.Stream, error) { return nil, nil }
 
 // Secondary stream support methods
-func (mp *MockPath) IsSecondaryPath() bool                                    { return false }
-func (mp *MockPath) SetSecondaryPath(isSecondary bool)                        {}
-func (mp *MockPath) AddSecondaryStream(streamID uint64, stream quic.Stream)   {}
-func (mp *MockPath) RemoveSecondaryStream(streamID uint64)                    {}
-func (mp *MockPath) GetSecondaryStream(streamID uint64) (quic.Stream, bool)   { return nil, false }
-func (mp *MockPath) GetSecondaryStreams() map[uint64]quic.Stream              { return make(map[uint64]quic.Stream) }
-func (mp *MockPath) GetSecondaryStreamCount() int                             { return 0 }
+func (mp *MockPath) IsSecondaryPath() bool                                  { return false }
+func (mp *MockPath) SetSecondaryPath(isSecondary bool)                      {}
+func (mp *MockPath) AddSecondaryStream(streamID uint64, stream quic.Stream) {}
+func (mp *MockPath) RemoveSecondaryStream(streamID uint64)                  {}
+func (mp *MockPath) GetSecondaryStream(streamID uint64) (quic.Stream, bool) { return nil, false }
+func (mp *MockPath) GetSecondaryStreams() map[uint64]quic.Stream            { return make(map[uint64]quic.Stream) }
+func (mp *MockPath) GetSecondaryStreamCount() int                           { return 0 }
+func (mp *MockPath) SetLogger(logger transport.PathLogger)                  {}
 
 func NewMockPathManager() *MockPathManager {
 	return &MockPathManager{
@@ -137,6 +139,10 @@ func (mpm *MockPathManager) SetFailureThreshold(threshold int)             {}
 
 func (mpm *MockPathManager) SetPathStatusNotificationHandler(handler transport.PathStatusNotificationHandler) {
 	mpm.handler = handler
+}
+
+func (mpm *MockPathManager) SetLogger(logger transport.PathLogger) {
+
 }
 
 func TestDeadPathHandler_PathDeathDetection(t *testing.T) {

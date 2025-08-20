@@ -10,6 +10,32 @@ import (
 	"kwik/internal/utils"
 )
 
+// KwikAggregationLoggerAdapter adapts central logger to AggregationLogger
+type KwikAggregationLoggerAdapter struct {
+	base interface {
+		Debug(string, ...interface{})
+		Info(string, ...interface{})
+		Warn(string, ...interface{})
+		Error(string, ...interface{})
+	}
+}
+
+func (a *KwikAggregationLoggerAdapter) Debug(msg string, args ...interface{}) {
+	a.base.Debug(fmt.Sprintf(msg, args...))
+}
+func (a *KwikAggregationLoggerAdapter) Info(msg string, args ...interface{}) {
+	a.base.Info(fmt.Sprintf(msg, args...))
+}
+func (a *KwikAggregationLoggerAdapter) Warn(msg string, args ...interface{}) {
+	a.base.Warn(fmt.Sprintf(msg, args...))
+}
+func (a *KwikAggregationLoggerAdapter) Error(msg string, args ...interface{}) {
+	a.base.Error(fmt.Sprintf(msg, args...))
+}
+func (a *KwikAggregationLoggerAdapter) Critical(msg string, args ...interface{}) {
+	a.base.Error(fmt.Sprintf("CRITICAL: "+msg, args...))
+}
+
 // ErrorLevel defines the level of error reporting
 type ErrorLevel int
 
@@ -30,25 +56,25 @@ type AggregationErrorHandler struct {
 	onAggregationTimeout func(kwikStreamID uint64, pendingOffsets []uint64) error
 	onBufferOverflow     func(kwikStreamID uint64, bufferSize, maxSize int) error
 	onReorderingFailure  func(kwikStreamID uint64, expectedOffset, receivedOffset uint64) error
-	
+
 	// Fallback strategy
 	fallbackStrategy AggregationFallbackStrategy
-	
+
 	// Recovery mechanisms
 	recoveryConfig *AggregationRecoveryConfig
-	
+
 	// Statistics
 	stats *AggregationErrorStats
-	
+
 	// Configuration
 	config *AggregationErrorConfig
-	
+
 	// Synchronization
 	mutex sync.RWMutex
-	
+
 	// Logger
 	logger AggregationLogger
-	
+
 	// Active recovery operations
 	activeRecoveries map[uint64]*RecoveryOperation // kwikStreamID -> recovery
 	recoveryMutex    sync.RWMutex
@@ -80,34 +106,34 @@ type AggregationRecoveryConfig struct {
 
 // AggregationErrorConfig contains configuration for the error handler
 type AggregationErrorConfig struct {
-	EnableErrorRecovery     bool          // Whether to enable error recovery
-	ErrorReportingLevel     ErrorLevel    // Level of error reporting
-	MaxErrorHistory         int           // Maximum number of errors to keep in history
-	ErrorCleanupInterval    time.Duration // Interval for cleaning up old errors
-	EnableMetrics           bool          // Whether to collect error metrics
-	EnableCorruptionCheck   bool          // Whether to enable data corruption checks
-	MaxPendingRecoveries    int           // Maximum concurrent recovery operations
-	RecoveryQueueSize       int           // Size of recovery operation queue
+	EnableErrorRecovery   bool          // Whether to enable error recovery
+	ErrorReportingLevel   ErrorLevel    // Level of error reporting
+	MaxErrorHistory       int           // Maximum number of errors to keep in history
+	ErrorCleanupInterval  time.Duration // Interval for cleaning up old errors
+	EnableMetrics         bool          // Whether to collect error metrics
+	EnableCorruptionCheck bool          // Whether to enable data corruption checks
+	MaxPendingRecoveries  int           // Maximum concurrent recovery operations
+	RecoveryQueueSize     int           // Size of recovery operation queue
 }
 
 // AggregationErrorStats contains statistics about aggregation errors
 type AggregationErrorStats struct {
-	TotalErrors              int64                         // Total number of errors encountered
-	ErrorsByType             map[string]int64              // Count of errors by type
-	OffsetConflicts          int64                         // Number of offset conflicts
-	DataCorruptions          int64                         // Number of data corruption events
-	AggregationTimeouts      int64                         // Number of aggregation timeouts
-	BufferOverflows          int64                         // Number of buffer overflows
-	ReorderingFailures       int64                         // Number of reordering failures
-	RecoveryAttempts         int64                         // Total recovery attempts
-	RecoverySuccessful       int64                         // Successful recoveries
-	RetransmissionRequests   int64                         // Number of retransmission requests
-	SourceIsolations         int64                         // Number of source isolations
-	StreamResets             int64                         // Number of stream resets
-	LastErrorTime            time.Time                     // Time of the last error
-	ErrorHistory             []*AggregationErrorRecord     // History of recent errors
-	ActiveRecoveryOperations int                           // Number of active recovery operations
-	mutex                    sync.RWMutex                  // Synchronization for stats
+	TotalErrors              int64                     // Total number of errors encountered
+	ErrorsByType             map[string]int64          // Count of errors by type
+	OffsetConflicts          int64                     // Number of offset conflicts
+	DataCorruptions          int64                     // Number of data corruption events
+	AggregationTimeouts      int64                     // Number of aggregation timeouts
+	BufferOverflows          int64                     // Number of buffer overflows
+	ReorderingFailures       int64                     // Number of reordering failures
+	RecoveryAttempts         int64                     // Total recovery attempts
+	RecoverySuccessful       int64                     // Successful recoveries
+	RetransmissionRequests   int64                     // Number of retransmission requests
+	SourceIsolations         int64                     // Number of source isolations
+	StreamResets             int64                     // Number of stream resets
+	LastErrorTime            time.Time                 // Time of the last error
+	ErrorHistory             []*AggregationErrorRecord // History of recent errors
+	ActiveRecoveryOperations int                       // Number of active recovery operations
+	mutex                    sync.RWMutex              // Synchronization for stats
 }
 
 // AggregationErrorRecord represents a single aggregation error occurrence
@@ -152,26 +178,36 @@ type AggregationLogger interface {
 // DefaultAggregationLogger provides a simple logger implementation
 type DefaultAggregationLogger struct{}
 
-func (l *DefaultAggregationLogger) Debug(msg string, args ...interface{})    { log.Printf("[DEBUG] "+msg, args...) }
-func (l *DefaultAggregationLogger) Info(msg string, args ...interface{})     { log.Printf("[INFO] "+msg, args...) }
-func (l *DefaultAggregationLogger) Warn(msg string, args ...interface{})     { log.Printf("[WARN] "+msg, args...) }
-func (l *DefaultAggregationLogger) Error(msg string, args ...interface{})    { log.Printf("[ERROR] "+msg, args...) }
-func (l *DefaultAggregationLogger) Critical(msg string, args ...interface{}) { log.Printf("[CRITICAL] "+msg, args...) }
+func (l *DefaultAggregationLogger) Debug(msg string, args ...interface{}) {
+	log.Printf("[DEBUG] "+msg, args...)
+}
+func (l *DefaultAggregationLogger) Info(msg string, args ...interface{}) {
+	log.Printf("[INFO] "+msg, args...)
+}
+func (l *DefaultAggregationLogger) Warn(msg string, args ...interface{}) {
+	log.Printf("[WARN] "+msg, args...)
+}
+func (l *DefaultAggregationLogger) Error(msg string, args ...interface{}) {
+	log.Printf("[ERROR] "+msg, args...)
+}
+func (l *DefaultAggregationLogger) Critical(msg string, args ...interface{}) {
+	log.Printf("[CRITICAL] "+msg, args...)
+}
 
 // RecoveryOperation represents an active recovery operation
 type RecoveryOperation struct {
-	ID               string                      // Unique recovery operation ID
-	KwikStreamID     uint64                      // Stream being recovered
-	ErrorType        AggregationErrorType        // Type of error being recovered from
-	StartTime        time.Time                   // When recovery started
-	Timeout          time.Time                   // When recovery times out
-	Attempts         int                         // Number of attempts made
-	Strategy         AggregationFallbackStrategy // Recovery strategy being used
-	Context          context.Context             // Recovery context
-	Cancel           context.CancelFunc          // Function to cancel recovery
-	Status           RecoveryStatus              // Current status
-	LastUpdate       time.Time                   // Last status update
-	ErrorDetails     map[string]interface{}      // Additional error details
+	ID           string                      // Unique recovery operation ID
+	KwikStreamID uint64                      // Stream being recovered
+	ErrorType    AggregationErrorType        // Type of error being recovered from
+	StartTime    time.Time                   // When recovery started
+	Timeout      time.Time                   // When recovery times out
+	Attempts     int                         // Number of attempts made
+	Strategy     AggregationFallbackStrategy // Recovery strategy being used
+	Context      context.Context             // Recovery context
+	Cancel       context.CancelFunc          // Function to cancel recovery
+	Status       RecoveryStatus              // Current status
+	LastUpdate   time.Time                   // Last status update
+	ErrorDetails map[string]interface{}      // Additional error details
 }
 
 // RecoveryStatus represents the status of a recovery operation
@@ -213,7 +249,7 @@ func NewAggregationErrorHandler(config *AggregationErrorConfig) *AggregationErro
 			RecoveryQueueSize:     50,
 		}
 	}
-	
+
 	recoveryConfig := &AggregationRecoveryConfig{
 		EnableAutoRecovery:       true,
 		MaxRecoveryAttempts:      3,
@@ -224,24 +260,24 @@ func NewAggregationErrorHandler(config *AggregationErrorConfig) *AggregationErro
 		RetransmissionTimeout:    10 * time.Second,
 		IsolationDuration:        5 * time.Minute,
 	}
-	
+
 	stats := &AggregationErrorStats{
 		ErrorsByType: make(map[string]int64),
 		ErrorHistory: make([]*AggregationErrorRecord, 0, config.MaxErrorHistory),
 	}
-	
+
 	handler := &AggregationErrorHandler{
-		fallbackStrategy:  FallbackRequestRetransmission,
-		recoveryConfig:    recoveryConfig,
-		stats:             stats,
-		config:            config,
-		logger:            &DefaultAggregationLogger{},
-		activeRecoveries:  make(map[uint64]*RecoveryOperation),
+		fallbackStrategy: FallbackRequestRetransmission,
+		recoveryConfig:   recoveryConfig,
+		stats:            stats,
+		config:           config,
+		logger:           &DefaultAggregationLogger{},
+		activeRecoveries: make(map[uint64]*RecoveryOperation),
 	}
-	
+
 	// Set default error handlers
 	handler.setDefaultErrorHandlers()
-	
+
 	return handler
 }
 
@@ -299,13 +335,13 @@ func (h *AggregationErrorHandler) HandleAggregationError(err error, context *Agg
 	if err == nil {
 		return nil
 	}
-	
+
 	// Determine error type
 	errorType := h.classifyError(err)
-	
+
 	// Record the error
 	h.recordError(err, errorType, context)
-	
+
 	// Handle specific error types
 	switch errorType {
 	case ErrorTypeOffsetConflict:
@@ -341,7 +377,7 @@ func (h *AggregationErrorHandler) classifyError(err error) AggregationErrorType 
 			return ErrorTypeInvalidData
 		}
 	}
-	
+
 	// Check error message for specific patterns
 	errMsg := err.Error()
 	switch {
@@ -363,12 +399,12 @@ func (h *AggregationErrorHandler) classifyError(err error) AggregationErrorType 
 // handleOffsetConflict handles offset conflict errors
 func (h *AggregationErrorHandler) handleOffsetConflict(err error, context *AggregationErrorContext) error {
 	h.logger.Warn("Offset conflict detected: stream=%d, offset=%d", context.KwikStreamID, context.Offset)
-	
+
 	// Update statistics
 	h.stats.mutex.Lock()
 	h.stats.OffsetConflicts++
 	h.stats.mutex.Unlock()
-	
+
 	// Try custom handler first
 	if h.onOffsetConflict != nil {
 		if handlerErr := h.onOffsetConflict(context.KwikStreamID, context.Offset, context.Sources); handlerErr == nil {
@@ -376,7 +412,7 @@ func (h *AggregationErrorHandler) handleOffsetConflict(err error, context *Aggre
 			return nil
 		}
 	}
-	
+
 	// Apply fallback strategy
 	return h.applyFallbackStrategy(err, context, ErrorTypeOffsetConflict)
 }
@@ -384,12 +420,12 @@ func (h *AggregationErrorHandler) handleOffsetConflict(err error, context *Aggre
 // handleDataCorruption handles data corruption errors
 func (h *AggregationErrorHandler) handleDataCorruption(err error, context *AggregationErrorContext) error {
 	h.logger.Error("Data corruption detected: stream=%d, offset=%d", context.KwikStreamID, context.Offset)
-	
+
 	// Update statistics
 	h.stats.mutex.Lock()
 	h.stats.DataCorruptions++
 	h.stats.mutex.Unlock()
-	
+
 	// Try custom handler first
 	if h.onDataCorruption != nil {
 		// Extract corrupted data from context if available
@@ -399,13 +435,13 @@ func (h *AggregationErrorHandler) handleDataCorruption(err error, context *Aggre
 				corruptedData = data
 			}
 		}
-		
+
 		if handlerErr := h.onDataCorruption(context.KwikStreamID, corruptedData); handlerErr == nil {
 			h.recordResolution(err, context, "custom_handler")
 			return nil
 		}
 	}
-	
+
 	// Data corruption is serious, apply fallback strategy
 	return h.applyFallbackStrategy(err, context, ErrorTypeDataCorruption)
 }
@@ -413,12 +449,12 @@ func (h *AggregationErrorHandler) handleDataCorruption(err error, context *Aggre
 // handleAggregationTimeout handles aggregation timeout errors
 func (h *AggregationErrorHandler) handleAggregationTimeout(err error, context *AggregationErrorContext) error {
 	h.logger.Warn("Aggregation timeout: stream=%d", context.KwikStreamID)
-	
+
 	// Update statistics
 	h.stats.mutex.Lock()
 	h.stats.AggregationTimeouts++
 	h.stats.mutex.Unlock()
-	
+
 	// Try custom handler first
 	if h.onAggregationTimeout != nil {
 		// Extract pending offsets from context if available
@@ -428,13 +464,13 @@ func (h *AggregationErrorHandler) handleAggregationTimeout(err error, context *A
 				pendingOffsets = offsets
 			}
 		}
-		
+
 		if handlerErr := h.onAggregationTimeout(context.KwikStreamID, pendingOffsets); handlerErr == nil {
 			h.recordResolution(err, context, "custom_handler")
 			return nil
 		}
 	}
-	
+
 	// Apply fallback strategy
 	return h.applyFallbackStrategy(err, context, ErrorTypeAggregationTimeout)
 }
@@ -442,12 +478,12 @@ func (h *AggregationErrorHandler) handleAggregationTimeout(err error, context *A
 // handleBufferOverflow handles buffer overflow errors
 func (h *AggregationErrorHandler) handleBufferOverflow(err error, context *AggregationErrorContext) error {
 	h.logger.Error("Buffer overflow: stream=%d", context.KwikStreamID)
-	
+
 	// Update statistics
 	h.stats.mutex.Lock()
 	h.stats.BufferOverflows++
 	h.stats.mutex.Unlock()
-	
+
 	// Try custom handler first
 	if h.onBufferOverflow != nil {
 		// Extract buffer sizes from context if available
@@ -458,27 +494,27 @@ func (h *AggregationErrorHandler) handleBufferOverflow(err error, context *Aggre
 				maxSize = size
 			}
 		}
-		
+
 		if handlerErr := h.onBufferOverflow(context.KwikStreamID, bufferSize, maxSize); handlerErr == nil {
 			h.recordResolution(err, context, "custom_handler")
 			return nil
 		}
 	}
-	
+
 	// Buffer overflow requires immediate action
 	return h.applyFallbackStrategy(err, context, ErrorTypeBufferOverflow)
 }
 
 // handleReorderingFailure handles reordering failure errors
 func (h *AggregationErrorHandler) handleReorderingFailure(err error, context *AggregationErrorContext) error {
-	h.logger.Warn("Reordering failure: stream=%d, expected=%d, received=%d", 
+	h.logger.Warn("Reordering failure: stream=%d, expected=%d, received=%d",
 		context.KwikStreamID, context.ExpectedOffset, context.Offset)
-	
+
 	// Update statistics
 	h.stats.mutex.Lock()
 	h.stats.ReorderingFailures++
 	h.stats.mutex.Unlock()
-	
+
 	// Try custom handler first
 	if h.onReorderingFailure != nil {
 		if handlerErr := h.onReorderingFailure(context.KwikStreamID, context.ExpectedOffset, context.Offset); handlerErr == nil {
@@ -486,7 +522,7 @@ func (h *AggregationErrorHandler) handleReorderingFailure(err error, context *Ag
 			return nil
 		}
 	}
-	
+
 	// Apply fallback strategy
 	return h.applyFallbackStrategy(err, context, ErrorTypeReorderingFailure)
 }
@@ -494,7 +530,7 @@ func (h *AggregationErrorHandler) handleReorderingFailure(err error, context *Ag
 // handleGenericAggregationError handles generic aggregation errors
 func (h *AggregationErrorHandler) handleGenericAggregationError(err error, context *AggregationErrorContext) error {
 	h.logger.Error("Generic aggregation error: %s", err.Error())
-	
+
 	// Apply fallback strategy
 	return h.applyFallbackStrategy(err, context, ErrorTypeInvalidData)
 }
@@ -502,9 +538,9 @@ func (h *AggregationErrorHandler) handleGenericAggregationError(err error, conte
 // applyFallbackStrategy applies the configured fallback strategy
 func (h *AggregationErrorHandler) applyFallbackStrategy(err error, context *AggregationErrorContext, errorType AggregationErrorType) error {
 	strategy := h.fallbackStrategy
-	
+
 	h.logger.Info("Applying fallback strategy %d for error type %d", strategy, errorType)
-	
+
 	switch strategy {
 	case FallbackIgnoreCorrupted:
 		return h.ignoreCorruptedData(err, context)
@@ -534,17 +570,17 @@ func (h *AggregationErrorHandler) ignoreCorruptedData(err error, context *Aggreg
 // requestRetransmission implements the request retransmission fallback
 func (h *AggregationErrorHandler) requestRetransmission(err error, context *AggregationErrorContext) error {
 	h.logger.Info("Requesting retransmission: stream=%d, offset=%d", context.KwikStreamID, context.Offset)
-	
+
 	// Update statistics
 	h.stats.mutex.Lock()
 	h.stats.RetransmissionRequests++
 	h.stats.mutex.Unlock()
-	
+
 	// Start recovery operation
 	if h.config.EnableErrorRecovery {
 		h.startRecoveryOperation(context, FallbackRequestRetransmission)
 	}
-	
+
 	h.recordResolution(err, context, "request_retransmission")
 	return nil // Error will be resolved by retransmission
 }
@@ -553,7 +589,7 @@ func (h *AggregationErrorHandler) requestRetransmission(err error, context *Aggr
 func (h *AggregationErrorHandler) closeStream(err error, context *AggregationErrorContext) error {
 	h.logger.Warn("Closing stream due to error: stream=%d", context.KwikStreamID)
 	h.recordResolution(err, context, "close_stream")
-	
+
 	// Return a special error indicating stream should be closed
 	return &StreamCloseError{
 		OriginalError: err,
@@ -565,17 +601,17 @@ func (h *AggregationErrorHandler) closeStream(err error, context *AggregationErr
 // isolateSource implements the isolate source fallback
 func (h *AggregationErrorHandler) isolateSource(err error, context *AggregationErrorContext) error {
 	h.logger.Warn("Isolating source: stream=%d, path=%s", context.KwikStreamID, context.PathID)
-	
+
 	// Update statistics
 	h.stats.mutex.Lock()
 	h.stats.SourceIsolations++
 	h.stats.mutex.Unlock()
-	
+
 	// Start recovery operation
 	if h.config.EnableErrorRecovery {
 		h.startRecoveryOperation(context, FallbackIsolateSource)
 	}
-	
+
 	h.recordResolution(err, context, "isolate_source")
 	return nil // Source will be isolated
 }
@@ -590,14 +626,14 @@ func (h *AggregationErrorHandler) useLastKnownGood(err error, context *Aggregati
 // resetStream implements the reset stream fallback
 func (h *AggregationErrorHandler) resetStream(err error, context *AggregationErrorContext) error {
 	h.logger.Warn("Resetting stream: stream=%d", context.KwikStreamID)
-	
+
 	// Update statistics
 	h.stats.mutex.Lock()
 	h.stats.StreamResets++
 	h.stats.mutex.Unlock()
-	
+
 	h.recordResolution(err, context, "reset_stream")
-	
+
 	// Return a special error indicating stream should be reset
 	return &StreamResetError{
 		OriginalError: err,
@@ -610,19 +646,19 @@ func (h *AggregationErrorHandler) resetStream(err error, context *AggregationErr
 func (h *AggregationErrorHandler) startRecoveryOperation(errorContext *AggregationErrorContext, strategy AggregationFallbackStrategy) {
 	h.recoveryMutex.Lock()
 	defer h.recoveryMutex.Unlock()
-	
+
 	// Check if recovery is already in progress for this stream
 	if _, exists := h.activeRecoveries[errorContext.KwikStreamID]; exists {
 		h.logger.Debug("Recovery already in progress for stream %d", errorContext.KwikStreamID)
 		return
 	}
-	
+
 	// Check recovery limits
 	if len(h.activeRecoveries) >= h.config.MaxPendingRecoveries {
 		h.logger.Warn("Maximum pending recoveries reached, skipping recovery for stream %d", errorContext.KwikStreamID)
 		return
 	}
-	
+
 	// Create recovery operation
 	ctx, cancel := context.WithTimeout(context.Background(), h.recoveryConfig.RecoveryTimeout)
 	recovery := &RecoveryOperation{
@@ -639,12 +675,12 @@ func (h *AggregationErrorHandler) startRecoveryOperation(errorContext *Aggregati
 		LastUpdate:   time.Now(),
 		ErrorDetails: make(map[string]interface{}),
 	}
-	
+
 	h.activeRecoveries[errorContext.KwikStreamID] = recovery
-	
+
 	// Start recovery in background
 	go h.executeRecovery(recovery)
-	
+
 	h.logger.Info("Started recovery operation %s for stream %d", recovery.ID, errorContext.KwikStreamID)
 }
 
@@ -656,14 +692,14 @@ func (h *AggregationErrorHandler) executeRecovery(recovery *RecoveryOperation) {
 		h.recoveryMutex.Unlock()
 		recovery.Cancel()
 	}()
-	
+
 	recovery.Status = RecoveryStatusInProgress
 	recovery.LastUpdate = time.Now()
-	
+
 	h.stats.mutex.Lock()
 	h.stats.RecoveryAttempts++
 	h.stats.mutex.Unlock()
-	
+
 	// Execute recovery based on strategy
 	var err error
 	switch recovery.Strategy {
@@ -674,7 +710,7 @@ func (h *AggregationErrorHandler) executeRecovery(recovery *RecoveryOperation) {
 	default:
 		err = fmt.Errorf("unsupported recovery strategy: %d", recovery.Strategy)
 	}
-	
+
 	// Update recovery status
 	if err != nil {
 		recovery.Status = RecoveryStatusFailed
@@ -686,14 +722,14 @@ func (h *AggregationErrorHandler) executeRecovery(recovery *RecoveryOperation) {
 		h.stats.mutex.Unlock()
 		h.logger.Info("Recovery operation %s completed successfully", recovery.ID)
 	}
-	
+
 	recovery.LastUpdate = time.Now()
 }
 
 // executeRetransmissionRecovery executes retransmission recovery
 func (h *AggregationErrorHandler) executeRetransmissionRecovery(recovery *RecoveryOperation) error {
 	h.logger.Debug("Executing retransmission recovery for stream %d", recovery.KwikStreamID)
-	
+
 	// Wait for retransmission timeout
 	select {
 	case <-time.After(h.recoveryConfig.RetransmissionTimeout):
@@ -706,7 +742,7 @@ func (h *AggregationErrorHandler) executeRetransmissionRecovery(recovery *Recove
 // executeSourceIsolationRecovery executes source isolation recovery
 func (h *AggregationErrorHandler) executeSourceIsolationRecovery(recovery *RecoveryOperation) error {
 	h.logger.Debug("Executing source isolation recovery for stream %d", recovery.KwikStreamID)
-	
+
 	// Wait for isolation duration
 	select {
 	case <-time.After(h.recoveryConfig.IsolationDuration):
@@ -721,17 +757,17 @@ func (h *AggregationErrorHandler) recordError(err error, errorType AggregationEr
 	if !h.config.EnableMetrics {
 		return
 	}
-	
+
 	h.stats.mutex.Lock()
 	defer h.stats.mutex.Unlock()
-	
+
 	h.stats.TotalErrors++
 	h.stats.LastErrorTime = time.Now()
-	
+
 	// Record error by type
 	errorTypeStr := h.errorTypeToString(errorType)
 	h.stats.ErrorsByType[errorTypeStr]++
-	
+
 	// Add to error history
 	record := &AggregationErrorRecord{
 		Timestamp:         time.Now(),
@@ -746,7 +782,7 @@ func (h *AggregationErrorHandler) recordError(err error, errorType AggregationEr
 		Resolved:          false,
 		FallbackUsed:      h.fallbackStrategy,
 	}
-	
+
 	// Maintain history size limit
 	if len(h.stats.ErrorHistory) >= h.config.MaxErrorHistory {
 		h.stats.ErrorHistory = h.stats.ErrorHistory[1:]
@@ -759,10 +795,10 @@ func (h *AggregationErrorHandler) recordResolution(err error, context *Aggregati
 	if !h.config.EnableMetrics {
 		return
 	}
-	
+
 	h.stats.mutex.Lock()
 	defer h.stats.mutex.Unlock()
-	
+
 	// Mark the most recent matching error as resolved
 	for i := len(h.stats.ErrorHistory) - 1; i >= 0; i-- {
 		record := h.stats.ErrorHistory[i]
@@ -780,7 +816,7 @@ func (h *AggregationErrorHandler) recordResolution(err error, context *Aggregati
 func (h *AggregationErrorHandler) GetErrorStats() *AggregationErrorStats {
 	h.stats.mutex.RLock()
 	defer h.stats.mutex.RUnlock()
-	
+
 	// Return a copy to avoid race conditions
 	statsCopy := &AggregationErrorStats{
 		TotalErrors:              h.stats.TotalErrors,
@@ -799,13 +835,13 @@ func (h *AggregationErrorHandler) GetErrorStats() *AggregationErrorStats {
 		ErrorHistory:             make([]*AggregationErrorRecord, len(h.stats.ErrorHistory)),
 		ActiveRecoveryOperations: len(h.activeRecoveries),
 	}
-	
+
 	for k, v := range h.stats.ErrorsByType {
 		statsCopy.ErrorsByType[k] = v
 	}
-	
+
 	copy(statsCopy.ErrorHistory, h.stats.ErrorHistory)
-	
+
 	return statsCopy
 }
 
@@ -813,35 +849,35 @@ func (h *AggregationErrorHandler) GetErrorStats() *AggregationErrorStats {
 func (h *AggregationErrorHandler) setDefaultErrorHandlers() {
 	// Default offset conflict handler
 	h.onOffsetConflict = func(kwikStreamID uint64, offset uint64, sources []string) error {
-		h.logger.Info("Default offset conflict handler: stream=%d, offset=%d, sources=%v", 
+		h.logger.Info("Default offset conflict handler: stream=%d, offset=%d, sources=%v",
 			kwikStreamID, offset, sources)
 		return fmt.Errorf("offset conflict not resolved by default handler")
 	}
-	
+
 	// Default data corruption handler
 	h.onDataCorruption = func(kwikStreamID uint64, corruptedData []byte) error {
-		h.logger.Error("Default data corruption handler: stream=%d, data_size=%d", 
+		h.logger.Error("Default data corruption handler: stream=%d, data_size=%d",
 			kwikStreamID, len(corruptedData))
 		return fmt.Errorf("data corruption not resolved by default handler")
 	}
-	
+
 	// Default aggregation timeout handler
 	h.onAggregationTimeout = func(kwikStreamID uint64, pendingOffsets []uint64) error {
-		h.logger.Warn("Default aggregation timeout handler: stream=%d, pending=%v", 
+		h.logger.Warn("Default aggregation timeout handler: stream=%d, pending=%v",
 			kwikStreamID, pendingOffsets)
 		return fmt.Errorf("aggregation timeout not resolved by default handler")
 	}
-	
+
 	// Default buffer overflow handler
 	h.onBufferOverflow = func(kwikStreamID uint64, bufferSize, maxSize int) error {
-		h.logger.Error("Default buffer overflow handler: stream=%d, size=%d, max=%d", 
+		h.logger.Error("Default buffer overflow handler: stream=%d, size=%d, max=%d",
 			kwikStreamID, bufferSize, maxSize)
 		return fmt.Errorf("buffer overflow not resolved by default handler")
 	}
-	
+
 	// Default reordering failure handler
 	h.onReorderingFailure = func(kwikStreamID uint64, expectedOffset, receivedOffset uint64) error {
-		h.logger.Warn("Default reordering failure handler: stream=%d, expected=%d, received=%d", 
+		h.logger.Warn("Default reordering failure handler: stream=%d, expected=%d, received=%d",
 			kwikStreamID, expectedOffset, receivedOffset)
 		return fmt.Errorf("reordering failure not resolved by default handler")
 	}
@@ -907,14 +943,14 @@ func IsStreamResetError(err error) bool {
 
 // Helper function to check if a string contains a substring
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || (len(s) > len(substr) && 
-		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || 
-		 func() bool {
-			 for i := 1; i <= len(s)-len(substr); i++ {
-				 if s[i:i+len(substr)] == substr {
-					 return true
-				 }
-			 }
-			 return false
-		 }())))
+	return len(s) >= len(substr) && (s == substr || (len(s) > len(substr) &&
+		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
+			func() bool {
+				for i := 1; i <= len(s)-len(substr); i++ {
+					if s[i:i+len(substr)] == substr {
+						return true
+					}
+				}
+				return false
+			}())))
 }
