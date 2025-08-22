@@ -35,7 +35,7 @@ type StreamAggregator struct {
 
 	// Parallel processing
 	workerPool    *AggregationWorkerPool
-	batchChannel  chan []*SecondaryStreamData
+	batchChannel  chan []*DataFrame
 	resultChannel chan *AggregationResult
 
 	// Logger
@@ -58,7 +58,7 @@ type SecondaryLogger interface {
 	Critical(msg string, args ...interface{})
 }
 
-// SecondaryStreamData is defined in interfaces.go
+// DataFrame is defined in interfaces.go
 
 // SecondaryStreamState tracks the state of a secondary stream
 type SecondaryStreamState struct {
@@ -70,7 +70,7 @@ type SecondaryStreamState struct {
 	BytesReceived   uint64
 	BytesAggregated uint64
 	State           SecondaryStreamStateType
-	PendingData     map[uint64]*SecondaryStreamData // offset -> data
+	PendingData     map[uint64]*DataFrame // offset -> data
 	mutex           sync.RWMutex
 }
 
@@ -78,8 +78,8 @@ type SecondaryStreamState struct {
 type KwikStreamAggregationState struct {
 	StreamID             uint64
 	NextExpectedOffset   uint64
-	SecondaryStreams     map[uint64]bool                 // Set of secondary stream IDs
-	PendingData          map[uint64]*SecondaryStreamData // offset -> data
+	SecondaryStreams     map[uint64]bool       // Set of secondary stream IDs
+	PendingData          map[uint64]*DataFrame // offset -> data
 	AggregatedBuffer     []byte
 	LastActivity         time.Time
 	TotalBytesAggregated uint64
@@ -137,7 +137,7 @@ type AggregationWorkerPool struct {
 
 // AggregationWork represents work to be done by a worker
 type AggregationWork struct {
-	Data      []*SecondaryStreamData
+	Data      []*DataFrame
 	BatchID   uint64
 	Timestamp time.Time
 }
@@ -182,7 +182,7 @@ func NewStreamAggregator(logger SecondaryLogger) *StreamAggregator {
 			LastUpdate: time.Now(),
 		},
 		// metrics removed to avoid import cycle
-		batchChannel:  make(chan []*SecondaryStreamData, 100),
+		batchChannel:  make(chan []*DataFrame, 100),
 		resultChannel: make(chan *AggregationResult, 100),
 		logger:        logger,
 	}
@@ -197,7 +197,7 @@ func NewStreamAggregator(logger SecondaryLogger) *StreamAggregator {
 }
 
 // AggregateSecondaryData aggregates data from a secondary stream into the appropriate KWIK stream
-func (ssa *StreamAggregator) AggregateSecondaryData(data *SecondaryStreamData) error {
+func (ssa *StreamAggregator) AggregateSecondaryData(data *DataFrame) error {
 	if data == nil {
 		return utils.NewKwikError(utils.ErrInvalidFrame, "secondary stream data is nil", nil)
 	}
@@ -452,7 +452,7 @@ func (ssa *StreamAggregator) GetSecondaryStreamStats() *SecondaryAggregationStat
 }
 
 // validateSecondaryData validates secondary stream data
-func (ssa *StreamAggregator) validateSecondaryData(data *SecondaryStreamData) error {
+func (ssa *StreamAggregator) validateSecondaryData(data *DataFrame) error {
 	if data.StreamID == 0 {
 		return utils.NewKwikError(utils.ErrInvalidFrame, "invalid secondary stream ID: cannot be 0", nil)
 	}
@@ -492,7 +492,7 @@ func (ssa *StreamAggregator) getOrCreateSecondaryStream(streamID uint64, pathID 
 		BytesReceived:   0,
 		BytesAggregated: 0,
 		State:           SecondaryStreamStateActive,
-		PendingData:     make(map[uint64]*SecondaryStreamData),
+		PendingData:     make(map[uint64]*DataFrame),
 	}
 
 	ssa.secondaryStreams[streamID] = state
@@ -512,7 +512,7 @@ func (ssa *StreamAggregator) getOrCreateKwikStream(streamID uint64) (*KwikStream
 		StreamID:             streamID,
 		NextExpectedOffset:   0,
 		SecondaryStreams:     make(map[uint64]bool),
-		PendingData:          make(map[uint64]*SecondaryStreamData),
+		PendingData:          make(map[uint64]*DataFrame),
 		AggregatedBuffer:     make([]byte, 0, ssa.config.BufferSize),
 		LastActivity:         time.Now(),
 		TotalBytesAggregated: 0,
@@ -523,7 +523,7 @@ func (ssa *StreamAggregator) getOrCreateKwikStream(streamID uint64) (*KwikStream
 }
 
 // addDataToSecondaryStream adds data to a secondary stream
-func (ssa *StreamAggregator) addDataToSecondaryStream(state *SecondaryStreamState, data *SecondaryStreamData) error {
+func (ssa *StreamAggregator) addDataToSecondaryStream(state *SecondaryStreamState, data *DataFrame) error {
 	state.mutex.Lock()
 	defer state.mutex.Unlock()
 
@@ -547,7 +547,7 @@ func (ssa *StreamAggregator) addDataToSecondaryStream(state *SecondaryStreamStat
 }
 
 // aggregateIntoKwikStream aggregates data into a KWIK stream
-func (ssa *StreamAggregator) aggregateIntoKwikStream(kwikState *KwikStreamAggregationState, data *SecondaryStreamData) error {
+func (ssa *StreamAggregator) aggregateIntoKwikStream(kwikState *KwikStreamAggregationState, data *DataFrame) error {
 	kwikState.mutex.Lock()
 	defer kwikState.mutex.Unlock()
 
@@ -637,7 +637,7 @@ func (ssa *StreamAggregator) aggregatePendingData(kwikState *KwikStreamAggregati
 }
 
 // updateAggregationStats updates aggregation statistics
-func (ssa *StreamAggregator) updateAggregationStats(data *SecondaryStreamData) {
+func (ssa *StreamAggregator) updateAggregationStats(data *DataFrame) {
 	ssa.stats.mutex.Lock()
 	defer ssa.stats.mutex.Unlock()
 
@@ -824,7 +824,7 @@ func (pool *AggregationWorkerPool) processWork(work *AggregationWork) *Aggregati
 }
 
 // AggregateSecondaryDataBatch processes multiple secondary stream data items in parallel
-func (ssa *StreamAggregator) AggregateSecondaryDataBatch(dataItems []*SecondaryStreamData) error {
+func (ssa *StreamAggregator) AggregateSecondaryDataBatch(dataItems []*DataFrame) error {
 	if len(dataItems) == 0 {
 		return nil
 	}
@@ -868,7 +868,7 @@ func (ssa *StreamAggregator) AggregateSecondaryDataBatch(dataItems []*SecondaryS
 
 			// Process the results sequentially to maintain order
 			for _, processed := range result.ProcessedData {
-				data := &SecondaryStreamData{
+				data := &DataFrame{
 					StreamID:     processed.StreamID,
 					PathID:       processed.PathID,
 					Data:         processed.Data,
@@ -932,13 +932,13 @@ func (ssa *StreamAggregator) GetPresentationManager() DataPresentationManagerInt
 }
 
 // AggregateSecondaryDataWithPresentation aggregates data using the presentation manager
-func (ssa *StreamAggregator) AggregateData(data *SecondaryStreamData) error {
-	if data == nil {
+func (ssa *StreamAggregator) AggregateDataFrames(frame *DataFrame) error {
+	if frame == nil {
 		return utils.NewKwikError(utils.ErrInvalidFrame, "secondary stream data is nil", nil)
 	}
 
 	// Validate the data
-	if err := ssa.validateSecondaryData(data); err != nil {
+	if err := ssa.validateSecondaryData(frame); err != nil {
 		return err
 	}
 
@@ -949,47 +949,47 @@ func (ssa *StreamAggregator) AggregateData(data *SecondaryStreamData) error {
 
 	if presentationManager != nil {
 		// Use presentation manager for new architecture
-		return ssa.aggregateWithPresentationManager(data, presentationManager)
+		return ssa.aggregateDataFrame(frame, presentationManager)
 	}
-
-	// Fallback to legacy aggregation
-	return ssa.AggregateSecondaryData(data)
+	return fmt.Errorf("presentation manager not set, cannot aggregate data frame")
 }
 
-// aggregateWithPresentationManager aggregates data using the presentation manager
-func (ssa *StreamAggregator) aggregateWithPresentationManager(data *SecondaryStreamData, manager DataPresentationManagerInterface) error {
+// aggregateDataFrame aggregates data using the presentation manager
+func (ssa *StreamAggregator) aggregateDataFrame(frame *DataFrame, manager DataPresentationManagerInterface) error {
 	// Check if backpressure is active for the target stream
-	if manager.IsBackpressureActive(data.KwikStreamID) {
+	if manager.IsBackpressureActive(frame.KwikStreamID) {
 		return utils.NewKwikError(utils.ErrStreamCreationFailed,
-			fmt.Sprintf("stream %d is under backpressure", data.KwikStreamID), nil)
+			fmt.Sprintf("stream %d is under backpressure", frame.KwikStreamID), nil)
 	}
 
 	// Create metadata for the data
-	metadata := &SecondaryDataMetadata{
-		Offset:     data.Offset,
-		Length:     uint64(len(data.Data)),
-		Timestamp:  data.Timestamp,
-		SourcePath: data.PathID,
+	metadata := &DataFrameMetadata{
+		Offset:     frame.Offset,
+		Length:     uint64(len(frame.Data)),
+		Timestamp:  frame.Timestamp,
+		SourcePath: frame.PathID,
 		Flags:      SecondaryDataFlagNone,
 	}
-
+	//important Logging to track data aggregation final Data Content cause it may content a serialized DataChunk.
+	ssa.logger.Debug("[IMPORTANT] StreamAggregator.aggregateDataFrame: writing to presentation manager",
+		frame.KwikStreamID, frame.Offset, len(frame.Data), frame.PathID, frame.Data)
 	// Write data to the presentation manager
-	err := manager.WriteToStream(data.KwikStreamID, data.Data, data.Offset, metadata)
+	err := manager.WriteToStream(frame.KwikStreamID, frame.Data, frame.Offset, metadata)
 	if err != nil {
 		return fmt.Errorf("failed to write to presentation manager: %w", err)
 	}
 
 	// Update statistics
-	ssa.updateAggregationStats(data)
+	ssa.updateAggregationStats(frame)
 
 	// Update secondary stream state
-	secondaryState, err := ssa.getOrCreateSecondaryStream(data.StreamID, data.PathID, data.KwikStreamID)
+	secondaryState, err := ssa.getOrCreateSecondaryStream(frame.StreamID, frame.PathID, frame.KwikStreamID)
 	if err != nil {
 		return err
 	}
 
 	secondaryState.mutex.Lock()
-	secondaryState.BytesAggregated += uint64(len(data.Data))
+	secondaryState.BytesAggregated += uint64(len(frame.Data))
 	secondaryState.LastActivity = time.Now()
 	secondaryState.mutex.Unlock()
 
@@ -1027,7 +1027,7 @@ func (ssa *StreamAggregator) ConsumeAggregatedDataFromPresentation(kwikStreamID 
 }
 
 // SecondaryDataMetadata represents metadata for secondary stream data chunks
-type SecondaryDataMetadata struct {
+type DataFrameMetadata struct {
 	Offset     uint64                 `json:"offset"`
 	Length     uint64                 `json:"length"`
 	Timestamp  time.Time              `json:"timestamp"`

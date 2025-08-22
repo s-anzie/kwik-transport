@@ -400,7 +400,7 @@ func TestTransparentAggregation_Integration(t *testing.T) {
 	testData1 := []byte("Data from secondary 1")
 	testData2 := []byte("Data from secondary 2")
 
-	secondaryData1 := &data.SecondaryStreamData{
+	secondaryData1 := &data.DataFrame{
 		StreamID:     secondary1StreamID,
 		PathID:       "secondary-1",
 		Data:         testData1,
@@ -410,7 +410,7 @@ func TestTransparentAggregation_Integration(t *testing.T) {
 		SequenceNum:  0,
 	}
 
-	secondaryData2 := &data.SecondaryStreamData{
+	secondaryData2 := &data.DataFrame{
 		StreamID:     secondary2StreamID,
 		PathID:       "secondary-2",
 		Data:         testData2,
@@ -438,7 +438,7 @@ func TestTransparentAggregation_Integration(t *testing.T) {
 
 	// Create conflicting data at same offset
 	conflictData := []byte("Conflicting data")
-	conflictSecondaryData := &data.SecondaryStreamData{
+	conflictSecondaryData := &data.DataFrame{
 		StreamID:     secondary2StreamID,
 		PathID:       "secondary-2",
 		Data:         conflictData,

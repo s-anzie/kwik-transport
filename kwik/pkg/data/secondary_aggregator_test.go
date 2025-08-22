@@ -24,8 +24,8 @@ func (m *MockSecondaryLogger) Warn(msg string, args ...interface{})     {}
 func (m *MockSecondaryLogger) Error(msg string, args ...interface{})    {}
 func (m *MockSecondaryLogger) Critical(msg string, args ...interface{}) {}
 
-func createTestSecondaryData(streamID, kwikStreamID, offset uint64, pathID string, data []byte) *SecondaryStreamData {
-	return &SecondaryStreamData{
+func createTestSecondaryData(streamID, kwikStreamID, offset uint64, pathID string, data []byte) *DataFrame {
+	return &DataFrame{
 		StreamID:     streamID,
 		PathID:       pathID,
 		Data:         data,

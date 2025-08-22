@@ -1,6 +1,7 @@
 package presentation
 
 import (
+	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
@@ -189,11 +190,23 @@ func (dpm *DataPresentationManagerImpl) CreateStreamBuffer(streamID uint64, meta
 		bufferConfig.Priority = streamMetadata.Priority
 	}
 
+	// Configure buffer with logger from DPM if available
+	if dpm.logger != nil {
+		bufferConfig.EnableDebugLogging = dpm.config.EnableDebugLogging
+		bufferConfig.Logger = dpm.logger
+	}
+
 	// Create the stream buffer
 	buffer := NewStreamBuffer(streamID, streamMetadata, bufferConfig)
 
 	// Set backpressure callback
 	buffer.SetBackpressureCallback(func(streamID uint64, needed bool) {
+		if dpm.logger != nil {
+			dpm.logger.Debug("StreamBuffer backpressure event", 
+				"stream", streamID, 
+				"needed", needed)
+		}
+		
 		if needed {
 			dpm.backpressureManager.ActivateBackpressure(streamID, BackpressureReasonBufferFull)
 		} else {
@@ -260,14 +273,47 @@ func (dpm *DataPresentationManagerImpl) GetStreamBuffer(streamID uint64) (Stream
 	return buffer, nil
 }
 
-// ReadFromStream reads data from a specific stream
-func (dpm *DataPresentationManagerImpl) ReadFromStream(streamID uint64, buffer []byte) (int, error) {
-	return dpm.ReadFromStreamWithTimeout(streamID, buffer, 100*time.Millisecond)
+// SetStreamTimeout sets the read timeout for a specific stream
+func (dpm *DataPresentationManagerImpl) SetStreamTimeout(streamID uint64, timeout time.Duration) error {
+	// Check if system is running
+	dpm.mutex.RLock()
+	running := dpm.running
+	dpm.mutex.RUnlock()
+
+	if !running {
+		return fmt.Errorf("data presentation manager is not running")
+	}
+
+	// Get the stream buffer
+	dpm.buffersMutex.RLock()
+	buffer, exists := dpm.streamBuffers[streamID]
+	dpm.buffersMutex.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("stream buffer %d not found", streamID)
+	}
+
+	// Update the stream's timeout configuration
+	buffer.config.ReadTimeout = timeout
+
+	if dpm.config.EnableDebugLogging && dpm.logger != nil {
+		dpm.logger.Debug(fmt.Sprintf("Set stream %d read timeout to %v", streamID, timeout))
+	}
+
+	return nil
 }
 
 // ReadFromStreamWithTimeout reads data from a stream with a timeout
-func (dpm *DataPresentationManagerImpl) ReadFromStreamWithTimeout(streamID uint64, buffer []byte, timeout time.Duration) (int, error) {
+func (dpm *DataPresentationManagerImpl) ReadFromStream(streamID uint64, buffer []byte) (int, error) {
+	timeout := dpm.config.ReadTimeout
 	startTime := time.Now()
+
+	if dpm.logger != nil {
+		dpm.logger.Debug("DPM ReadFromStream - Starting read", 
+			"stream", streamID,
+			"buffer_size", len(buffer),
+		)
+	}
 
 	// Check if system is running
 	dpm.mutex.RLock()
@@ -300,6 +346,21 @@ func (dpm *DataPresentationManagerImpl) ReadFromStreamWithTimeout(streamID uint6
 
 	// Now perform a contiguous read
 	n, err := streamBuffer.Read(buffer)
+
+	// Log the read result
+	if dpm.logger != nil {
+		dpm.logger.Debug("DPM ReadFromStream - Read completed",
+			"stream", streamID,
+			"bytes_read", n,
+			"error", err,
+		)
+		if n > 0 {
+			dpm.logger.Debug("DPM ReadFromStream - Read data",
+				"stream", streamID,
+				"data_hex", bytesToHex(buffer[:n]),
+			)
+		}
+	}
 
 	// Update statistics
 	dpm.updateReadStats(n, time.Since(startTime))
@@ -640,9 +701,28 @@ func (dpm *DataPresentationManagerImpl) performCleanup() {
 	dpm.updateGlobalStats()
 }
 
+// bytesToHex returns a hex string representation of the data (first 32 bytes if longer)
+func bytesToHex(data []byte) string {
+	hexStr := hex.EncodeToString(data)
+	if len(hexStr) > 64 { // 32 bytes = 64 hex chars
+		return hexStr[:64] + "..."
+	}
+	return hexStr
+}
+
 // WriteToStream writes data to a specific stream (internal method for aggregators)
 func (dpm *DataPresentationManagerImpl) WriteToStream(streamID uint64, data []byte, offset uint64, metadata interface{}) error {
 	startTime := time.Now()
+
+	// Log the data being written
+	if dpm.logger != nil {
+		dpm.logger.Debug("DPM WriteToStream - Writing data", 
+			"stream", streamID,
+			"offset", offset,
+			"data_len", len(data),
+			"data_hex", bytesToHex(data),
+		)
+	}
 
 	// Check if system is running
 	dpm.mutex.RLock()

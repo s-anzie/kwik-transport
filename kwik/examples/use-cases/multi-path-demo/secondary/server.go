@@ -20,7 +20,18 @@ func main() {
 
 	config := kwik.DefaultConfig()
 	config.MaxPathsPerSession = 5
-	config.Logging.GlobalLevel = kwik.LogLevelDebug
+	config.LogLevel = kwik.LogLevelDebug
+	config.Logging = &kwik.LogConfig{
+		GlobalLevel: kwik.LogLevelDebug,
+		Components: map[string]kwik.LogLevel{
+			"SESSION":   kwik.LogLevelDebug,
+			"CONTROL":   kwik.LogLevelDebug,
+			"TRANSPORT": kwik.LogLevelDebug,
+			"DATA":      kwik.LogLevelDebug,
+			"STREAM":    kwik.LogLevelDebug,
+			"DPM":       kwik.LogLevelDebug,
+		},
+	}
 
 	listener, err := kwik.Listen("localhost:4434", config)
 	if err != nil {
@@ -47,12 +58,6 @@ func handleSession(sess session.Session) {
 		fmt.Println("[SECONDARY SERVER] Fermeture de la session")
 		sess.Close()
 	}()
-
-	// Configure comme serveur secondaire
-	if serverSession, ok := sess.(*session.ServerSession); ok {
-		fmt.Println("[SECONDARY SERVER] Configuration du rôle serveur secondaire")
-		serverSession.SetServerRole(session.ServerRoleSecondary)
-	}
 
 	for {
 		stream, err := sess.AcceptStream(context.Background())

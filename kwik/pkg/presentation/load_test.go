@@ -20,7 +20,7 @@ func TestHighThroughputScenario(t *testing.T) {
 	config.MaxStreamBufferSize = 8 * 1024 * 1024     // 8MB max per stream
 	config.ParallelWorkers = 8
 	config.BatchProcessingSize = 64
-	config.BackpressureThreshold = 0.9               // Higher threshold to reduce backpressure
+	config.BackpressureThreshold = 0.9 // Higher threshold to reduce backpressure
 
 	dpm := NewDataPresentationManager(config)
 	defer dpm.Shutdown()
@@ -169,9 +169,9 @@ func TestHighThroughputScenario(t *testing.T) {
 // TestSlowConsumerScenario tests backpressure with slow consumers
 func TestSlowConsumerScenario(t *testing.T) {
 	config := DefaultPresentationConfig()
-	config.ReceiveWindowSize = 64 * 1024        // 64KB window (very small to trigger backpressure)
-	config.DefaultStreamBufferSize = 8 * 1024   // 8KB per stream (very small buffers)
-	config.BackpressureThreshold = 0.5          // 50% threshold
+	config.ReceiveWindowSize = 64 * 1024      // 64KB window (very small to trigger backpressure)
+	config.DefaultStreamBufferSize = 8 * 1024 // 8KB per stream (very small buffers)
+	config.BackpressureThreshold = 0.5        // 50% threshold
 
 	dpm := NewDataPresentationManager(config)
 	defer dpm.Shutdown()
@@ -362,7 +362,7 @@ func TestMemoryPressureScenario(t *testing.T) {
 
 	dpm.Start()
 
-	const numStreams = 8  // Reduced to fit in 2MB window (8 * 256KB = 2MB)
+	const numStreams = 8 // Reduced to fit in 2MB window (8 * 256KB = 2MB)
 	const dataSize = 4096
 
 	// Create many streams to pressure memory
@@ -916,10 +916,10 @@ func TestBurstTrafficScenario(t *testing.T) {
 
 	dpm.Start()
 
-	const numStreams = 4  // Reduced to fit in 8MB window (4 * 2MB = 8MB)
-	const burstSize = 50  // Reduced burst size
-	const burstDataSize = 2048  // Reduced data size
-	const numBursts = 3   // Reduced number of bursts
+	const numStreams = 4       // Reduced to fit in 8MB window (4 * 2MB = 8MB)
+	const burstSize = 50       // Reduced burst size
+	const burstDataSize = 2048 // Reduced data size
+	const numBursts = 3        // Reduced number of bursts
 	const burstInterval = 2 * time.Second
 
 	// Create streams

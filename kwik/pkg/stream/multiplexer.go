@@ -7,9 +7,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/quic-go/quic-go"
 	"kwik/internal/utils"
 	"kwik/pkg/data"
+
+	"github.com/quic-go/quic-go"
 )
 
 // KwikStreamMultiplexer manages logical KWIK streams over real QUIC streams
@@ -438,7 +439,7 @@ func (sm *KwikStreamMultiplexer) HandleSecondaryStream(pathID string, stream qui
 
 // RouteSecondaryDataToAggregator routes data from secondary streams to the appropriate KWIK stream
 // Implements Requirement 2.5: transparent aggregation of secondary stream data
-func (sm *KwikStreamMultiplexer) RouteSecondaryDataToAggregator(kwikStreamID uint64, secondaryData *SecondaryStreamData) error {
+func (sm *KwikStreamMultiplexer) RouteSecondaryDataToAggregator(kwikStreamID uint64, secondaryData *data.DataFrame) error {
 	if sm.isolator == nil {
 		return utils.NewKwikError(utils.ErrStreamCreationFailed,
 			"secondary stream isolation not configured", nil)

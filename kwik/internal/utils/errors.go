@@ -8,11 +8,12 @@ import (
 
 // KWIK error codes - Core errors
 const (
-	ErrPathNotFound           = "KWIK_PATH_NOT_FOUND"
+	ErrPathNotFound          = "KWIK_PATH_NOT_FOUND"
 	ErrPathDead              = "KWIK_PATH_DEAD"
 	ErrInvalidFrame          = "KWIK_INVALID_FRAME"
 	ErrAuthenticationFailed  = "KWIK_AUTH_FAILED"
 	ErrStreamCreationFailed  = "KWIK_STREAM_CREATE_FAILED"
+	ErrStreamReadTimeout     = "KWIK_STREAM_READ_TIMEOUT"
 	ErrPacketTooLarge        = "KWIK_PACKET_TOO_LARGE"
 	ErrOffsetMismatch        = "KWIK_OFFSET_MISMATCH"
 	ErrSerializationFailed   = "KWIK_SERIALIZATION_FAILED"
@@ -22,11 +23,11 @@ const (
 
 // KWIK error codes - Session management
 const (
-	ErrSessionNotFound       = "KWIK_SESSION_NOT_FOUND"
-	ErrSessionClosed         = "KWIK_SESSION_CLOSED"
-	ErrSessionLimitExceeded  = "KWIK_SESSION_LIMIT_EXCEEDED"
-	ErrSessionTimeout        = "KWIK_SESSION_TIMEOUT"
-	ErrSessionStateInvalid   = "KWIK_SESSION_STATE_INVALID"
+	ErrSessionNotFound      = "KWIK_SESSION_NOT_FOUND"
+	ErrSessionClosed        = "KWIK_SESSION_CLOSED"
+	ErrSessionLimitExceeded = "KWIK_SESSION_LIMIT_EXCEEDED"
+	ErrSessionTimeout       = "KWIK_SESSION_TIMEOUT"
+	ErrSessionStateInvalid  = "KWIK_SESSION_STATE_INVALID"
 )
 
 // KWIK error codes - Path management
@@ -58,19 +59,19 @@ const (
 
 // KWIK error codes - Control plane
 const (
-	ErrControlFrameInvalid   = "KWIK_CONTROL_FRAME_INVALID"
-	ErrControlTimeout        = "KWIK_CONTROL_TIMEOUT"
+	ErrControlFrameInvalid    = "KWIK_CONTROL_FRAME_INVALID"
+	ErrControlTimeout         = "KWIK_CONTROL_TIMEOUT"
 	ErrControlHandshakeFailed = "KWIK_CONTROL_HANDSHAKE_FAILED"
-	ErrControlMessageRouting = "KWIK_CONTROL_MESSAGE_ROUTING"
+	ErrControlMessageRouting  = "KWIK_CONTROL_MESSAGE_ROUTING"
 )
 
 // KWIK error codes - System level
 const (
-	ErrSystemNotInitialized  = "KWIK_SYSTEM_NOT_INITIALIZED"
-	ErrSystemShuttingDown    = "KWIK_SYSTEM_SHUTTING_DOWN"
-	ErrResourceExhausted     = "KWIK_RESOURCE_EXHAUSTED"
-	ErrConfigurationInvalid  = "KWIK_CONFIGURATION_INVALID"
-	ErrInternalError         = "KWIK_INTERNAL_ERROR"
+	ErrSystemNotInitialized = "KWIK_SYSTEM_NOT_INITIALIZED"
+	ErrSystemShuttingDown   = "KWIK_SYSTEM_SHUTTING_DOWN"
+	ErrResourceExhausted    = "KWIK_RESOURCE_EXHAUSTED"
+	ErrConfigurationInvalid = "KWIK_CONFIGURATION_INVALID"
+	ErrInternalError        = "KWIK_INTERNAL_ERROR"
 )
 
 // KwikError represents a KWIK-specific error
@@ -118,17 +119,17 @@ func NewAuthenticationFailedError(reason string) error {
 }
 
 func NewStreamCreationFailedError(streamID uint64, cause error) error {
-	return NewKwikError(ErrStreamCreationFailed, 
+	return NewKwikError(ErrStreamCreationFailed,
 		fmt.Sprintf("failed to create stream %d", streamID), cause)
 }
 
 func NewPacketTooLargeError(size, maxSize uint32) error {
-	return NewKwikError(ErrPacketTooLarge, 
+	return NewKwikError(ErrPacketTooLarge,
 		fmt.Sprintf("packet size %d exceeds maximum %d", size, maxSize), nil)
 }
 
 func NewOffsetMismatchError(expected, actual uint64) error {
-	return NewKwikError(ErrOffsetMismatch, 
+	return NewKwikError(ErrOffsetMismatch,
 		fmt.Sprintf("offset mismatch: expected %d, got %d", expected, actual), nil)
 }
 
@@ -140,6 +141,7 @@ func IsKwikError(err error, code string) bool {
 	}
 	return false
 }
+
 // Enhanced error constructors for session management
 func NewSessionNotFoundError(sessionID string) error {
 	return NewKwikError(ErrSessionNotFound, fmt.Sprintf("session %s not found", sessionID), nil)
@@ -150,18 +152,18 @@ func NewSessionClosedError(sessionID string) error {
 }
 
 func NewSessionLimitExceededError(current, max int) error {
-	return NewKwikError(ErrSessionLimitExceeded, 
+	return NewKwikError(ErrSessionLimitExceeded,
 		fmt.Sprintf("session limit exceeded: %d/%d", current, max), nil)
 }
 
 func NewSessionTimeoutError(sessionID string, timeout time.Duration) error {
-	return NewKwikError(ErrSessionTimeout, 
+	return NewKwikError(ErrSessionTimeout,
 		fmt.Sprintf("session %s timed out after %v", sessionID, timeout), nil)
 }
 
 // Enhanced error constructors for path management
 func NewPathLimitExceededError(current, max int) error {
-	return NewKwikError(ErrPathLimitExceeded, 
+	return NewKwikError(ErrPathLimitExceeded,
 		fmt.Sprintf("path limit exceeded: %d/%d", current, max), nil)
 }
 
@@ -170,12 +172,12 @@ func NewPathAlreadyExistsError(pathID string) error {
 }
 
 func NewPathCreationFailedError(address string, cause error) error {
-	return NewKwikError(ErrPathCreationFailed, 
+	return NewKwikError(ErrPathCreationFailed,
 		fmt.Sprintf("failed to create path to %s", address), cause)
 }
 
 func NewPathHealthCheckFailedError(pathID string, cause error) error {
-	return NewKwikError(ErrPathHealthCheckFailed, 
+	return NewKwikError(ErrPathHealthCheckFailed,
 		fmt.Sprintf("health check failed for path %s", pathID), cause)
 }
 
@@ -193,51 +195,51 @@ func NewStreamClosedError(streamID uint64) error {
 }
 
 func NewStreamLimitExceededError(current, max int) error {
-	return NewKwikError(ErrStreamLimitExceeded, 
+	return NewKwikError(ErrStreamLimitExceeded,
 		fmt.Sprintf("stream limit exceeded: %d/%d", current, max), nil)
 }
 
 func NewStreamMultiplexFailedError(streamID uint64, cause error) error {
-	return NewKwikError(ErrStreamMultiplexFailed, 
+	return NewKwikError(ErrStreamMultiplexFailed,
 		fmt.Sprintf("failed to multiplex stream %d", streamID), cause)
 }
 
 // Enhanced error constructors for data plane
 func NewDataAggregationFailedError(streamID uint64, cause error) error {
-	return NewKwikError(ErrDataAggregationFailed, 
+	return NewKwikError(ErrDataAggregationFailed,
 		fmt.Sprintf("data aggregation failed for stream %d", streamID), cause)
 }
 
 func NewFlowControlViolationError(streamID uint64, attempted, available uint64) error {
-	return NewKwikError(ErrFlowControlViolation, 
-		fmt.Sprintf("flow control violation on stream %d: attempted %d, available %d", 
+	return NewKwikError(ErrFlowControlViolation,
+		fmt.Sprintf("flow control violation on stream %d: attempted %d, available %d",
 			streamID, attempted, available), nil)
 }
 
 func NewCongestionControlError(pathID string, reason string) error {
-	return NewKwikError(ErrCongestionControl, 
+	return NewKwikError(ErrCongestionControl,
 		fmt.Sprintf("congestion control error on path %s: %s", pathID, reason), nil)
 }
 
 // Enhanced error constructors for control plane
 func NewControlFrameInvalidError(frameType string, reason string) error {
-	return NewKwikError(ErrControlFrameInvalid, 
+	return NewKwikError(ErrControlFrameInvalid,
 		fmt.Sprintf("invalid %s frame: %s", frameType, reason), nil)
 }
 
 func NewControlTimeoutError(operation string, timeout time.Duration) error {
-	return NewKwikError(ErrControlTimeout, 
+	return NewKwikError(ErrControlTimeout,
 		fmt.Sprintf("control operation %s timed out after %v", operation, timeout), nil)
 }
 
 func NewControlHandshakeFailedError(reason string, cause error) error {
-	return NewKwikError(ErrControlHandshakeFailed, 
+	return NewKwikError(ErrControlHandshakeFailed,
 		fmt.Sprintf("control handshake failed: %s", reason), cause)
 }
 
 // Enhanced error constructors for system level
 func NewSystemNotInitializedError(component string) error {
-	return NewKwikError(ErrSystemNotInitialized, 
+	return NewKwikError(ErrSystemNotInitialized,
 		fmt.Sprintf("system component %s is not initialized", component), nil)
 }
 
@@ -246,17 +248,17 @@ func NewSystemShuttingDownError() error {
 }
 
 func NewResourceExhaustedError(resource string) error {
-	return NewKwikError(ErrResourceExhausted, 
+	return NewKwikError(ErrResourceExhausted,
 		fmt.Sprintf("resource exhausted: %s", resource), nil)
 }
 
 func NewConfigurationInvalidError(field string, value interface{}) error {
-	return NewKwikError(ErrConfigurationInvalid, 
+	return NewKwikError(ErrConfigurationInvalid,
 		fmt.Sprintf("invalid configuration for %s: %v", field, value), nil)
 }
 
 func NewInternalError(component string, cause error) error {
-	return NewKwikError(ErrInternalError, 
+	return NewKwikError(ErrInternalError,
 		fmt.Sprintf("internal error in %s", component), cause)
 }
 
@@ -303,7 +305,7 @@ func (e *EnhancedKwikError) AddContext(key string, value interface{}) {
 // Error implements the error interface with enhanced formatting
 func (e *EnhancedKwikError) Error() string {
 	base := e.KwikError.Error()
-	return fmt.Sprintf("[%s] %s [%s] %s", 
+	return fmt.Sprintf("[%s] %s [%s] %s",
 		e.Severity.String(), e.Component, e.Timestamp.Format(time.RFC3339), base)
 }
 
@@ -376,18 +378,18 @@ func (rm *ErrorRecoveryManager) RecoverFromError(err error, operation func() err
 		// Not a KWIK error, can't recover
 		return err
 	}
-	
+
 	strategy, exists := rm.strategies[kwikErr.Code]
 	if !exists {
 		// No recovery strategy registered
 		return err
 	}
-	
-	rm.logger.Info("Attempting error recovery", 
-		"errorCode", kwikErr.Code, 
+
+	rm.logger.Info("Attempting error recovery",
+		"errorCode", kwikErr.Code,
 		"strategy", strategy.Strategy.String(),
 		"description", strategy.Description)
-	
+
 	switch strategy.Strategy {
 	case RecoveryRetry:
 		return rm.retryOperation(operation, strategy, kwikErr)
@@ -410,29 +412,29 @@ func (rm *ErrorRecoveryManager) retryOperation(operation func() error, strategy 
 		if attempt > 1 {
 			time.Sleep(strategy.RetryDelay)
 		}
-		
-		rm.logger.Info("Retrying operation", 
-			"attempt", attempt, 
+
+		rm.logger.Info("Retrying operation",
+			"attempt", attempt,
 			"maxRetries", strategy.MaxRetries,
 			"originalError", originalErr.Code)
-		
+
 		err := operation()
 		if err == nil {
 			rm.logger.Info("Operation succeeded after retry", "attempt", attempt)
 			return nil
 		}
-		
+
 		// Check if it's the same type of error
 		var retryErr *KwikError
 		if errors.As(err, &retryErr) && retryErr.Code == originalErr.Code {
 			continue // Same error, try again
 		}
-		
+
 		// Different error, return it
 		return err
 	}
-	
-	rm.logger.Error("Operation failed after all retries", 
+
+	rm.logger.Error("Operation failed after all retries",
 		"maxRetries", strategy.MaxRetries,
 		"originalError", originalErr.Code)
 	return originalErr
@@ -443,15 +445,15 @@ func (rm *ErrorRecoveryManager) fallbackOperation(strategy *RecoveryAction, orig
 	if strategy.Fallback == nil {
 		return originalErr
 	}
-	
+
 	rm.logger.Warn("Executing fallback operation", "originalError", originalErr.Code)
-	
+
 	err := strategy.Fallback()
 	if err != nil {
 		rm.logger.Error("Fallback operation failed", "error", err)
 		return originalErr // Return original error if fallback fails
 	}
-	
+
 	rm.logger.Info("Fallback operation succeeded")
 	return nil
 }

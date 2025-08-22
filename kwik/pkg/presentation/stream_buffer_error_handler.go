@@ -6,14 +6,6 @@ import (
 	"time"
 )
 
-// StreamBufferLogger provides minimal logging for the presentation error handler
-type StreamBufferLogger interface {
-	Debug(msg string, keysAndValues ...interface{})
-	Info(msg string, keysAndValues ...interface{})
-	Warn(msg string, keysAndValues ...interface{})
-	Error(msg string, keysAndValues ...interface{})
-}
-
 // StreamBufferErrorHandler gère les erreurs spécifiques aux StreamBuffers
 type StreamBufferErrorHandler struct {
 	mu                  sync.RWMutex

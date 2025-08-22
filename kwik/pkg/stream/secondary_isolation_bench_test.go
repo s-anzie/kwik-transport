@@ -234,7 +234,7 @@ func BenchmarkSecondaryAggregatorOperations(b *testing.B) {
 
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			secondaryData := &data.SecondaryStreamData{
+			secondaryData := &data.DataFrame{
 				StreamID:     uint64(i % 100),
 				PathID:       fmt.Sprintf("path-%d", i%10),
 				Data:         testData,
@@ -266,7 +266,7 @@ func BenchmarkSecondaryAggregatorOperations(b *testing.B) {
 
 		for i := 0; i < 100; i++ {
 			aggregator.SetStreamMapping(uint64(i), uint64(i+1000), fmt.Sprintf("path-%d", i%10))
-			secondaryData := &data.SecondaryStreamData{
+			secondaryData := &data.DataFrame{
 				StreamID:     uint64(i),
 				PathID:       fmt.Sprintf("path-%d", i%10),
 				Data:         testData,
@@ -388,7 +388,7 @@ func BenchmarkConcurrentOperations(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			i := 0
 			for pb.Next() {
-				secondaryData := &data.SecondaryStreamData{
+				secondaryData := &data.DataFrame{
 					StreamID:     uint64(i % 1000),
 					PathID:       fmt.Sprintf("path-%d", i%10),
 					Data:         testData,
@@ -480,7 +480,7 @@ func BenchmarkMemoryUsage(b *testing.B) {
 			aggregator.SetStreamMapping(uint64(i), uint64(i+1000), fmt.Sprintf("path-%d", i%10))
 
 			for j := 0; j < 10; j++ {
-				secondaryData := &data.SecondaryStreamData{
+				secondaryData := &data.DataFrame{
 					StreamID:     uint64(i),
 					PathID:       fmt.Sprintf("path-%d", i%10),
 					Data:         testData,
@@ -528,7 +528,7 @@ func BenchmarkThroughputEfficiency(b *testing.B) {
 
 		start := time.Now()
 		for i := 0; i < b.N; i++ {
-			secondaryData := &data.SecondaryStreamData{
+			secondaryData := &data.DataFrame{
 				StreamID:     uint64(i % numStreams),
 				PathID:       fmt.Sprintf("path-%d", i%10),
 				Data:         testData,
@@ -647,7 +647,7 @@ func BenchmarkEndToEndLatency(b *testing.B) {
 		}
 
 		// 6. Aggregate data
-		secondaryData := &data.SecondaryStreamData{
+		secondaryData := &data.DataFrame{
 			StreamID:     secondaryStreamID,
 			PathID:       pathID,
 			Data:         extractedData,

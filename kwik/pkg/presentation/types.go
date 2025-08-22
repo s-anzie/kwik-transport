@@ -37,6 +37,8 @@ type PresentationConfig struct {
 	MaxStreamBufferSize         uint64        `json:"max_stream_buffer_size"`        // Maximum buffer size per stream (default: 2MB)
 	StreamBackpressureThreshold float64       `json:"stream_backpressure_threshold"` // Per-stream backpressure threshold (default: 0.75)
 	GapTimeout                  time.Duration `json:"gap_timeout"`                   // Timeout for gap resolution (default: 100ms)
+	// Read timeout for stream operations
+	ReadTimeout time.Duration `json:"read_timeout"` // Timeout for read operations (default: 5 seconds)
 
 	// Performance configuration
 	ParallelWorkers     int           `json:"parallel_workers"`      // Number of parallel workers
@@ -67,6 +69,9 @@ func DefaultPresentationConfig() *PresentationConfig {
 		MaxStreamBufferSize:         2 * 1024 * 1024, // 2MB
 		StreamBackpressureThreshold: 0.75,            // 75%
 		GapTimeout:                  100 * time.Millisecond,
+
+		// Read timeout defaults
+		ReadTimeout: 5 * time.Second, // 5 seconds
 
 		// Performance defaults
 		ParallelWorkers:     4,
@@ -108,6 +113,9 @@ func (c *PresentationConfig) Validate() error {
 	if c.GapTimeout <= 0 {
 		return fmt.Errorf("gap timeout must be positive")
 	}
+	if c.ReadTimeout <= 0 {
+		return fmt.Errorf("read timeout must be positive")
+	}
 	if c.ParallelWorkers <= 0 {
 		return fmt.Errorf("parallel workers must be positive")
 	}
@@ -118,13 +126,24 @@ func (c *PresentationConfig) Validate() error {
 }
 
 // StreamBufferConfig holds configuration specific to a stream buffer
+// Logger interface for stream buffer logging
+type StreamBufferLogger interface {
+	Debug(msg string, keysAndValues ...interface{})
+	Info(msg string, keysAndValues ...interface{})
+	Warn(msg string, keysAndValues ...interface{})
+	Error(msg string, keysAndValues ...interface{})
+}
+
 type StreamBufferConfig struct {
-	StreamID              uint64         `json:"stream_id"`
-	BufferSize            uint64         `json:"buffer_size"`
-	Priority              StreamPriority `json:"priority"`
-	GapTimeout            time.Duration  `json:"gap_timeout"`
-	EnableMetrics         bool           `json:"enable_metrics"`
-	EnableImmediateCleanup bool          `json:"enable_immediate_cleanup"`
+	StreamID               uint64             `json:"stream_id"`
+	BufferSize             uint64             `json:"buffer_size"`
+	Priority               StreamPriority     `json:"priority"`
+	GapTimeout             time.Duration      `json:"gap_timeout"`
+	ReadTimeout            time.Duration      `json:"read_timeout"`
+	EnableMetrics          bool               `json:"enable_metrics"`
+	EnableImmediateCleanup bool               `json:"enable_immediate_cleanup"`
+	EnableDebugLogging     bool               `json:"enable_debug_logging"`
+	Logger                StreamBufferLogger  `json:"-"` // Logger for debug output
 }
 
 // MemoryPoolStats contains statistics about memory pool usage
@@ -219,6 +238,7 @@ type ConfigurationUpdate struct {
 	BackpressureThreshold *float64       `json:"backpressure_threshold,omitempty"`
 	StreamBufferSize      *uint64        `json:"stream_buffer_size,omitempty"`
 	GapTimeout            *time.Duration `json:"gap_timeout,omitempty"`
+	ReadTimeout           *time.Duration `json:"read_timeout,omitempty"`
 
 	// Target (for stream-specific updates)
 	TargetStreamID *uint64 `json:"target_stream_id,omitempty"`

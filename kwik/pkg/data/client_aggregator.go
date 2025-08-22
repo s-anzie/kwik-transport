@@ -30,47 +30,47 @@ type ClientDataAggregator struct {
 
 // ClientAggregatorConfig holds configuration for client-side aggregation
 type ClientAggregatorConfig struct {
-	ReorderBufferSize    int
-	ReorderTimeout       time.Duration
-	MaxOutOfOrderFrames  int
-	AggregationEnabled   bool
-	OrderingEnabled      bool
-	DuplicateDetection   bool
-	BufferFlushInterval  time.Duration
+	ReorderBufferSize   int
+	ReorderTimeout      time.Duration
+	MaxOutOfOrderFrames int
+	AggregationEnabled  bool
+	OrderingEnabled     bool
+	DuplicateDetection  bool
+	BufferFlushInterval time.Duration
 }
 
 // ClientAggregatedStream represents an aggregated stream on the client side
 type ClientAggregatedStream struct {
-	StreamID         uint64
-	ExpectedOffset   uint64
-	ReorderBuffer    map[uint64]*data.DataFrame // Offset -> Frame
-	OrderedBuffer    []byte
+	StreamID          uint64
+	ExpectedOffset    uint64
+	ReorderBuffer     map[uint64]*data.DataFrame // Offset -> Frame
+	OrderedBuffer     []byte
 	PathContributions map[string]*PathContribution
-	LastActivity     time.Time
-	IsComplete       bool
-	mutex            sync.RWMutex
+	LastActivity      time.Time
+	IsComplete        bool
+	mutex             sync.RWMutex
 }
 
 // PathContribution tracks contribution from each path
 type PathContribution struct {
-	PathID           string
-	BytesReceived    uint64
-	FramesReceived   uint64
-	LastFrameTime    time.Time
-	LastFrameOffset  uint64
-	IsActive         bool
+	PathID          string
+	BytesReceived   uint64
+	FramesReceived  uint64
+	LastFrameTime   time.Time
+	LastFrameOffset uint64
+	IsActive        bool
 }
 
 // ClientAggregationStats contains statistics for client-side aggregation
 type ClientAggregationStats struct {
-	TotalStreamsAggregated uint64
-	TotalBytesAggregated   uint64
-	TotalFramesAggregated  uint64
-	PathContributions      map[string]*PathContribution
+	TotalStreamsAggregated  uint64
+	TotalBytesAggregated    uint64
+	TotalFramesAggregated   uint64
+	PathContributions       map[string]*PathContribution
 	AverageAggregationRatio float64
-	ReorderingEvents       uint64
-	DuplicateFrames        uint64
-	OutOfOrderFrames       uint64
+	ReorderingEvents        uint64
+	DuplicateFrames         uint64
+	OutOfOrderFrames        uint64
 }
 
 // NewClientDataAggregator creates a new client-side data aggregator
@@ -111,12 +111,12 @@ func (ca *ClientDataAggregator) AddPath(pathID string, stream DataStream) error 
 	// Initialize path contribution tracking
 	ca.statsMutex.Lock()
 	ca.stats.PathContributions[pathID] = &PathContribution{
-		PathID:           pathID,
-		BytesReceived:    0,
-		FramesReceived:   0,
-		LastFrameTime:    time.Now(),
-		LastFrameOffset:  0,
-		IsActive:         true,
+		PathID:          pathID,
+		BytesReceived:   0,
+		FramesReceived:  0,
+		LastFrameTime:   time.Now(),
+		LastFrameOffset: 0,
+		IsActive:        true,
 	}
 	ca.statsMutex.Unlock()
 
@@ -343,10 +343,10 @@ func (ca *ClientDataAggregator) extractOrderedData(aggregatedStream *ClientAggre
 
 		// Add frame data to ordered buffer
 		orderedData = append(orderedData, frame.Data...)
-		
+
 		// Update expected offset
 		aggregatedStream.ExpectedOffset += uint64(len(frame.Data))
-		
+
 		// Remove processed frame from reorder buffer
 		delete(aggregatedStream.ReorderBuffer, frame.Offset)
 
@@ -395,12 +395,12 @@ func (ca *ClientDataAggregator) updatePathContribution(pathID string, frame *dat
 	contrib, exists := ca.stats.PathContributions[pathID]
 	if !exists {
 		contrib = &PathContribution{
-			PathID:           pathID,
-			BytesReceived:    0,
-			FramesReceived:   0,
-			LastFrameTime:    time.Now(),
-			LastFrameOffset:  0,
-			IsActive:         true,
+			PathID:          pathID,
+			BytesReceived:   0,
+			FramesReceived:  0,
+			LastFrameTime:   time.Now(),
+			LastFrameOffset: 0,
+			IsActive:        true,
 		}
 		ca.stats.PathContributions[pathID] = contrib
 	}
@@ -437,7 +437,7 @@ func (ca *ClientDataAggregator) GetAggregationStats(streamID uint64) (*Aggregati
 			variance += diff * diff
 		}
 		variance /= float64(len(ca.stats.PathContributions))
-		
+
 		// Higher variance means less even distribution (lower aggregation efficiency)
 		aggregationRatio = 1.0 - (variance / (avgBytesPerPath * avgBytesPerPath))
 		if aggregationRatio < 0 {
@@ -515,8 +515,8 @@ func (ca *ClientDataAggregator) FlushReorderBuffer(streamID uint64) ([]byte, err
 	ca.statsMutex.Unlock()
 
 	return flushedData, nil
-}// AggregateSecondaryData aggregates data from a secondary stream (stub implementation for interface compliance)
-func (ca *ClientDataAggregator) AggregateSecondaryData(kwikStreamID uint64, secondaryData *SecondaryStreamData) error {
+} // AggregateSecondaryData aggregates data from a secondary stream (stub implementation for interface compliance)
+func (ca *ClientDataAggregator) AggregateSecondaryData(kwikStreamID uint64, secondaryData *DataFrame) error {
 	// ClientDataAggregator doesn't support secondary streams, return error
 	return utils.NewKwikError(utils.ErrInvalidFrame, "secondary stream aggregation not supported by ClientDataAggregator", nil)
 }

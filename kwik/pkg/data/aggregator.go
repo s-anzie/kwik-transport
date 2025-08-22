@@ -214,7 +214,7 @@ func (da *DataAggregatorImpl) GetAggregationStats(streamID uint64) (*Aggregation
 }
 
 // AggregateSecondaryData aggregates data from a secondary stream into the appropriate KWIK stream
-func (da *DataAggregatorImpl) AggregateSecondaryData(kwikStreamID uint64, secondaryData *SecondaryStreamData) error {
+func (da *DataAggregatorImpl) AggregateSecondaryData(kwikStreamID uint64, secondaryData *DataFrame) error {
 	if secondaryData == nil {
 		return utils.NewKwikError(utils.ErrInvalidFrame, "secondary stream data is nil", nil)
 	}
@@ -343,7 +343,7 @@ func (da *DataAggregatorImpl) GetOffsetManagerStats() *OffsetManagerStats {
 }
 
 // updateAggregatedStreamFromSecondary updates the main aggregated stream with data from secondary streams
-func (da *DataAggregatorImpl) updateAggregatedStreamFromSecondary(kwikStreamID uint64, secondaryData *SecondaryStreamData) error {
+func (da *DataAggregatorImpl) updateAggregatedStreamFromSecondary(kwikStreamID uint64, secondaryData *DataFrame) error {
 	da.streamsMutex.RLock()
 	streamState, exists := da.aggregatedStreams[kwikStreamID]
 	da.streamsMutex.RUnlock()

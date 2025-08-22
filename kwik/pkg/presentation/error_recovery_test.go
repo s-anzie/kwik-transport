@@ -805,7 +805,8 @@ func TestTimeoutRecovery(t *testing.T) {
 
 	// Test read on empty stream (should return 0 bytes, not timeout)
 	readBuf := make([]byte, 100)
-	n, err := dpm.ReadFromStreamWithTimeout(1, readBuf, 100*time.Millisecond)
+	dpm.SetStreamTimeout(1, 100*time.Millisecond) // Set short timeout for testing
+	n, err := dpm.ReadFromStream(1, readBuf)
 
 	if err != nil {
 		t.Errorf("Unexpected error when reading from empty stream: %v", err)

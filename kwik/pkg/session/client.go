@@ -355,7 +355,7 @@ func (s *ClientSession) AcceptStream(ctx context.Context) (Stream, error) {
 		// Check if this is a secondary path - if so, handle internally
 		if !path.IsPrimary() {
 			// Handle secondary stream internally, don't expose to public interface
-			go s.handleSecondaryStreamOpen(path.ID(), quicStream)
+			go s.handleSecondaryStream(path.ID(), quicStream)
 			continue // Don't return this stream to the application
 		}
 
@@ -793,7 +793,7 @@ func (s *ClientSession) sendAddPathResponse(pathID string, success bool, errorMe
 
 	// Create control frame
 	frame := &control.ControlFrame{
-		FrameId:      generateFrameID(),
+		FrameId:      data.GenerateFrameID(),
 		Type:         control.ControlFrameType_ADD_PATH_RESPONSE,
 		Payload:      payload,
 		Timestamp:    uint64(time.Now().UnixNano()),
@@ -845,7 +845,7 @@ func (s *ClientSession) sendAddPathResponseWithTime(pathID string, success bool,
 
 	// Create control frame
 	frame := &control.ControlFrame{
-		FrameId:      generateFrameID(),
+		FrameId:      data.GenerateFrameID(),
 		Type:         control.ControlFrameType_ADD_PATH_RESPONSE,
 		Payload:      payload,
 		Timestamp:    uint64(time.Now().UnixNano()),
@@ -971,7 +971,7 @@ func (s *ClientSession) handleHeartbeat(frame *control.ControlFrame) {
 			return
 		}
 		resp := &control.ControlFrame{
-			FrameId:      generateFrameID(),
+			FrameId:      data.GenerateFrameID(),
 			Type:         control.ControlFrameType_HEARTBEAT,
 			Payload:      payload,
 			Timestamp:    uint64(time.Now().UnixNano()),
@@ -1284,16 +1284,16 @@ func (s *ClientSession) ConsumeAggregatedDataForStream(streamID uint64, bytesToC
 }
 
 // AggregatePrimaryData deposits primary stream data into the aggregator
-func (s *ClientSession) AggregateData(streamID uint64, data []byte, offset uint64) error {
+func (s *ClientSession) AggregateData(streamID uint64, frame []byte, offset uint64) error {
 	if s.aggregator == nil {
 		return utils.NewKwikError(utils.ErrStreamCreationFailed, "no secondary aggregator available", nil)
 	}
 
 	// Create SecondaryStreamData structure for primary data
-	primaryData := &stream.SecondaryStreamData{
+	primaryData := &data.DataFrame{
 		StreamID:     streamID,  // Use streamID to pass validation
 		PathID:       "primary", // Mark as primary path
-		Data:         data,
+		Data:         frame,
 		Offset:       offset,
 		KwikStreamID: streamID,
 		Timestamp:    time.Now(),
@@ -1302,9 +1302,9 @@ func (s *ClientSession) AggregateData(streamID uint64, data []byte, offset uint6
 
 	// Deposit primary data into the aggregator
 	s.logger.Debug(fmt.Sprintf("ClientSession depositing %d bytes of primary data for KWIK stream %d at offset %d",
-		len(data), streamID, offset))
+		len(frame), streamID, offset))
 
-	return s.aggregator.AggregateData(primaryData)
+	return s.aggregator.AggregateDataFrames(primaryData)
 }
 
 // performSecondaryPathAuthentication performs authentication on a secondary path using existing session ID
@@ -1652,19 +1652,9 @@ func (rpf *RawPacketFrame) Deserialize(data []byte) error {
 	return nil
 }
 
-// getSecondaryStreamHandler returns the secondary stream handler (internal method)
-func (s *ClientSession) getSecondaryStreamHandler() stream.SecondaryStreamHandler {
-	return s.secondaryStreamHandler
-}
-
-// getStreamAggregator returns the stream aggregator (internal method)
-func (s *ClientSession) getStreamAggregator() data.DataAggregator {
-	return s.streamAggregator
-}
-
-// handleSecondaryStreamOpen handles a new secondary stream from a secondary server
+// handleSecondaryStreamO handles a new secondary stream from a secondary server
 // This method processes streams internally without exposing them to the public interface
-func (s *ClientSession) handleSecondaryStreamOpen(pathID string, quicStream quic.Stream) error {
+func (s *ClientSession) handleSecondaryStream(pathID string, quicStream quic.Stream) error {
 	s.logger.Debug(fmt.Sprintf("Client handling secondary stream open from path %s", pathID))
 
 	// Handle the secondary stream using the secondary stream handler
@@ -1679,13 +1669,13 @@ func (s *ClientSession) handleSecondaryStreamOpen(pathID string, quicStream quic
 
 	s.logger.Debug(fmt.Sprintf("Client starting secondary stream data processing for path %s", pathID))
 	// Start processing the secondary stream data in a goroutine
-	go s.processSecondaryStreamData(pathID, quicStream)
+	go s.handleDataPacket(pathID, quicStream)
 
 	return nil
 }
 
-// processSecondaryStreamData processes data from a secondary stream
-func (s *ClientSession) processSecondaryStreamData(pathID string, quicStream quic.Stream) {
+// handleDataPacket processes data from a secondary stream
+func (s *ClientSession) handleDataPacket(pathID string, quicStream quic.Stream) {
 	defer quicStream.Close()
 	s.logger.Debug(fmt.Sprintf("Client starting secondary stream data processing loop for path %s", pathID))
 
@@ -1713,7 +1703,7 @@ func (s *ClientSession) processSecondaryStreamData(pathID string, quicStream qui
 			s.logger.Debug(fmt.Sprintf("Client received %d bytes from secondary stream on path %s:", n, pathID))
 
 			// Process the encapsulated data according to the metadata protocol
-			err = s.processEncapsulatedSecondaryData(pathID, buffer[:n])
+			err = s.processDataPacket(pathID, buffer[:n])
 			if err != nil {
 				s.logger.Debug(fmt.Sprintf("Client error processing secondary stream data from path %s: %v", pathID, err))
 				// Continue processing other data even if one frame fails
@@ -1724,8 +1714,8 @@ func (s *ClientSession) processSecondaryStreamData(pathID string, quicStream qui
 	}
 }
 
-// processEncapsulatedSecondaryData decapsulates and aggregates secondary stream data
-func (s *ClientSession) processEncapsulatedSecondaryData(pathID string, encapsulatedData []byte) error {
+// processDataPacket decapsulates and aggregates secondary stream data
+func (s *ClientSession) processDataPacket(pathID string, encapsulatedData []byte) error {
 	s.logger.Debug(fmt.Sprintf("Client processing encapsulated secondary data from path %s (%d bytes)", pathID, len(encapsulatedData)))
 
 	// Parse transport packet [PacketID:8][FrameCount:2] + frames
@@ -1753,7 +1743,7 @@ func (s *ClientSession) processEncapsulatedSecondaryData(pathID string, encapsul
 		}
 		inner := encapsulatedData[off : off+flen]
 		off += flen
-		metadata, data, err := metadataProtocol.DecapsulateData(inner)
+		metadata, frame, err := metadataProtocol.DecapsulateData(inner)
 		if err != nil {
 			return utils.NewKwikError(utils.ErrInvalidFrame, fmt.Sprintf("failed to decapsulate secondary stream data: %v", err), err)
 		}
@@ -1761,12 +1751,22 @@ func (s *ClientSession) processEncapsulatedSecondaryData(pathID string, encapsul
 		if secondaryStreamID == 0 {
 			secondaryStreamID = metadata.KwikStreamID
 		}
-		secondaryData := &stream.SecondaryStreamData{StreamID: secondaryStreamID, PathID: pathID, Data: data, Offset: metadata.Offset, KwikStreamID: metadata.KwikStreamID, Timestamp: time.Now(), SequenceNum: 0}
+
+		dataFrame := &data.DataFrame{
+			StreamID:     secondaryStreamID,
+			PathID:       pathID,
+			Data:         frame,
+			Offset:       metadata.Offset,
+			KwikStreamID: metadata.KwikStreamID,
+			Timestamp:    time.Now(),
+			SequenceNum:  0,
+		}
+
 		aggregator := s.aggregator
 		if aggregator == nil {
 			return utils.NewKwikError(utils.ErrStreamCreationFailed, "no secondary aggregator available", nil)
 		}
-		if err = aggregator.AggregateData(secondaryData); err != nil {
+		if err = aggregator.AggregateDataFrames(dataFrame); err != nil {
 			return utils.NewKwikError(utils.ErrStreamCreationFailed, fmt.Sprintf("failed to aggregate secondary stream data: %v", err), err)
 		}
 	}
@@ -1777,7 +1777,7 @@ func (s *ClientSession) processEncapsulatedSecondaryData(pathID string, encapsul
 			if ctrl, e := p.GetControlStream(); e == nil && ctrl != nil {
 				ack := &control.PacketAck{PacketId: packetID, PathId: pathID, Timestamp: uint64(time.Now().UnixNano())}
 				if bytes, e2 := proto.Marshal(ack); e2 == nil {
-					frame := &control.ControlFrame{FrameId: generateFrameID(), Type: control.ControlFrameType_PACKET_ACK, Payload: bytes, Timestamp: uint64(time.Now().UnixNano()), SourcePathId: pathID}
+					frame := &control.ControlFrame{FrameId: data.GenerateFrameID(), Type: control.ControlFrameType_PACKET_ACK, Payload: bytes, Timestamp: uint64(time.Now().UnixNano()), SourcePathId: pathID}
 					if out, e3 := proto.Marshal(frame); e3 == nil {
 						_, _ = ctrl.Write(out)
 					}
@@ -1824,7 +1824,7 @@ func (s *ClientSession) autoAcceptSecondaryStreams(path transport.Path) {
 			s.logger.Debug(fmt.Sprintf("Client accepted new stream from secondary path %s", path.ID()))
 
 			// Handle this secondary stream internally (don't expose to application)
-			go s.handleSecondaryStreamOpen(path.ID(), quicStream)
+			go s.handleSecondaryStream(path.ID(), quicStream)
 		}
 	}
 }
@@ -1870,9 +1870,9 @@ func (s *ClientSession) startPrimaryIngestion(streamID uint64, quicStream quic.S
 				continue
 			}
 
-			secondaryData := &stream.SecondaryStreamData{StreamID: streamID, PathID: pathID, Data: payload, Offset: metadata.Offset, KwikStreamID: metadata.KwikStreamID, Timestamp: time.Now(), SequenceNum: 0}
+			secondaryData := &data.DataFrame{StreamID: streamID, PathID: pathID, Data: payload, Offset: metadata.Offset, KwikStreamID: metadata.KwikStreamID, Timestamp: time.Now(), SequenceNum: 0}
 			if s.aggregator != nil {
-				_ = s.aggregator.AggregateData(secondaryData)
+				_ = s.aggregator.AggregateDataFrames(secondaryData)
 			}
 		}
 
@@ -1881,7 +1881,7 @@ func (s *ClientSession) startPrimaryIngestion(streamID uint64, quicStream quic.S
 			if ctrl, e := s.primaryPath.GetControlStream(); e == nil && ctrl != nil {
 				ack := &control.PacketAck{PacketId: packetID, PathId: pathID, Timestamp: uint64(time.Now().UnixNano())}
 				if bytes, e2 := proto.Marshal(ack); e2 == nil {
-					frame := &control.ControlFrame{FrameId: generateFrameID(), Type: control.ControlFrameType_PACKET_ACK, Payload: bytes, Timestamp: uint64(time.Now().UnixNano()), SourcePathId: pathID}
+					frame := &control.ControlFrame{FrameId: data.GenerateFrameID(), Type: control.ControlFrameType_PACKET_ACK, Payload: bytes, Timestamp: uint64(time.Now().UnixNano()), SourcePathId: pathID}
 					if out, e3 := proto.Marshal(frame); e3 == nil {
 						_, _ = ctrl.Write(out)
 					}
@@ -1957,7 +1957,7 @@ func (s *ClientSession) sendHeartbeatOnAllPaths() {
 		}
 
 		frame := &control.ControlFrame{
-			FrameId:      generateFrameID(),
+			FrameId:      data.GenerateFrameID(),
 			Type:         control.ControlFrameType_HEARTBEAT,
 			Payload:      payload,
 			Timestamp:    uint64(time.Now().UnixNano()),

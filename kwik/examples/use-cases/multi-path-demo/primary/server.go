@@ -21,7 +21,18 @@ func main() {
 
 	config := kwik.DefaultConfig()
 	config.MaxPathsPerSession = 5
-	config.Logging.GlobalLevel = kwik.LogLevelSilent
+	config.LogLevel = kwik.LogLevelDebug
+	config.Logging = &kwik.LogConfig{
+		GlobalLevel: kwik.LogLevelDebug,
+		Components: map[string]kwik.LogLevel{
+			"SESSION":   kwik.LogLevelDebug,
+			"CONTROL":   kwik.LogLevelDebug,
+			"TRANSPORT": kwik.LogLevelDebug,
+			"DATA":      kwik.LogLevelDebug,
+			"STREAM":    kwik.LogLevelDebug,
+			"DPM":       kwik.LogLevelDebug,
+		},
+	}
 
 	listener, err := kwik.Listen("localhost:4433", config)
 	if err != nil {

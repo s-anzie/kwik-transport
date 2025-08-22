@@ -1,6 +1,7 @@
 package presentation
 
 import (
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"sync"
@@ -61,11 +62,12 @@ type DataChunk struct {
 func NewStreamBuffer(streamID uint64, metadata *StreamMetadata, config *StreamBufferConfig) *StreamBufferImpl {
 	if config == nil {
 		config = &StreamBufferConfig{
-			StreamID:      streamID,
-			BufferSize:    DefaultStreamBufferSize,
-			Priority:      StreamPriorityNormal,
-			GapTimeout:    DefaultGapTimeout,
-			EnableMetrics: true,
+			StreamID:           streamID,
+			BufferSize:         DefaultStreamBufferSize,
+			Priority:           StreamPriorityNormal,
+			GapTimeout:         DefaultGapTimeout,
+			EnableMetrics:      true,
+			EnableDebugLogging: false, // Debug logging disabled by default
 		}
 	}
 
@@ -125,6 +127,21 @@ func (sb *StreamBufferImpl) Write(data []byte, offset uint64) error {
 func (sb *StreamBufferImpl) WriteWithMetadata(data []byte, offset uint64, metadata *DataMetadata) error {
 	startTime := time.Now()
 
+	// Log the write operation
+	if sb.config != nil && sb.config.EnableDebugLogging {
+		hexStr := hex.EncodeToString(data)
+		if len(hexStr) > 64 { // Show first 32 bytes (64 hex chars)
+			hexStr = hexStr[:64] + "..."
+		}
+		sb.config.Logger.Debug("StreamBuffer.WriteWithMetadata - Writing data",
+			"stream", sb.streamID,
+			"offset", offset,
+			"data_len", len(data),
+			"data_hex", hexStr,
+			"has_metadata", metadata != nil,
+		)
+	}
+
 	sb.closeMutex.RLock()
 	if sb.closed {
 		sb.closeMutex.RUnlock()
@@ -176,6 +193,7 @@ func (sb *StreamBufferImpl) WriteWithMetadata(data []byte, offset uint64, metada
 		Metadata:  metadata,
 		Timestamp: time.Now(),
 	}
+	// Be very carfull, data may still contain a DataChunk so it must be parsed to safety chunk
 	copy(chunk.Data, data)
 
 	// Check for duplicate writes
@@ -229,13 +247,8 @@ func (sb *StreamBufferImpl) WriteWithMetadata(data []byte, offset uint64, metada
 	return nil
 }
 
-// Read reads available contiguous data into the buffer
+// Read reads available contiguous data into the buffer (stops at first gap)
 func (sb *StreamBufferImpl) Read(buffer []byte) (int, error) {
-	return sb.readContiguous(buffer)
-}
-
-// ReadContiguous reads only contiguous data (stops at first gap)
-func (sb *StreamBufferImpl) readContiguous(buffer []byte) (int, error) {
 	startTime := time.Now()
 
 	sb.closeMutex.RLock()
@@ -249,6 +262,14 @@ func (sb *StreamBufferImpl) readContiguous(buffer []byte) (int, error) {
 		return 0, fmt.Errorf("buffer cannot be empty")
 	}
 
+	// Log read attempt
+	if sb.config != nil && sb.config.EnableDebugLogging {
+		sb.config.Logger.Debug("StreamBuffer.Read - Starting read",
+			"stream", sb.streamID,
+			"buffer_size", len(buffer),
+		)
+	}
+
 	sb.positionMutex.RLock()
 	currentReadPos := sb.readPosition
 	sb.positionMutex.RUnlock()
@@ -259,11 +280,31 @@ func (sb *StreamBufferImpl) readContiguous(buffer []byte) (int, error) {
 	if len(contiguousData) == 0 {
 		// No contiguous data available
 		sb.updateReadStats(0, time.Since(startTime))
+		if sb.config != nil && sb.config.EnableDebugLogging {
+			sb.config.Logger.Debug("StreamBuffer.Read - No contiguous data available",
+				"stream", sb.streamID,
+				"read_position", currentReadPos,
+			)
+		}
 		return 0, nil
 	}
 
 	// Copy data to buffer
 	n := copy(buffer, contiguousData)
+
+	// Log the data being read
+	if sb.config != nil && sb.config.EnableDebugLogging {
+		hexStr := hex.EncodeToString(contiguousData)
+		if len(hexStr) > 64 { // Show first 32 bytes (64 hex chars)
+			hexStr = hexStr[:64] + "..."
+		}
+		sb.config.Logger.Debug("StreamBuffer.Read - Read data",
+			"stream", sb.streamID,
+			"bytes_read", n,
+			"data_hex", hexStr,
+			"read_position", currentReadPos,
+		)
+	}
 
 	// Advance read position
 	sb.positionMutex.Lock()
@@ -546,6 +587,29 @@ func (sb *StreamBufferImpl) SetBackpressureCallback(callback func(streamID uint6
 func (sb *StreamBufferImpl) getContiguousDataFromPosition(startPos uint64, maxBytes int) []byte {
 	sb.chunksMutex.RLock()
 	defer sb.chunksMutex.RUnlock()
+
+	if sb.config != nil && sb.config.EnableDebugLogging && len(sb.dataChunks) > 0 {
+		sb.config.Logger.Debug("StreamBuffer.getContiguousDataFromPosition",
+			"stream", sb.streamID,
+			"start_pos", startPos,
+			"max_bytes", maxBytes,
+			"total_chunks", len(sb.dataChunks),
+		)
+
+		// Log first few chunk positions for debugging
+		i := 0
+		for offset := range sb.dataChunks {
+			if i >= 3 { // Limit to first 3 chunks to avoid log spam
+				sb.config.Logger.Debug("  ... additional chunks not shown")
+				break
+			}
+			sb.config.Logger.Debug("  Chunk info",
+				"offset", offset,
+				"length", len(sb.dataChunks[offset].Data),
+			)
+			i++
+		}
+	}
 
 	// Find the single chunk that contains startPos. We do NOT concatenate across
 	// chunk boundaries to preserve message/frame separation.

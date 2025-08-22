@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"kwik/internal/utils"
+	"kwik/pkg/data"
 	"kwik/pkg/stream"
 	"kwik/proto/control"
 
@@ -65,7 +66,7 @@ func (am *AuthenticationManager) CreateAuthenticationRequest(role control.Sessio
 
 	// Create control frame
 	frame := &control.ControlFrame{
-		FrameId:   generateFrameID(),
+		FrameId:   data.GenerateFrameID(),
 		Type:      control.ControlFrameType_AUTHENTICATION_REQUEST,
 		Payload:   payload,
 		Timestamp: uint64(time.Now().UnixNano()),
@@ -214,7 +215,7 @@ func (am *AuthenticationManager) HandleAuthenticationRequest(frame *control.Cont
 
 	// Create response frame
 	responseFrame := &control.ControlFrame{
-		FrameId:   generateFrameID(),
+		FrameId:   data.GenerateFrameID(),
 		Type:      control.ControlFrameType_AUTHENTICATION_RESPONSE,
 		Payload:   payload,
 		Timestamp: uint64(time.Now().UnixNano()),
@@ -291,9 +292,4 @@ func (am *AuthenticationManager) filterSupportedFeatures(requestedFeatures []str
 	}
 
 	return enabledFeatures
-}
-
-// generateFrameID generates a unique frame identifier
-func generateFrameID() uint64 {
-	return uint64(time.Now().UnixNano())
 }

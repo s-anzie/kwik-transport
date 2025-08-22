@@ -5,8 +5,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/quic-go/quic-go"
 	"kwik/pkg/data"
+
+	"github.com/quic-go/quic-go"
 )
 
 // SecondaryStreamIsolator provides isolation logic for secondary streams
@@ -16,20 +17,20 @@ type SecondaryStreamIsolator interface {
 	// Validation functions
 	ValidateStreamAccess(streamID uint64, serverRole ServerRole) error
 	ValidateStreamCreation(pathID string, serverRole ServerRole) error
-	
+
 	// Routing functions
 	RouteSecondaryStream(pathID string, stream quic.Stream, metadata *StreamMetadata) error
-	RouteToAggregator(kwikStreamID uint64, secondaryData *SecondaryStreamData) error
-	
+	RouteToAggregator(kwikStreamID uint64, secondaryData *data.DataFrame) error
+
 	// Isolation enforcement
 	IsStreamPublic(streamID uint64) bool
 	IsStreamSecondary(streamID uint64) bool
 	PreventPublicExposure(streamID uint64) error
-	
+
 	// Stream lifecycle management
 	RegisterSecondaryStream(streamID uint64, pathID string) error
 	UnregisterSecondaryStream(streamID uint64) error
-	
+
 	// Statistics and monitoring
 	GetIsolationStats() *SecondaryIsolationStats
 	GetSecondaryStreamCount() int
@@ -55,31 +56,28 @@ func (r ServerRole) String() string {
 	}
 }
 
-// Use SecondaryStreamData from data package
-type SecondaryStreamData = data.SecondaryStreamData
-
 // SecondaryStreamIsolatorImpl is the concrete implementation of SecondaryStreamIsolator
 type SecondaryStreamIsolatorImpl struct {
 	// Stream tracking
 	secondaryStreams map[uint64]*SecondaryStreamInfo // streamID -> stream info
 	publicStreams    map[uint64]bool                 // streamID -> is public
-	
+
 	// Path to server role mapping
 	pathRoles map[string]ServerRole // pathID -> server role
-	
+
 	// Routing components
 	aggregator data.DataAggregator
 	handler    SecondaryStreamHandler
-	
+
 	// Statistics
 	stats *SecondaryIsolationStats
-	
+
 	// Configuration
 	config *SecondaryIsolationConfig
-	
+
 	// Synchronization
 	mutex sync.RWMutex
-	
+
 	// Stream ID tracking
 	nextSecondaryStreamID uint64
 	streamIDMutex         sync.Mutex
@@ -89,23 +87,23 @@ type SecondaryStreamIsolatorImpl struct {
 
 // SecondaryIsolationConfig contains configuration for secondary stream isolation
 type SecondaryIsolationConfig struct {
-	MaxSecondaryStreams     int           // Maximum number of secondary streams
-	StreamTimeout           time.Duration // Timeout for inactive streams
-	RoutingTimeout          time.Duration // Timeout for routing operations
-	EnableStrictIsolation   bool          // Enable strict isolation checks
-	AllowPublicFallback     bool          // Allow fallback to public streams in emergencies
-	MonitoringInterval      time.Duration // Interval for statistics collection
+	MaxSecondaryStreams   int           // Maximum number of secondary streams
+	StreamTimeout         time.Duration // Timeout for inactive streams
+	RoutingTimeout        time.Duration // Timeout for routing operations
+	EnableStrictIsolation bool          // Enable strict isolation checks
+	AllowPublicFallback   bool          // Allow fallback to public streams in emergencies
+	MonitoringInterval    time.Duration // Interval for statistics collection
 }
 
 // SecondaryIsolationStats provides statistics about stream isolation
 type SecondaryIsolationStats struct {
-	TotalSecondaryStreams   int     // Total number of secondary streams managed
-	ActiveSecondaryStreams  int     // Currently active secondary streams
-	PublicStreams           int     // Number of public streams
-	IsolationViolations     int     // Number of isolation violations detected
-	RoutingErrors           int     // Number of routing errors
-	AverageRoutingLatency   float64 // Average latency for routing operations (ms)
-	TotalDataRouted         uint64  // Total bytes routed through isolation layer
+	TotalSecondaryStreams  int     // Total number of secondary streams managed
+	ActiveSecondaryStreams int     // Currently active secondary streams
+	PublicStreams          int     // Number of public streams
+	IsolationViolations    int     // Number of isolation violations detected
+	RoutingErrors          int     // Number of routing errors
+	AverageRoutingLatency  float64 // Average latency for routing operations (ms)
+	TotalDataRouted        uint64  // Total bytes routed through isolation layer
 }
 
 // NewSecondaryStreamIsolator creates a new secondary stream isolator
@@ -124,7 +122,7 @@ func NewSecondaryStreamIsolator(
 			MonitoringInterval:    10 * time.Second,
 		}
 	}
-	
+
 	isolator := &SecondaryStreamIsolatorImpl{
 		secondaryStreams:      make(map[uint64]*SecondaryStreamInfo),
 		publicStreams:         make(map[uint64]bool),
@@ -135,12 +133,12 @@ func NewSecondaryStreamIsolator(
 		stats:                 &SecondaryIsolationStats{},
 		nextSecondaryStreamID: 1,
 	}
-	
+
 	// Start monitoring routine if configured
 	if config.MonitoringInterval > 0 {
 		go isolator.monitoringRoutine()
 	}
-	
+
 	return isolator
 }
 
@@ -148,7 +146,7 @@ func NewSecondaryStreamIsolator(
 func (i *SecondaryStreamIsolatorImpl) ValidateStreamAccess(streamID uint64, serverRole ServerRole) error {
 	i.mutex.RLock()
 	defer i.mutex.RUnlock()
-	
+
 	// Check if stream is public
 	isPublic, exists := i.publicStreams[streamID]
 	if !exists {
@@ -176,7 +174,7 @@ func (i *SecondaryStreamIsolatorImpl) ValidateStreamAccess(streamID uint64, serv
 			Role:     serverRole,
 		}
 	}
-	
+
 	// Stream is public
 	if isPublic {
 		if serverRole == ServerRoleSecondary && i.config.EnableStrictIsolation {
@@ -191,7 +189,7 @@ func (i *SecondaryStreamIsolatorImpl) ValidateStreamAccess(streamID uint64, serv
 		}
 		return nil
 	}
-	
+
 	return nil
 }
 
@@ -199,7 +197,7 @@ func (i *SecondaryStreamIsolatorImpl) ValidateStreamAccess(streamID uint64, serv
 func (i *SecondaryStreamIsolatorImpl) ValidateStreamCreation(pathID string, serverRole ServerRole) error {
 	i.mutex.RLock()
 	defer i.mutex.RUnlock()
-	
+
 	// Check server role for this path
 	if pathRole, exists := i.pathRoles[pathID]; exists && pathRole != serverRole {
 		return &IsolationError{
@@ -209,7 +207,7 @@ func (i *SecondaryStreamIsolatorImpl) ValidateStreamCreation(pathID string, serv
 			Role:    serverRole,
 		}
 	}
-	
+
 	// Secondary servers can only create secondary streams
 	if serverRole == ServerRoleSecondary {
 		// Check if we're at the limit for secondary streams
@@ -222,7 +220,7 @@ func (i *SecondaryStreamIsolatorImpl) ValidateStreamCreation(pathID string, serv
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -234,10 +232,10 @@ func (i *SecondaryStreamIsolatorImpl) RouteSecondaryStream(pathID string, stream
 		latency := time.Since(startTime).Seconds() * 1000 // Convert to milliseconds
 		i.updateRoutingLatency(latency)
 	}()
-	
+
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
-	
+
 	// Validate that this is indeed a secondary stream path
 	if pathRole, exists := i.pathRoles[pathID]; exists && pathRole != ServerRoleSecondary {
 		i.stats.RoutingErrors++
@@ -247,10 +245,10 @@ func (i *SecondaryStreamIsolatorImpl) RouteSecondaryStream(pathID string, stream
 			PathID:  pathID,
 		}
 	}
-	
+
 	// Generate secondary stream ID
 	streamID := i.generateSecondaryStreamID()
-	
+
 	// Create stream info
 	streamInfo := &SecondaryStreamInfo{
 		StreamID:         streamID,
@@ -264,12 +262,12 @@ func (i *SecondaryStreamIsolatorImpl) RouteSecondaryStream(pathID string, stream
 		BytesReceived:    0,
 		BytesTransferred: 0,
 	}
-	
+
 	// Register the stream
 	i.secondaryStreams[streamID] = streamInfo
 	i.stats.TotalSecondaryStreams++
 	i.stats.ActiveSecondaryStreams++
-	
+
 	// Route to secondary stream handler
 	_, err := i.handler.HandleSecondaryStream(pathID, stream)
 	if err != nil {
@@ -284,7 +282,7 @@ func (i *SecondaryStreamIsolatorImpl) RouteSecondaryStream(pathID string, stream
 			PathID:   pathID,
 		}
 	}
-	
+
 	// If metadata is provided, set up mapping
 	if metadata != nil && metadata.KwikStreamID != 0 {
 		if err := i.handler.MapToKwikStream(streamID, metadata.KwikStreamID, metadata.Offset); err != nil {
@@ -292,21 +290,21 @@ func (i *SecondaryStreamIsolatorImpl) RouteSecondaryStream(pathID string, stream
 			// This is not a critical error for stream isolation
 		}
 	}
-	
+
 	return nil
 }
 
 // RouteToAggregator routes secondary stream data to the appropriate aggregator
-func (i *SecondaryStreamIsolatorImpl) RouteToAggregator(kwikStreamID uint64, secondaryData *SecondaryStreamData) error {
+func (i *SecondaryStreamIsolatorImpl) RouteToAggregator(kwikStreamID uint64, secondaryData *data.DataFrame) error {
 	startTime := time.Now()
 	defer func() {
 		latency := time.Since(startTime).Seconds() * 1000
 		i.updateRoutingLatency(latency)
 	}()
-	
+
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
-	
+
 	// Validate that the secondary stream exists and is properly isolated
 	streamInfo, exists := i.secondaryStreams[secondaryData.StreamID]
 	if !exists {
@@ -317,11 +315,11 @@ func (i *SecondaryStreamIsolatorImpl) RouteToAggregator(kwikStreamID uint64, sec
 			StreamID: secondaryData.StreamID,
 		}
 	}
-	
+
 	// Update stream activity
 	streamInfo.LastActivity = time.Now()
 	streamInfo.BytesTransferred += uint64(len(secondaryData.Data))
-	
+
 	// Route to aggregator
 	if err := i.aggregator.AggregateSecondaryData(kwikStreamID, secondaryData); err != nil {
 		i.stats.RoutingErrors++
@@ -331,10 +329,10 @@ func (i *SecondaryStreamIsolatorImpl) RouteToAggregator(kwikStreamID uint64, sec
 			StreamID: secondaryData.StreamID,
 		}
 	}
-	
+
 	// Update statistics
 	i.stats.TotalDataRouted += uint64(len(secondaryData.Data))
-	
+
 	return nil
 }
 
@@ -342,7 +340,7 @@ func (i *SecondaryStreamIsolatorImpl) RouteToAggregator(kwikStreamID uint64, sec
 func (i *SecondaryStreamIsolatorImpl) IsStreamPublic(streamID uint64) bool {
 	i.mutex.RLock()
 	defer i.mutex.RUnlock()
-	
+
 	isPublic, exists := i.publicStreams[streamID]
 	return exists && isPublic
 }
@@ -351,7 +349,7 @@ func (i *SecondaryStreamIsolatorImpl) IsStreamPublic(streamID uint64) bool {
 func (i *SecondaryStreamIsolatorImpl) IsStreamSecondary(streamID uint64) bool {
 	i.mutex.RLock()
 	defer i.mutex.RUnlock()
-	
+
 	_, exists := i.secondaryStreams[streamID]
 	return exists
 }
@@ -360,19 +358,19 @@ func (i *SecondaryStreamIsolatorImpl) IsStreamSecondary(streamID uint64) bool {
 func (i *SecondaryStreamIsolatorImpl) PreventPublicExposure(streamID uint64) error {
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
-	
+
 	// If it's already marked as public, remove it
 	if isPublic, exists := i.publicStreams[streamID]; exists && isPublic {
 		delete(i.publicStreams, streamID)
 		i.stats.PublicStreams--
 	}
-	
+
 	// Ensure it's tracked as a secondary stream if it exists
 	if _, exists := i.secondaryStreams[streamID]; exists {
 		// Secondary streams are never public by design
 		return nil
 	}
-	
+
 	// If stream doesn't exist in either category, it might be a new secondary stream
 	// This is not an error - the stream will be registered when it's created
 	return nil
@@ -382,7 +380,7 @@ func (i *SecondaryStreamIsolatorImpl) PreventPublicExposure(streamID uint64) err
 func (i *SecondaryStreamIsolatorImpl) RegisterSecondaryStream(streamID uint64, pathID string) error {
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
-	
+
 	// Check if stream already exists
 	if _, exists := i.secondaryStreams[streamID]; exists {
 		return &IsolationError{
@@ -392,7 +390,7 @@ func (i *SecondaryStreamIsolatorImpl) RegisterSecondaryStream(streamID uint64, p
 			PathID:   pathID,
 		}
 	}
-	
+
 	// Check if it's marked as public (shouldn't happen)
 	if isPublic, exists := i.publicStreams[streamID]; exists && isPublic {
 		i.stats.IsolationViolations++
@@ -403,7 +401,7 @@ func (i *SecondaryStreamIsolatorImpl) RegisterSecondaryStream(streamID uint64, p
 			PathID:   pathID,
 		}
 	}
-	
+
 	// Register the stream
 	streamInfo := &SecondaryStreamInfo{
 		StreamID:         streamID,
@@ -417,16 +415,16 @@ func (i *SecondaryStreamIsolatorImpl) RegisterSecondaryStream(streamID uint64, p
 		BytesReceived:    0,
 		BytesTransferred: 0,
 	}
-	
+
 	i.secondaryStreams[streamID] = streamInfo
 	i.stats.TotalSecondaryStreams++
 	i.stats.ActiveSecondaryStreams++
-	
+
 	// Set path role if not already set
 	if _, exists := i.pathRoles[pathID]; !exists {
 		i.pathRoles[pathID] = ServerRoleSecondary
 	}
-	
+
 	return nil
 }
 
@@ -434,7 +432,7 @@ func (i *SecondaryStreamIsolatorImpl) RegisterSecondaryStream(streamID uint64, p
 func (i *SecondaryStreamIsolatorImpl) UnregisterSecondaryStream(streamID uint64) error {
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
-	
+
 	streamInfo, exists := i.secondaryStreams[streamID]
 	if !exists {
 		return &IsolationError{
@@ -443,11 +441,11 @@ func (i *SecondaryStreamIsolatorImpl) UnregisterSecondaryStream(streamID uint64)
 			StreamID: streamID,
 		}
 	}
-	
+
 	// Remove from tracking
 	delete(i.secondaryStreams, streamID)
 	i.stats.ActiveSecondaryStreams--
-	
+
 	// Clean up path role if no more streams on this path
 	hasPathStreams := false
 	for _, info := range i.secondaryStreams {
@@ -456,11 +454,11 @@ func (i *SecondaryStreamIsolatorImpl) UnregisterSecondaryStream(streamID uint64)
 			break
 		}
 	}
-	
+
 	if !hasPathStreams {
 		delete(i.pathRoles, streamInfo.PathID)
 	}
-	
+
 	return nil
 }
 
@@ -468,12 +466,12 @@ func (i *SecondaryStreamIsolatorImpl) UnregisterSecondaryStream(streamID uint64)
 func (i *SecondaryStreamIsolatorImpl) GetIsolationStats() *SecondaryIsolationStats {
 	i.mutex.RLock()
 	defer i.mutex.RUnlock()
-	
+
 	// Create a copy of stats to avoid race conditions
 	statsCopy := *i.stats
 	statsCopy.ActiveSecondaryStreams = len(i.secondaryStreams)
 	statsCopy.PublicStreams = len(i.publicStreams)
-	
+
 	return &statsCopy
 }
 
@@ -481,7 +479,7 @@ func (i *SecondaryStreamIsolatorImpl) GetIsolationStats() *SecondaryIsolationSta
 func (i *SecondaryStreamIsolatorImpl) GetSecondaryStreamCount() int {
 	i.mutex.RLock()
 	defer i.mutex.RUnlock()
-	
+
 	return len(i.secondaryStreams)
 }
 
@@ -489,7 +487,7 @@ func (i *SecondaryStreamIsolatorImpl) GetSecondaryStreamCount() int {
 func (i *SecondaryStreamIsolatorImpl) generateSecondaryStreamID() uint64 {
 	i.streamIDMutex.Lock()
 	defer i.streamIDMutex.Unlock()
-	
+
 	id := i.nextSecondaryStreamID
 	i.nextSecondaryStreamID++
 	return id
@@ -510,7 +508,7 @@ func (i *SecondaryStreamIsolatorImpl) updateRoutingLatency(latencyMs float64) {
 func (i *SecondaryStreamIsolatorImpl) monitoringRoutine() {
 	ticker := time.NewTicker(i.config.MonitoringInterval)
 	defer ticker.Stop()
-	
+
 	for range ticker.C {
 		i.performCleanup()
 	}
@@ -520,17 +518,17 @@ func (i *SecondaryStreamIsolatorImpl) monitoringRoutine() {
 func (i *SecondaryStreamIsolatorImpl) performCleanup() {
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
-	
+
 	now := time.Now()
 	var streamsToRemove []uint64
-	
+
 	// Find inactive streams
 	for streamID, streamInfo := range i.secondaryStreams {
 		if now.Sub(streamInfo.LastActivity) > i.config.StreamTimeout {
 			streamsToRemove = append(streamsToRemove, streamID)
 		}
 	}
-	
+
 	// Remove inactive streams
 	for _, streamID := range streamsToRemove {
 		delete(i.secondaryStreams, streamID)

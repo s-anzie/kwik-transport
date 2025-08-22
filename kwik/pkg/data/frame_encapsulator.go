@@ -6,9 +6,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"google.golang.org/protobuf/proto"
 	"kwik/internal/utils"
 	datapb "kwik/proto/data"
+
+	"google.golang.org/protobuf/proto"
 )
 
 // FrameEncapsulator handles creation and encapsulation of data frames
@@ -63,7 +64,7 @@ func (fe *FrameEncapsulator) CreateDataFrame(logicalStreamID uint64, pathID stri
 	}
 
 	if len(data) > int(fe.config.MaxDataSize) {
-		return nil, utils.NewKwikError(utils.ErrPacketTooLarge, 
+		return nil, utils.NewKwikError(utils.ErrPacketTooLarge,
 			fmt.Sprintf("data size %d exceeds maximum %d", len(data), fe.config.MaxDataSize), nil)
 	}
 
@@ -118,13 +119,13 @@ func (fe *FrameEncapsulator) EncapsulateFrame(frame *datapb.DataFrame) ([]byte, 
 	// Serialize the frame
 	data, err := proto.Marshal(frame)
 	if err != nil {
-		return nil, utils.NewKwikError(utils.ErrSerializationFailed, 
+		return nil, utils.NewKwikError(utils.ErrSerializationFailed,
 			"failed to serialize data frame", err)
 	}
 
 	// Check serialized size
 	if len(data) > int(fe.config.MaxFrameSize) {
-		return nil, utils.NewKwikError(utils.ErrPacketTooLarge, 
+		return nil, utils.NewKwikError(utils.ErrPacketTooLarge,
 			fmt.Sprintf("serialized frame size %d exceeds maximum %d", len(data), fe.config.MaxFrameSize), nil)
 	}
 
@@ -138,7 +139,7 @@ func (fe *FrameEncapsulator) DecapsulateFrame(data []byte) (*datapb.DataFrame, e
 	}
 
 	if len(data) > int(fe.config.MaxFrameSize) {
-		return nil, utils.NewKwikError(utils.ErrPacketTooLarge, 
+		return nil, utils.NewKwikError(utils.ErrPacketTooLarge,
 			fmt.Sprintf("data size %d exceeds maximum frame size %d", len(data), fe.config.MaxFrameSize), nil)
 	}
 
@@ -146,7 +147,7 @@ func (fe *FrameEncapsulator) DecapsulateFrame(data []byte) (*datapb.DataFrame, e
 	var frame datapb.DataFrame
 	err := proto.Unmarshal(data, &frame)
 	if err != nil {
-		return nil, utils.NewKwikError(utils.ErrDeserializationFailed, 
+		return nil, utils.NewKwikError(utils.ErrDeserializationFailed,
 			"failed to deserialize data frame", err)
 	}
 
@@ -159,7 +160,7 @@ func (fe *FrameEncapsulator) DecapsulateFrame(data []byte) (*datapb.DataFrame, e
 	if fe.config.EnableChecksums && frame.Checksum != 0 {
 		expectedChecksum := fe.computeFrameChecksum(&frame)
 		if frame.Checksum != expectedChecksum {
-			return nil, utils.NewKwikError(utils.ErrInvalidFrame, 
+			return nil, utils.NewKwikError(utils.ErrInvalidFrame,
 				"frame checksum validation failed", nil)
 		}
 	}
@@ -195,13 +196,13 @@ func (fe *FrameEncapsulator) CreateFrameIdentifier(logicalStreamID uint64, pathI
 func (fe *FrameEncapsulator) ParseFrameIdentifier(identifier string) (uint64, string, error) {
 	var logicalStreamID uint64
 	var pathID string
-	
+
 	n, err := fmt.Sscanf(identifier, "%d:%s", &logicalStreamID, &pathID)
 	if err != nil || n != 2 {
-		return 0, "", utils.NewKwikError(utils.ErrInvalidFrame, 
+		return 0, "", utils.NewKwikError(utils.ErrInvalidFrame,
 			"invalid frame identifier format", err)
 	}
-	
+
 	return logicalStreamID, pathID, nil
 }
 
@@ -228,13 +229,13 @@ func (fe *FrameEncapsulator) validateFrame(frame *datapb.DataFrame) error {
 
 	// Validate data size
 	if len(frame.Data) > int(fe.config.MaxDataSize) {
-		return utils.NewKwikError(utils.ErrPacketTooLarge, 
+		return utils.NewKwikError(utils.ErrPacketTooLarge,
 			fmt.Sprintf("frame data size %d exceeds maximum %d", len(frame.Data), fe.config.MaxDataSize), nil)
 	}
 
 	// Validate data length field matches actual data
 	if frame.DataLength != 0 && frame.DataLength != uint32(len(frame.Data)) {
-		return utils.NewKwikError(utils.ErrInvalidFrame, 
+		return utils.NewKwikError(utils.ErrInvalidFrame,
 			"data length field does not match actual data size", nil)
 	}
 
@@ -270,7 +271,7 @@ func (fe *FrameEncapsulator) computeFrameChecksum(frame *datapb.DataFrame) uint3
 func (fe *FrameEncapsulator) GetFrameSize(frame *datapb.DataFrame) (int, error) {
 	data, err := proto.Marshal(frame)
 	if err != nil {
-		return 0, utils.NewKwikError(utils.ErrSerializationFailed, 
+		return 0, utils.NewKwikError(utils.ErrSerializationFailed,
 			"failed to serialize frame for size calculation", err)
 	}
 	return len(data), nil
@@ -323,4 +324,9 @@ func (fe *FrameEncapsulator) UpdateFrameForPath(frame *datapb.DataFrame, newPath
 	}
 
 	return nil
+}
+
+// generateFrameID generates a unique frame identifier
+func GenerateFrameID() uint64 {
+	return uint64(time.Now().UnixNano())
 }

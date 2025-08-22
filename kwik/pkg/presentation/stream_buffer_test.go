@@ -6,23 +6,8 @@ import (
 )
 
 func TestStreamBuffer_BasicOperations(t *testing.T) {
-	// Create a stream buffer
-	metadata := &StreamMetadata{
-		StreamID:   1,
-		StreamType: StreamTypeData,
-		Priority:   StreamPriorityNormal,
-		CreatedAt:  time.Now(),
-	}
-	
-	config := &StreamBufferConfig{
-		StreamID:      1,
-		BufferSize:    1024,
-		Priority:      StreamPriorityNormal,
-		GapTimeout:    100 * time.Millisecond,
-		EnableMetrics: true,
-	}
-	
-	buffer := NewStreamBuffer(1, metadata, config)
+	// Create a stream buffer with test configuration
+	buffer := NewTestStreamBuffer(t, 1)
 	defer buffer.Close()
 	
 	// Test writing data
@@ -49,7 +34,7 @@ func TestStreamBuffer_BasicOperations(t *testing.T) {
 }
 
 func TestStreamBuffer_NonSequentialWrites(t *testing.T) {
-	buffer := NewStreamBuffer(1, nil, nil)
+	buffer := NewTestStreamBuffer(t, 1)
 	defer buffer.Close()
 	
 	// Write data out of order
@@ -96,7 +81,7 @@ func TestStreamBuffer_NonSequentialWrites(t *testing.T) {
 }
 
 func TestStreamBuffer_GapDetection(t *testing.T) {
-	buffer := NewStreamBuffer(1, nil, nil)
+	buffer := NewTestStreamBuffer(t, 1)
 	defer buffer.Close()
 	
 	// Write data with gaps
@@ -145,7 +130,7 @@ func TestStreamBuffer_GapDetection(t *testing.T) {
 }
 
 func TestStreamBuffer_FillGap(t *testing.T) {
-	buffer := NewStreamBuffer(1, nil, nil)
+	buffer := NewTestStreamBuffer(t, 1)
 	defer buffer.Close()
 	
 	// Create a gap scenario
@@ -187,12 +172,8 @@ func TestStreamBuffer_FillGap(t *testing.T) {
 }
 
 func TestStreamBuffer_BufferUsage(t *testing.T) {
-	config := &StreamBufferConfig{
-		StreamID:   1,
-		BufferSize: 100,
-	}
-	
-	buffer := NewStreamBuffer(1, nil, config)
+	buffer := NewTestStreamBuffer(t, 1)
+	buffer.config.BufferSize = 100 // Override buffer size for this test
 	defer buffer.Close()
 	
 	// Check initial usage
@@ -229,12 +210,8 @@ func TestStreamBuffer_BufferUsage(t *testing.T) {
 }
 
 func TestStreamBuffer_BackpressureDetection(t *testing.T) {
-	config := &StreamBufferConfig{
-		StreamID:   1,
-		BufferSize: 10, // Small buffer to trigger backpressure
-	}
-	
-	buffer := NewStreamBuffer(1, nil, config)
+	buffer := NewTestStreamBuffer(t, 1)
+	buffer.config.BufferSize = 10 // Small buffer to trigger backpressure
 	defer buffer.Close()
 	
 	// Initially no backpressure needed
@@ -256,7 +233,7 @@ func TestStreamBuffer_BackpressureDetection(t *testing.T) {
 }
 
 func TestStreamBuffer_ReadPosition(t *testing.T) {
-	buffer := NewStreamBuffer(1, nil, nil)
+	buffer := NewTestStreamBuffer(t, 1)
 	defer buffer.Close()
 	
 	// Initial read position should be 0
@@ -294,8 +271,7 @@ func TestStreamBuffer_ReadPosition(t *testing.T) {
 }
 
 func TestStreamBuffer_Cleanup(t *testing.T) {
-	buffer := NewStreamBuffer(1, nil, nil)
-	defer buffer.Close()
+	buffer := NewTestStreamBuffer(t, 1)
 	
 	// Write some data
 	data := []byte("Hello, World!")
@@ -330,7 +306,7 @@ func TestStreamBuffer_Cleanup(t *testing.T) {
 }
 
 func TestStreamBuffer_ContiguousRanges(t *testing.T) {
-	buffer := NewStreamBuffer(1, nil, nil)
+	buffer := NewTestStreamBuffer(t, 1)
 	defer buffer.Close()
 	
 	// Write data with gaps
@@ -378,7 +354,7 @@ func TestStreamBuffer_ContiguousRanges(t *testing.T) {
 }
 
 func TestStreamBuffer_WaitForContiguousData(t *testing.T) {
-	buffer := NewStreamBuffer(1, nil, nil)
+	buffer := NewTestStreamBuffer(t, 1)
 	defer buffer.Close()
 	
 	// Start a goroutine to write data after a delay
@@ -400,7 +376,7 @@ func TestStreamBuffer_WaitForContiguousData(t *testing.T) {
 }
 
 func TestStreamBuffer_WaitForContiguousDataTimeout(t *testing.T) {
-	buffer := NewStreamBuffer(1, nil, nil)
+	buffer := NewTestStreamBuffer(t, 1)
 	defer buffer.Close()
 	
 	// Wait for data that never comes
@@ -411,7 +387,7 @@ func TestStreamBuffer_WaitForContiguousDataTimeout(t *testing.T) {
 }
 
 func TestStreamBuffer_Statistics(t *testing.T) {
-	buffer := NewStreamBuffer(1, nil, nil)
+	buffer := NewTestStreamBuffer(t, 1)
 	defer buffer.Close()
 	
 	// Write and read some data to generate statistics
@@ -448,19 +424,22 @@ func TestStreamBuffer_Statistics(t *testing.T) {
 }
 
 func BenchmarkStreamBuffer_Write(b *testing.B) {
-	buffer := NewStreamBuffer(1, nil, nil)
+	buffer := NewBenchmarkStreamBuffer(b, 1)
 	defer buffer.Close()
 	
-	data := []byte("Hello, World!")
+	data := make([]byte, 1024) // 1KB chunks
 	
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		buffer.Write(data, uint64(i*len(data)))
+		err := buffer.Write(data, uint64(i*len(data)))
+		if err != nil {
+			b.Fatalf("Write failed: %v", err)
+		}
 	}
 }
 
 func BenchmarkStreamBuffer_Read(b *testing.B) {
-	buffer := NewStreamBuffer(1, nil, nil)
+	buffer := NewBenchmarkStreamBuffer(b, 1)
 	defer buffer.Close()
 	
 	// Pre-populate buffer

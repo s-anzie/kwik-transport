@@ -15,10 +15,12 @@ type DataPresentationManager interface {
 
 	// Data reading
 	ReadFromStream(streamID uint64, buffer []byte) (int, error)
-	ReadFromStreamWithTimeout(streamID uint64, buffer []byte, timeout time.Duration) (int, error)
 
 	// Data writing
 	WriteToStream(streamID uint64, data []byte, offset uint64, metadata interface{}) error
+
+	// Stream timeout
+	SetStreamTimeout(streamID uint64, timeout time.Duration) error
 
 	// Receive window management
 	GetReceiveWindowStatus() *ReceiveWindowStatus
