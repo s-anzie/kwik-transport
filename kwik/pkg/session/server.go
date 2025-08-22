@@ -23,14 +23,45 @@ import (
 // DefaultServerLogger provides a simple logger implementation for server session
 type DefaultServerLogger struct{}
 
-func (d *DefaultServerLogger) Debug(msg string, keysAndValues ...interface{}) {}
-func (d *DefaultServerLogger) Info(msg string, keysAndValues ...interface{})  {}
-func (d *DefaultServerLogger) Warn(msg string, keysAndValues ...interface{})  {}
-func (d *DefaultServerLogger) Error(msg string, keysAndValues ...interface{}) {
-	log.Printf("[ERROR] %s", msg)
+func (d *DefaultServerLogger) Debug(msg string, keysAndValues ...interface{}) {
+	log.Printf("[DEBUG] %s %v", msg, formatKeyValues(keysAndValues...))
 }
+
+func (d *DefaultServerLogger) Info(msg string, keysAndValues ...interface{}) {
+	log.Printf("[INFO] %s %v", msg, formatKeyValues(keysAndValues...))
+}
+
+func (d *DefaultServerLogger) Warn(msg string, keysAndValues ...interface{}) {
+	log.Printf("[WARN] %s %v", msg, formatKeyValues(keysAndValues...))
+}
+
+func (d *DefaultServerLogger) Error(msg string, keysAndValues ...interface{}) {
+	log.Printf("[ERROR] %s %v", msg, formatKeyValues(keysAndValues...))
+}
+
 func (d *DefaultServerLogger) Critical(msg string, keysAndValues ...interface{}) {
-	log.Printf("[CRITICAL] %s", msg)
+	log.Printf("[CRITICAL] %s %v", msg, formatKeyValues(keysAndValues...))
+}
+
+// formatKeyValues formats key-value pairs for logging
+func formatKeyValues(keysAndValues ...interface{}) string {
+	if len(keysAndValues) == 0 {
+		return ""
+	}
+	if len(keysAndValues)%2 != 0 {
+		keysAndValues = append(keysAndValues, "MISSING")
+	}
+
+	var sb strings.Builder
+	for i := 0; i < len(keysAndValues); i += 2 {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		key := keysAndValues[i]
+		value := keysAndValues[i+1]
+		sb.WriteString(fmt.Sprintf("%v=%v", key, value))
+	}
+	return sb.String()
 }
 
 // ServerRole defines the role of a server in the KWIK architecture
@@ -118,8 +149,18 @@ func (s *ServerSession) Aggregator() *data.StreamAggregator {
 
 // ServerStream represents a server-side KWIK stream
 
+// LoggerAdapter adapts stream.StreamLogger to data.SecondaryLogger
+type LoggerAdapter struct {
+	stream.StreamLogger
+}
+
+func (l *LoggerAdapter) Critical(msg string, keysAndValues ...interface{}) {
+	l.StreamLogger.Error(msg, keysAndValues...)
+}
+
 // NewServerSession creates a new KWIK server session
-func NewServerSession(sessionID string, pathManager transport.PathManager, config *SessionConfig) *ServerSession {
+// If logger is nil, a new DefaultServerLogger will be used
+func NewServerSession(sessionID string, pathManager transport.PathManager, config *SessionConfig, logger stream.StreamLogger) *ServerSession {
 	if config == nil {
 		config = DefaultSessionConfig()
 	}
@@ -136,7 +177,7 @@ func NewServerSession(sessionID string, pathManager transport.PathManager, confi
 		serverRole:           control.SessionRole_PRIMARY,                // Default to primary role
 		streams:              make(map[uint64]*stream.ServerStream),
 		acceptChan:           make(chan *stream.ServerStream, 100),
-		aggregator:           data.NewStreamAggregator(&DefaultServerLogger{}), // Initialize secondary stream aggregator
+		aggregator:           data.NewStreamAggregator(&LoggerAdapter{logger}), // Initialize secondary stream aggregator
 		metadataProtocol:     stream.NewMetadataProtocol(),                     // Initialize metadata protocol
 		ctx:                  ctx,
 		cancel:               cancel,
@@ -145,7 +186,7 @@ func NewServerSession(sessionID string, pathManager transport.PathManager, confi
 		addPathResponseChans: make(map[string]chan *control.AddPathResponse), // Initialize response channels
 		heartbeatSequence:    0,
 		lastHeartbeatByPath:  make(map[string]time.Time),
-		logger:               &DefaultServerLogger{},
+		logger:               logger,
 	}
 
 	return session
@@ -163,10 +204,16 @@ type KwikListener struct {
 	cancel         context.CancelFunc
 	closed         bool
 	mutex          sync.RWMutex
+	logger         stream.StreamLogger
 }
 
 // Listen creates a KWIK listener (QUIC-compatible)
 func Listen(address string, config *SessionConfig) (Listener, error) {
+	return ListenWithLogger(address, config, &DefaultServerLogger{})
+}
+
+// ListenWithLogger creates a KWIK listener (QUIC-compatible) with a custom logger
+func ListenWithLogger(address string, config *SessionConfig, logger stream.StreamLogger) (Listener, error) {
 	if config == nil {
 		config = DefaultSessionConfig()
 	}
@@ -193,6 +240,7 @@ func Listen(address string, config *SessionConfig) (Listener, error) {
 		ctx:            ctx,
 		cancel:         cancel,
 		closed:         false,
+		logger:         logger,
 	}
 
 	return listener, nil
@@ -243,7 +291,11 @@ func (l *KwikListener) AcceptWithConfig(ctx context.Context, config *SessionConf
 
 	// Create server session with temporary session ID (will be updated during authentication)
 	tempSessionID := generateSessionID()
-	session := NewServerSession(tempSessionID, pathManager, config)
+	logger := l.logger
+	if logger == nil {
+		logger = &DefaultServerLogger{}
+	}
+	session := NewServerSession(tempSessionID, pathManager, config, logger)
 	session.primaryPath = primaryPath
 
 	// Mark primary path as default for operations (Requirement 2.5)
@@ -343,8 +395,13 @@ func (l *KwikListener) cleanupSession(session *ServerSession) {
 	l.sessionsMutex.Unlock()
 }
 
-// AcceptSession accepts a new KWIK session from a listener
+// AcceptSession accepts a new KWIK session from a listener with a default logger
 func AcceptSession(listener *quic.Listener) (Session, error) {
+	return AcceptSessionWithLogger(listener, &DefaultServerLogger{})
+}
+
+// AcceptSessionWithLogger accepts a new KWIK session from a listener with a custom logger
+func AcceptSessionWithLogger(listener *quic.Listener, logger stream.StreamLogger) (Session, error) {
 	// Accept QUIC connection
 	conn, err := listener.Accept(context.Background())
 	if err != nil {
@@ -365,7 +422,10 @@ func AcceptSession(listener *quic.Listener) (Session, error) {
 	sessionID := generateSessionID()
 
 	// Create server session
-	session := NewServerSession(sessionID, pathManager, nil)
+	if logger == nil {
+		logger = &DefaultServerLogger{}
+	}
+	session := NewServerSession(sessionID, pathManager, nil, logger)
 	session.primaryPath = primaryPath
 
 	// Start session management
@@ -398,7 +458,7 @@ func (s *ServerSession) OpenStreamSync(ctx context.Context) (Stream, error) {
 	} else {
 		// SECONDARY SERVER: Open internal stream for aggregation
 		s.logger.Info(fmt.Sprintf("[SECONDARY] Opening secondary stream %d for aggregation", streamID))
-		return s.openSecondaryStreamInternal(ctx, streamID)
+		return s.openSecondaryStream(ctx, streamID)
 	}
 }
 
@@ -460,8 +520,8 @@ func (s *ServerSession) RemoveStream(streamID uint64) {
 	}
 }
 
-// openSecondaryStreamInternal opens an internal stream for secondary servers (will be aggregated client-side)
-func (s *ServerSession) openSecondaryStreamInternal(ctx context.Context, streamID uint64) (Stream, error) {
+// openSecondaryStream opens an internal stream for secondary servers (will be aggregated client-side)
+func (s *ServerSession) openSecondaryStream(ctx context.Context, streamID uint64) (Stream, error) {
 	// For secondary servers, we create a stream that will be handled internally
 	// and aggregated on the client side according to the secondary stream isolation architecture
 
@@ -1721,59 +1781,6 @@ func (s *ServerSession) handleAuthenticationWithSessionID(ctx context.Context) (
 	// No need to manually mark as authenticated
 
 	return clientSessionID, nil
-}
-
-// openSecondaryStream opens a secondary stream for secondary servers
-// This creates a stream on the internal QUIC connection, not the public client session
-func (s *ServerSession) openSecondaryStream(ctx context.Context) (stream.SecondaryStream, error) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	if s.state != SessionStateActive {
-		return nil, utils.NewKwikError(utils.ErrConnectionLost, "session is not active", nil)
-	}
-
-	// Only secondary servers can use this method
-	if s.serverRole != control.SessionRole_SECONDARY {
-		return nil, utils.NewKwikError(utils.ErrInvalidFrame,
-			"openSecondaryStream is only available for secondary servers", nil)
-	}
-
-	// Generate new stream ID
-	streamID := s.nextStreamID
-	s.nextStreamID++
-
-	// Ensure primary path is available and active
-	if s.primaryPath == nil {
-		return nil, utils.NewKwikError(utils.ErrConnectionLost, "no primary path available", nil)
-	}
-
-	if !s.primaryPath.IsActive() {
-		return nil, utils.NewKwikError(utils.ErrPathDead, "primary path is not active", nil)
-	}
-
-	// Create actual QUIC stream on the internal connection
-	conn := s.primaryPath.GetConnection()
-	if conn == nil {
-		return nil, utils.NewKwikError(utils.ErrConnectionLost, "no QUIC connection available", nil)
-	}
-
-	quicStream, err := conn.OpenStreamSync(ctx)
-	if err != nil {
-		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed, "failed to create QUIC stream", err)
-	}
-
-	// Create secondary stream wrapper
-	secondaryStream := stream.NewSecondaryStream(streamID, s.primaryPath.ID(), quicStream, s)
-
-	// Store in streams map (using a wrapper to satisfy the interface)
-	serverStream := stream.NewServerStream(streamID, s.primaryPath.ID(), s, quicStream)
-
-	s.streamsMutex.Lock()
-	s.streams[streamID] = serverStream
-	s.streamsMutex.Unlock()
-
-	return secondaryStream, nil
 }
 
 // startHeartbeat periodically sends heartbeat frames on all active paths' control streams (server side)

@@ -24,7 +24,9 @@ import (
 // DefaultSessionLogger provides a simple logger implementation for session
 type DefaultSessionLogger struct{}
 
-func (d *DefaultSessionLogger) Debug(msg string, keysAndValues ...interface{}) {}
+func (d *DefaultSessionLogger) Debug(msg string, keysAndValues ...interface{}) {
+	log.Printf("[DEBUG] %s %v", msg, keysAndValues)
+}
 func (d *DefaultSessionLogger) Info(msg string, keysAndValues ...interface{})  {}
 func (d *DefaultSessionLogger) Warn(msg string, keysAndValues ...interface{})  {}
 func (d *DefaultSessionLogger) Error(msg string, keysAndValues ...interface{}) {
@@ -1716,7 +1718,10 @@ func (s *ClientSession) handleDataPacket(pathID string, quicStream quic.Stream) 
 
 // processDataPacket decapsulates and aggregates secondary stream data
 func (s *ClientSession) processDataPacket(pathID string, encapsulatedData []byte) error {
-	s.logger.Debug(fmt.Sprintf("Client processing encapsulated secondary data from path %s (%d bytes)", pathID, len(encapsulatedData)))
+	s.logger.Debug(fmt.Sprintf("[SECONDARY] Processing encapsulated data from path %s (%d bytes)", pathID, len(encapsulatedData)))
+	if len(encapsulatedData) > 16 {
+		s.logger.Debug(fmt.Sprintf("[SECONDARY] First 16 bytes: %x...", encapsulatedData[:16]))
+	}
 
 	// Parse transport packet [PacketID:8][FrameCount:2] + frames
 	if len(encapsulatedData) < 10 {
@@ -1743,10 +1748,14 @@ func (s *ClientSession) processDataPacket(pathID string, encapsulatedData []byte
 		}
 		inner := encapsulatedData[off : off+flen]
 		off += flen
+		// Parse frame metadata
 		metadata, frame, err := metadataProtocol.DecapsulateData(inner)
 		if err != nil {
+			s.logger.Debug(fmt.Sprintf("[SECONDARY] Failed to decapsulate frame: %v (data: %x...)", err, inner[:min(16, len(inner))]))
 			return utils.NewKwikError(utils.ErrInvalidFrame, fmt.Sprintf("failed to decapsulate secondary stream data: %v", err), err)
 		}
+		s.logger.Debug(fmt.Sprintf("[SECONDARY] Decapsulated frame: streamID=%d, kwikStreamID=%d, offset=%d, size=%d",
+			metadata.SecondaryStreamID, metadata.KwikStreamID, metadata.Offset, len(frame)))
 		secondaryStreamID := metadata.SecondaryStreamID
 		if secondaryStreamID == 0 {
 			secondaryStreamID = metadata.KwikStreamID
@@ -1767,8 +1776,12 @@ func (s *ClientSession) processDataPacket(pathID string, encapsulatedData []byte
 			return utils.NewKwikError(utils.ErrStreamCreationFailed, "no secondary aggregator available", nil)
 		}
 		if err = aggregator.AggregateDataFrames(dataFrame); err != nil {
+			s.logger.Debug(fmt.Sprintf("[SECONDARY] Failed to aggregate data: %v (streamID=%d, kwikStreamID=%d, offset=%d, size=%d)",
+				err, secondaryStreamID, metadata.KwikStreamID, metadata.Offset, len(frame)))
 			return utils.NewKwikError(utils.ErrStreamCreationFailed, fmt.Sprintf("failed to aggregate secondary stream data: %v", err), err)
 		}
+		s.logger.Debug(fmt.Sprintf("[SECONDARY] Successfully aggregated data: streamID=%d, kwikStreamID=%d, offset=%d, size=%d",
+			secondaryStreamID, metadata.KwikStreamID, metadata.Offset, len(frame)))
 	}
 	// Ack after all frames processed
 	active := s.pathManager.GetActivePaths()

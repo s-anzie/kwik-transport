@@ -161,8 +161,8 @@ func (sm *SessionManager) CreateListener(address string, config *session.Session
 		return nil, fmt.Errorf("listener already exists for address %s", address)
 	}
 
-	// Create listener
-	listener, err := session.Listen(address, config)
+	// Create listener with the enhanced logger from session manager
+	listener, err := session.ListenWithLogger(address, config, sm.logger.WithComponent("LISTENER"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create listener: %w", err)
 	}

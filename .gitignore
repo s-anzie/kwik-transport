@@ -2,4 +2,5 @@ bin/
 **/bin/
 
 *.log
+**/*.log
 **/log.txt

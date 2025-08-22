@@ -937,8 +937,12 @@ func (ssa *StreamAggregator) AggregateDataFrames(frame *DataFrame) error {
 		return utils.NewKwikError(utils.ErrInvalidFrame, "secondary stream data is nil", nil)
 	}
 
+	ssa.logger.Debug(fmt.Sprintf("[AGGREGATOR] Processing frame: streamID=%d, offset=%d, size=%d", 
+		frame.StreamID, frame.Offset, len(frame.Data)))
+
 	// Validate the data
 	if err := ssa.validateSecondaryData(frame); err != nil {
+		ssa.logger.Debug(fmt.Sprintf("[AGGREGATOR] Validation failed for stream %d: %v", frame.StreamID, err))
 		return err
 	}
 
@@ -946,6 +950,12 @@ func (ssa *StreamAggregator) AggregateDataFrames(frame *DataFrame) error {
 	ssa.presentationMutex.RLock()
 	presentationManager := ssa.presentationManager
 	ssa.presentationMutex.RUnlock()
+
+	if presentationManager == nil {
+		ssa.logger.Debug("[AGGREGATOR] Warning: No presentation manager set")
+	} else {
+		ssa.logger.Debug(fmt.Sprintf("[AGGREGATOR] Found presentation manager for stream %d", frame.StreamID))
+	}
 
 	if presentationManager != nil {
 		// Use presentation manager for new architecture
@@ -956,6 +966,23 @@ func (ssa *StreamAggregator) AggregateDataFrames(frame *DataFrame) error {
 
 // aggregateDataFrame aggregates data using the presentation manager
 func (ssa *StreamAggregator) aggregateDataFrame(frame *DataFrame, manager DataPresentationManagerInterface) error {
+	ssa.logger.Debug(fmt.Sprintf("[AGGREGATOR] Starting aggregation for stream %d (KWIK stream: %d), data length: %d, offset: %d",
+		frame.StreamID, frame.KwikStreamID, len(frame.Data), frame.Offset))
+
+	// Log the first 16 bytes of data for verification (in hex)
+	dataSample := ""
+	if len(frame.Data) > 0 {
+		sampleSize := 16
+		if len(frame.Data) < sampleSize {
+			sampleSize = len(frame.Data)
+		}
+		dataSample = fmt.Sprintf("% x", frame.Data[:sampleSize])
+		if len(frame.Data) > sampleSize {
+			dataSample += "..."
+		}
+	}
+	ssa.logger.Debug(fmt.Sprintf("[AGGREGATOR] Data sample (first 16 bytes): %s", dataSample))
+
 	// Check if backpressure is active for the target stream
 	if manager.IsBackpressureActive(frame.KwikStreamID) {
 		return utils.NewKwikError(utils.ErrStreamCreationFailed,
