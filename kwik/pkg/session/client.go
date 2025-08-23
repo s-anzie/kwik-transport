@@ -1671,13 +1671,51 @@ func (s *ClientSession) handleSecondaryStream(pathID string, quicStream quic.Str
 
 	s.logger.Debug(fmt.Sprintf("Client starting secondary stream data processing for path %s", pathID))
 	// Start processing the secondary stream data in a goroutine
-	go s.handleDataPacket(pathID, quicStream)
+	go s.handleSecondaryPathDataPacket(pathID, quicStream)
 
 	return nil
 }
+// handlePrimaryDataPacket processes data from a secondary stream
+func (s *ClientSession) HandlePrimaryPathDataPacket(pathID string, quicStream quic.Stream) {
+	s.logger.Debug(fmt.Sprintf("Client starting primary stream data processing loop for path %s", pathID))
 
-// handleDataPacket processes data from a secondary stream
-func (s *ClientSession) handleDataPacket(pathID string, quicStream quic.Stream) {
+	buffer := make([]byte, 4096)
+	for {
+		select {
+		case <-s.ctx.Done():
+			s.logger.Debug(fmt.Sprintf("Client secondary stream processing stopping for path %s (session closing)", pathID))
+			return // Session is closing
+		default:
+			// Read data from the secondary stream
+			s.logger.Debug(fmt.Sprintf("Client attempting to read from secondary stream on path %s", pathID))
+			n, err := quicStream.Read(buffer)
+			if err != nil {
+				// Stream closed or error occurred
+				s.logger.Debug(fmt.Sprintf("Client secondary stream from path %s closed: %v", pathID, err))
+				return
+			}
+
+			if n == 0 {
+				s.logger.Debug(fmt.Sprintf("Client no data available from secondary stream on path %s", pathID))
+				continue // No data available
+			}
+
+			s.logger.Debug(fmt.Sprintf("Client received %d bytes from secondary stream on path %s:", n, pathID))
+
+			// Process the encapsulated data according to the metadata protocol
+			err = s.processDataPacket(pathID, buffer[:n])
+			if err != nil {
+				s.logger.Debug(fmt.Sprintf("Client error processing secondary stream data from path %s: %v", pathID, err))
+				// Continue processing other data even if one frame fails
+			} else {
+				s.logger.Debug(fmt.Sprintf("Client successfully processed secondary stream data from path %s", pathID))
+			}
+		}
+	}
+}
+
+// handleSecondaryPathDataPacket processes data from a secondary stream
+func (s *ClientSession) handleSecondaryPathDataPacket(pathID string, quicStream quic.Stream) {
 	defer quicStream.Close()
 	s.logger.Debug(fmt.Sprintf("Client starting secondary stream data processing loop for path %s", pathID))
 

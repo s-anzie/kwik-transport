@@ -55,6 +55,8 @@ const (
 	ErrFlowControlViolation  = "KWIK_FLOW_CONTROL_VIOLATION"
 	ErrCongestionControl     = "KWIK_CONGESTION_CONTROL"
 	ErrPacketLoss            = "KWIK_PACKET_LOSS"
+	ErrBackpressure          = "KWIK_BACKPRESSURE"
+	ErrTimeout               = "KWIK_TIMEOUT"
 )
 
 // KWIK error codes - Control plane
@@ -206,19 +208,28 @@ func NewStreamMultiplexFailedError(streamID uint64, cause error) error {
 
 // Enhanced error constructors for data plane
 func NewDataAggregationFailedError(streamID uint64, cause error) error {
-	return NewKwikError(ErrDataAggregationFailed,
-		fmt.Sprintf("data aggregation failed for stream %d", streamID), cause)
+	return NewKwikError(ErrDataAggregationFailed, fmt.Sprintf("data aggregation failed for stream %d", streamID), cause)
 }
 
 func NewFlowControlViolationError(streamID uint64, attempted, available uint64) error {
-	return NewKwikError(ErrFlowControlViolation,
-		fmt.Sprintf("flow control violation on stream %d: attempted %d, available %d",
+	return NewKwikError(ErrFlowControlViolation, 
+		fmt.Sprintf("flow control violation on stream %d: attempted to write %d bytes, %d available", 
 			streamID, attempted, available), nil)
 }
 
 func NewCongestionControlError(pathID string, reason string) error {
-	return NewKwikError(ErrCongestionControl,
-		fmt.Sprintf("congestion control error on path %s: %s", pathID, reason), nil)
+	return NewKwikError(ErrCongestionControl, 
+		fmt.Sprintf("congestion control triggered on path %s: %s", pathID, reason), nil)
+}
+
+func NewBackpressureError(streamID uint64, reason string) error {
+	return NewKwikError(ErrBackpressure, 
+		fmt.Sprintf("backpressure on stream %d: %s", streamID, reason), nil)
+}
+
+func NewTimeoutError(operation string, timeout time.Duration) error {
+	return NewKwikError(ErrTimeout, 
+		fmt.Sprintf("operation '%s' timed out after %v", operation, timeout), nil)
 }
 
 // Enhanced error constructors for control plane

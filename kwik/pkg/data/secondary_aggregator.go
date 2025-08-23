@@ -966,59 +966,177 @@ func (ssa *StreamAggregator) AggregateDataFrames(frame *DataFrame) error {
 
 // aggregateDataFrame aggregates data using the presentation manager
 func (ssa *StreamAggregator) aggregateDataFrame(frame *DataFrame, manager DataPresentationManagerInterface) error {
-	ssa.logger.Debug(fmt.Sprintf("[AGGREGATOR] Starting aggregation for stream %d (KWIK stream: %d), data length: %d, offset: %d",
-		frame.StreamID, frame.KwikStreamID, len(frame.Data), frame.Offset))
-
-	// Log the first 16 bytes of data for verification (in hex)
-	dataSample := ""
-	if len(frame.Data) > 0 {
-		sampleSize := 16
-		if len(frame.Data) < sampleSize {
-			sampleSize = len(frame.Data)
-		}
-		dataSample = fmt.Sprintf("% x", frame.Data[:sampleSize])
-		if len(frame.Data) > sampleSize {
-			dataSample += "..."
-		}
+	// Log frame metadata at the start
+	ssa.logger.Debug("Starting frame aggregation",
+		"streamID", frame.StreamID,
+		"kwikStreamID", frame.KwikStreamID,
+		"offset", frame.Offset,
+		"dataLength", len(frame.Data),
+		"path", frame.PathID)
+	if frame == nil {
+		return utils.NewKwikError(utils.ErrInvalidFrame, "frame cannot be nil", nil)
 	}
-	ssa.logger.Debug(fmt.Sprintf("[AGGREGATOR] Data sample (first 16 bytes): %s", dataSample))
+
+	// Log detailed information about the frame
+	ssa.logger.Debug(fmt.Sprintf("[AGGREGATOR] Starting aggregation for stream %d (KWIK stream: %d), data length: %d, offset: %d, path: %s",
+		frame.StreamID, frame.KwikStreamID, len(frame.Data), frame.Offset, frame.PathID))
+
+	// Validate input data
+	if len(frame.Data) == 0 {
+		ssa.logger.Warn("Empty data frame received, skipping", 
+			"streamID", frame.StreamID, 
+			"kwikStreamID", frame.KwikStreamID,
+			"offset", frame.Offset)
+		return utils.NewKwikError(utils.ErrInvalidFrame, "empty data frame", nil)
+	}
+
+	// Log data samples for debugging
+	sampleSize := 16
+	headerSample := ""
+	trailerSample := ""
+
+	// Get header and trailer samples
+	if len(frame.Data) >= sampleSize {
+		headerSample = fmt.Sprintf("% x", frame.Data[:sampleSize])
+		if len(frame.Data) > sampleSize*2 {
+			trailerSample = fmt.Sprintf("% x", frame.Data[len(frame.Data)-sampleSize:])
+			headerSample += "..." + trailerSample
+		} else {
+			headerSample = fmt.Sprintf("% x", frame.Data)
+		}
+	} else {
+		headerSample = fmt.Sprintf("% x", frame.Data)
+	}
+
+	// Check for JSON data
+	isJSON := false
+	if len(frame.Data) > 1 {
+		firstChar := frame.Data[0]
+		lastChar := frame.Data[len(frame.Data)-1]
+		isJSON = (firstChar == '{' && lastChar == '}') || (firstChar == '[' && lastChar == ']')
+	}
+
+	ssa.logger.Debug("Data frame details",
+		"streamID", frame.StreamID,
+		"kwikStreamID", frame.KwikStreamID,
+		"offset", frame.Offset,
+		"dataLength", len(frame.Data),
+		"dataSample", headerSample,
+		"isJSON", isJSON,
+		"path", frame.PathID)
 
 	// Check if backpressure is active for the target stream
 	if manager.IsBackpressureActive(frame.KwikStreamID) {
-		return utils.NewKwikError(utils.ErrStreamCreationFailed,
-			fmt.Sprintf("stream %d is under backpressure", frame.KwikStreamID), nil)
+		return utils.NewBackpressureError(frame.KwikStreamID, "stream is under backpressure")
 	}
 
-	// Create metadata for the data
+	// Create metadata for the data with validation info
 	metadata := &DataFrameMetadata{
 		Offset:     frame.Offset,
 		Length:     uint64(len(frame.Data)),
 		Timestamp:  frame.Timestamp,
 		SourcePath: frame.PathID,
 		Flags:      SecondaryDataFlagNone,
+		Properties: map[string]interface{}{
+			"isJSON":     isJSON,
+			"dataLength": len(frame.Data),
+		},
 	}
-	//important Logging to track data aggregation final Data Content cause it may content a serialized DataChunk.
-	ssa.logger.Debug("[IMPORTANT] StreamAggregator.aggregateDataFrame: writing to presentation manager",
-		frame.KwikStreamID, frame.Offset, len(frame.Data), frame.PathID, frame.Data)
-	// Write data to the presentation manager
-	err := manager.WriteToStream(frame.KwikStreamID, frame.Data, frame.Offset, metadata)
+
+	// Log before writing to presentation manager
+	writeStart := time.Now()
+	ssa.logger.Debug("Writing to presentation manager",
+		"streamID", frame.StreamID,
+		"kwikStreamID", frame.KwikStreamID,
+		"offset", frame.Offset,
+		"dataLength", len(frame.Data),
+		"isJSON", isJSON)
+
+	// Write data to the presentation manager with timeout
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- manager.WriteToStream(frame.KwikStreamID, frame.Data, frame.Offset, metadata)
+	}()
+
+	var err error
+	var writeDuration time.Duration
+
+	select {
+	case err = <-errCh:
+		writeDuration = time.Since(writeStart)
+		// Operation completed
+	case <-time.After(10 * time.Second):
+		writeDuration = time.Since(writeStart)
+		errMsg := "timeout writing to presentation manager"
+		ssa.logger.Error(errMsg,
+			"streamID", frame.StreamID,
+			"kwikStreamID", frame.KwikStreamID,
+			"offset", frame.Offset,
+			"duration", writeDuration.String())
+		return utils.NewTimeoutError("write to presentation manager", 10*time.Second)
+	}
+
 	if err != nil {
-		return fmt.Errorf("failed to write to presentation manager: %w", err)
+		errMsg := fmt.Sprintf("failed to write to presentation manager: %v", err)
+		ssa.logger.Error(errMsg,
+			"streamID", frame.StreamID,
+			"kwikStreamID", frame.KwikStreamID,
+			"offset", frame.Offset,
+			"error", err,
+			"duration", writeDuration.String())
+		return utils.NewKwikError(utils.ErrStreamCreationFailed, errMsg, err)
 	}
+
+	// Log successful write
+	ssa.logger.Debug("Successfully wrote to presentation manager",
+		"streamID", frame.StreamID,
+		"kwikStreamID", frame.KwikStreamID,
+		"offset", frame.Offset,
+		"dataLength", len(frame.Data),
+		"duration", writeDuration.String())
 
 	// Update statistics
 	ssa.updateAggregationStats(frame)
 
-	// Update secondary stream state
-	secondaryState, err := ssa.getOrCreateSecondaryStream(frame.StreamID, frame.PathID, frame.KwikStreamID)
-	if err != nil {
-		return err
+	// Update secondary stream state with timeout
+	stateCh := make(chan *SecondaryStreamState, 1)
+	errCh2 := make(chan error, 1)
+	go func() {
+		state, err2 := ssa.getOrCreateSecondaryStream(frame.StreamID, frame.PathID, frame.KwikStreamID)
+		if err2 != nil {
+			errCh2 <- err2
+		} else {
+			stateCh <- state
+			errCh2 <- nil
+		}
+	}()
+
+	select {
+	case err = <-errCh2:
+		if err != nil {
+			return err
+		}
+	case <-time.After(5 * time.Second):
+		errMsg := "timeout updating secondary stream state"
+		ssa.logger.Error(errMsg,
+			"streamID", frame.StreamID,
+			"kwikStreamID", frame.KwikStreamID)
+		return utils.NewTimeoutError("update secondary stream state", 5*time.Second)
 	}
 
+	secondaryState := <-stateCh
+
 	secondaryState.mutex.Lock()
+	defer secondaryState.mutex.Unlock()
+
 	secondaryState.BytesAggregated += uint64(len(frame.Data))
 	secondaryState.LastActivity = time.Now()
-	secondaryState.mutex.Unlock()
+
+	ssa.logger.Debug("Successfully aggregated data",
+		"streamID", frame.StreamID,
+		"kwikStreamID", frame.KwikStreamID,
+		"offset", frame.Offset,
+		"totalBytesAggregated", secondaryState.BytesAggregated)
 
 	return nil
 }

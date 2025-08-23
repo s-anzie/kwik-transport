@@ -16,7 +16,7 @@ type StreamBufferImpl struct {
 	config   *StreamBufferConfig
 
 	// Buffer data storage - using map for efficient offset-based access
-	dataChunks  map[uint64]*DataChunk // offset -> data chunk
+	streamDdata map[uint64]*StreamData // offset -> data chunk
 	chunksMutex sync.RWMutex
 
 	// Read/write positions
@@ -50,9 +50,8 @@ type StreamBufferImpl struct {
 	hasReadySignal bool
 }
 
-// DataChunk represents a chunk of data with metadata
-type DataChunk struct {
-	Offset    uint64
+// StreamData represents a chunk of data with metadata
+type StreamData struct {
 	Data      []byte
 	Metadata  *DataMetadata
 	Timestamp time.Time
@@ -75,7 +74,7 @@ func NewStreamBuffer(streamID uint64, metadata *StreamMetadata, config *StreamBu
 		streamID:      streamID,
 		metadata:      metadata,
 		config:        config,
-		dataChunks:    make(map[uint64]*DataChunk),
+		streamDdata:   make(map[uint64]*StreamData),
 		gaps:          make(map[uint64]uint64),
 		readPosition:  0,
 		writePosition: 0,
@@ -187,18 +186,17 @@ func (sb *StreamBufferImpl) WriteWithMetadata(data []byte, offset uint64, metada
 	sb.sizeMutex.Unlock()
 
 	// Create data chunk
-	chunk := &DataChunk{
-		Offset:    offset,
+	chunk := &StreamData{
 		Data:      make([]byte, len(data)),
 		Metadata:  metadata,
 		Timestamp: time.Now(),
 	}
-	// Be very carfull, data may still contain a DataChunk so it must be parsed to safety chunk
+	// Be very carfull, data may still contain a StreamData so it must be parsed to safety chunk
 	copy(chunk.Data, data)
 
 	// Check for duplicate writes
 	sb.chunksMutex.Lock()
-	if existingChunk, exists := sb.dataChunks[offset]; exists {
+	if existingChunk, exists := sb.streamDdata[offset]; exists {
 		sb.chunksMutex.Unlock()
 
 		// Update statistics for duplicate
@@ -224,7 +222,7 @@ func (sb *StreamBufferImpl) WriteWithMetadata(data []byte, offset uint64, metada
 	}
 
 	// Store the chunk
-	sb.dataChunks[offset] = chunk
+	sb.streamDdata[offset] = chunk
 	sb.chunksMutex.Unlock()
 
 	// Update write position if this extends the buffer
@@ -562,7 +560,7 @@ func (sb *StreamBufferImpl) Close() error {
 
 	// Clear all data
 	sb.chunksMutex.Lock()
-	sb.dataChunks = make(map[uint64]*DataChunk)
+	sb.streamDdata = make(map[uint64]*StreamData)
 	sb.chunksMutex.Unlock()
 
 	sb.gapsMutex.Lock()
@@ -588,24 +586,24 @@ func (sb *StreamBufferImpl) getContiguousDataFromPosition(startPos uint64, maxBy
 	sb.chunksMutex.RLock()
 	defer sb.chunksMutex.RUnlock()
 
-	if sb.config != nil && sb.config.EnableDebugLogging && len(sb.dataChunks) > 0 {
+	if sb.config != nil && sb.config.EnableDebugLogging && len(sb.streamDdata) > 0 {
 		sb.config.Logger.Debug("StreamBuffer.getContiguousDataFromPosition",
 			"stream", sb.streamID,
 			"start_pos", startPos,
 			"max_bytes", maxBytes,
-			"total_chunks", len(sb.dataChunks),
+			"total_chunks", len(sb.streamDdata),
 		)
 
 		// Log first few chunk positions for debugging
 		i := 0
-		for offset := range sb.dataChunks {
+		for offset := range sb.streamDdata {
 			if i >= 3 { // Limit to first 3 chunks to avoid log spam
 				sb.config.Logger.Debug("  ... additional chunks not shown")
 				break
 			}
 			sb.config.Logger.Debug("  Chunk info",
 				"offset", offset,
-				"length", len(sb.dataChunks[offset].Data),
+				"length", len(sb.streamDdata[offset].Data),
 			)
 			i++
 		}
@@ -613,16 +611,16 @@ func (sb *StreamBufferImpl) getContiguousDataFromPosition(startPos uint64, maxBy
 
 	// Find the single chunk that contains startPos. We do NOT concatenate across
 	// chunk boundaries to preserve message/frame separation.
-	var containingChunk *DataChunk
+	var containingChunk *StreamData
 	var containingOffset uint64
 
 	// Fast-path: exact match at startPos
-	if chunk, exists := sb.dataChunks[startPos]; exists {
+	if chunk, exists := sb.streamDdata[startPos]; exists {
 		containingChunk = chunk
 		containingOffset = startPos
 	} else {
 		// Fallback: search for the chunk whose range contains startPos
-		for offset, chunk := range sb.dataChunks {
+		for offset, chunk := range sb.streamDdata {
 			end := offset + uint64(len(chunk.Data))
 			if startPos >= offset && startPos < end {
 				containingChunk = chunk
@@ -671,7 +669,7 @@ func (sb *StreamBufferImpl) rebuildGapsLocked() {
 	sb.chunksMutex.RLock()
 	var offsets []uint64
 	chunkEnds := make(map[uint64]uint64) // offset -> end position
-	for offset, chunk := range sb.dataChunks {
+	for offset, chunk := range sb.streamDdata {
 		offsets = append(offsets, offset)
 		chunkEnds[offset] = offset + uint64(len(chunk.Data))
 	}
@@ -711,7 +709,7 @@ func (sb *StreamBufferImpl) markDataAsConsumed(startPos, length uint64) {
 	// Mark chunks as consumed but keep them for re-reading
 	sb.chunksMutex.Lock()
 	var consumedBytes uint64
-	for offset, chunk := range sb.dataChunks {
+	for offset, chunk := range sb.streamDdata {
 		chunkEnd := offset + uint64(len(chunk.Data))
 		if chunkEnd <= endPos {
 			// This chunk has been completely consumed
@@ -754,7 +752,7 @@ func (sb *StreamBufferImpl) getConsumedSpaceSize() uint64 {
 	defer sb.chunksMutex.RUnlock()
 
 	var consumedSize uint64
-	for _, chunk := range sb.dataChunks {
+	for _, chunk := range sb.streamDdata {
 		if chunk.Metadata != nil && chunk.Metadata.Properties != nil {
 			if consumed, exists := chunk.Metadata.Properties["consumed"]; exists && consumed == true {
 				consumedSize += uint64(len(chunk.Data))
@@ -777,7 +775,7 @@ func (sb *StreamBufferImpl) cleanupConsumedData(startPos, length uint64) {
 		newOffset uint64
 	}
 
-	for offset, chunk := range sb.dataChunks {
+	for offset, chunk := range sb.streamDdata {
 		chunkEnd := offset + uint64(len(chunk.Data))
 
 		if chunkEnd <= endPos {
@@ -805,20 +803,19 @@ func (sb *StreamBufferImpl) cleanupConsumedData(startPos, length uint64) {
 	// Remove completely consumed chunks
 	var freedBytes uint64
 	for _, offset := range chunksToRemove {
-		chunk := sb.dataChunks[offset]
+		chunk := sb.streamDdata[offset]
 		freedBytes += uint64(len(chunk.Data))
-		delete(sb.dataChunks, offset)
+		delete(sb.streamDdata, offset)
 	}
 
 	// Modify partially consumed chunks
 	for _, mod := range chunksToModify {
-		oldChunk := sb.dataChunks[mod.offset]
+		oldChunk := sb.streamDdata[mod.offset]
 		freedBytes += uint64(len(oldChunk.Data)) - uint64(len(mod.newData))
 
 		// Remove old chunk and add new chunk at new offset
-		delete(sb.dataChunks, mod.offset)
-		sb.dataChunks[mod.newOffset] = &DataChunk{
-			Offset:    mod.newOffset,
+		delete(sb.streamDdata, mod.offset)
+		sb.streamDdata[mod.newOffset] = &StreamData{
 			Data:      mod.newData,
 			Metadata:  oldChunk.Metadata, // Keep original metadata
 			Timestamp: oldChunk.Timestamp,
@@ -973,7 +970,7 @@ func (sb *StreamBufferImpl) GetDataRange(startOffset, endOffset uint64) ([]DataR
 	currentOffset := startOffset
 
 	for currentOffset < endOffset {
-		if chunk, exists := sb.dataChunks[currentOffset]; exists {
+		if chunk, exists := sb.streamDdata[currentOffset]; exists {
 			// Data chunk found
 			chunkEnd := currentOffset + uint64(len(chunk.Data))
 			if chunkEnd > endOffset {
@@ -1001,7 +998,7 @@ func (sb *StreamBufferImpl) GetDataRange(startOffset, endOffset uint64) ([]DataR
 			// Gap found - find the end of the gap
 			gapEnd := currentOffset + 1
 			for gapEnd < endOffset {
-				if _, exists := sb.dataChunks[gapEnd]; exists {
+				if _, exists := sb.streamDdata[gapEnd]; exists {
 					break
 				}
 				gapEnd++
@@ -1046,13 +1043,13 @@ func (sb *StreamBufferImpl) GetContiguousRanges() []ContiguousRange {
 	sb.chunksMutex.RLock()
 	defer sb.chunksMutex.RUnlock()
 
-	if len(sb.dataChunks) == 0 {
+	if len(sb.streamDdata) == 0 {
 		return nil
 	}
 
 	// Get all offsets and sort them
 	var offsets []uint64
-	for offset := range sb.dataChunks {
+	for offset := range sb.streamDdata {
 		offsets = append(offsets, offset)
 	}
 	sort.Slice(offsets, func(i, j int) bool {
@@ -1061,11 +1058,11 @@ func (sb *StreamBufferImpl) GetContiguousRanges() []ContiguousRange {
 
 	var ranges []ContiguousRange
 	currentStart := offsets[0]
-	currentEnd := offsets[0] + uint64(len(sb.dataChunks[offsets[0]].Data))
+	currentEnd := offsets[0] + uint64(len(sb.streamDdata[offsets[0]].Data))
 
 	for i := 1; i < len(offsets); i++ {
 		offset := offsets[i]
-		chunkEnd := offset + uint64(len(sb.dataChunks[offset].Data))
+		chunkEnd := offset + uint64(len(sb.streamDdata[offset].Data))
 
 		if offset == currentEnd {
 			// Contiguous, extend current range
@@ -1161,7 +1158,7 @@ func (sb *StreamBufferImpl) CleanupOldData(maxAge time.Duration) error {
 	var chunksToRemove []uint64
 	var freedBytes uint64
 
-	for offset, chunk := range sb.dataChunks {
+	for offset, chunk := range sb.streamDdata {
 		if chunk.Timestamp.Before(cutoffTime) {
 			// Only remove if it's before the current read position
 			sb.positionMutex.RLock()
@@ -1178,7 +1175,7 @@ func (sb *StreamBufferImpl) CleanupOldData(maxAge time.Duration) error {
 
 	// Remove old chunks
 	for _, offset := range chunksToRemove {
-		delete(sb.dataChunks, offset)
+		delete(sb.streamDdata, offset)
 	}
 	sb.chunksMutex.Unlock()
 
@@ -1224,7 +1221,7 @@ func (sb *StreamBufferImpl) GetReadPositionInfo() *ReadPositionInfo {
 	// Find next data position
 	sb.chunksMutex.RLock()
 	var nextDataPos uint64 = writePos // Default to write position
-	for offset := range sb.dataChunks {
+	for offset := range sb.streamDdata {
 		if offset >= readPos && offset < nextDataPos {
 			nextDataPos = offset
 		}
@@ -1259,7 +1256,7 @@ func (sb *StreamBufferImpl) ResetReadPosition() error {
 	var earliestOffset uint64 = ^uint64(0) // Max uint64
 	hasData := false
 
-	for offset := range sb.dataChunks {
+	for offset := range sb.streamDdata {
 		if offset < earliestOffset {
 			earliestOffset = offset
 			hasData = true
@@ -1288,7 +1285,7 @@ func (sb *StreamBufferImpl) SkipToNextData() (uint64, error) {
 	var nextDataPos uint64 = ^uint64(0) // Max uint64
 	hasNextData := false
 
-	for offset := range sb.dataChunks {
+	for offset := range sb.streamDdata {
 		if offset > currentReadPos && offset < nextDataPos {
 			nextDataPos = offset
 			hasNextData = true
@@ -1315,7 +1312,7 @@ func (sb *StreamBufferImpl) SkipToNextData() (uint64, error) {
 // GetCleanupStats returns statistics about cleanup operations
 func (sb *StreamBufferImpl) GetCleanupStats() *CleanupStats {
 	sb.chunksMutex.RLock()
-	totalChunks := len(sb.dataChunks)
+	totalChunks := len(sb.streamDdata)
 	sb.chunksMutex.RUnlock()
 
 	sb.positionMutex.RLock()
@@ -1333,7 +1330,7 @@ func (sb *StreamBufferImpl) GetCleanupStats() *CleanupStats {
 	var cleanableChunks int
 	var cleanableBytes uint64
 
-	for offset, chunk := range sb.dataChunks {
+	for offset, chunk := range sb.streamDdata {
 		if offset < readPos {
 			// This chunk has some data that has been read and can be cleaned
 			cleanableChunks++

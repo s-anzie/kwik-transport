@@ -1,0 +1,13 @@
+This is a sample file for testing the multi-path demo.
+It contains multiple lines of text to test the chunking and aggregation functionality.
+The file should be split into chunks and sent via both primary and secondary paths.
+Each chunk will be processed and aggregated back into the original file.
+This tests the transport layer's ability to handle multi-path data transmission.
+
+Line 6: Additional content for testing
+Line 7: More test data
+Line 8: Even more test data
+Line 9: Testing chunk boundaries
+Line 10: Final line of test data
+
+The end of the sample file.

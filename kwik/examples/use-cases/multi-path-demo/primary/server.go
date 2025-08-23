@@ -164,13 +164,13 @@ func handleFileRequest(stream session.Stream, sess session.Session, req types.Re
 			ChunkSize: chunkSize,
 		},
 	}
-	header, _ := json.Marshal(resp)
-	headerWithNL := append(header, '\n')
+	respdata, _ := json.Marshal(resp)
+	respdata = append(respdata, '\n')
 	stream.SetOffset(0)
-	if _, err := stream.Write(headerWithNL); err != nil {
+	if _, err := stream.Write(respdata); err != nil {
 		return fmt.Errorf("write header: %w", err)
 	}
-	headerLen := len(headerWithNL)
+	headerLen := len(respdata)
 	// Position agrégée courante dans le flux après l'entête
 	aggPos := int64(headerLen)
 

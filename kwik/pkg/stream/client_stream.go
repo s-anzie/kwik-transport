@@ -3,7 +3,6 @@ package stream
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,7 +19,7 @@ type ClientSession interface {
 	GetAggregatedDataForStream(streamID uint64) ([]byte, error)
 	ConsumeAggregatedDataForStream(streamID uint64, bytesToConsume int) ([]byte, error)
 	AggregateData(streamID uint64, data []byte, offset uint64) error
-
+	HandlePrimaryPathDataPacket(pathID string, quicStream quic.Stream)
 	// New methods for data presentation manager integration
 	GetDataPresentationManager() DataPresentationManager
 
@@ -122,61 +121,12 @@ func NewClientStreamWithQuic(id uint64, pathID string, session ClientSession, qu
 		isAppStream: true,
 		logger:      session.GetLogger(),
 	}
-	// Start primary data ingestion into presentation manager
-	go cs.primaryPathIngestionLoop()
 	return cs
-}
-
-// primaryPathIngestionLoop continuously reads from the primary QUIC stream and deposits into the aggregator/DPM
-func (s *ClientStream) primaryPathIngestionLoop() {
-	if s.quicStream == nil {
-		return
-	}
-	buffer := make([]byte, 4096)
-	for {
-		// Short deadline to avoid blocking so we can observe context cancellation
-		_ = s.quicStream.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-		n, err := s.quicStream.Read(buffer)
-		if n > 0 {
-			chunk := make([]byte, n)
-			copy(chunk, buffer[:n])
-			// Use a separate write offset for primary ingestion
-			s.mutex.Lock()
-			writeOffset := s.primaryWriteOffset
-			s.primaryWriteOffset += uint64(n)
-			s.mutex.Unlock()
-			if derr := s.session.AggregateData(s.id, chunk, writeOffset); derr != nil {
-				if s.logger != nil {
-					s.logger.Error(fmt.Sprintf("Failed depositing primary data: %v", derr))
-				}
-			}
-			continue
-		}
-		if err != nil {
-			errStr := strings.ToLower(err.Error())
-			if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "no recent network activity") {
-				// Continue polling
-				select {
-				case <-s.session.GetContext().Done():
-					return
-				default:
-				}
-				continue
-			}
-			// Any other error or EOF ends ingestion
-			return
-		}
-		// No data and no error (n==0), check for cancellation
-		select {
-		case <-s.session.GetContext().Done():
-			return
-		default:
-		}
-	}
 }
 
 // Read reads data from the stream (QUIC-compatible)
 func (s *ClientStream) Read(p []byte) (int, error) {
+	go s.session.HandlePrimaryPathDataPacket("primary", s.quicStream)
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 

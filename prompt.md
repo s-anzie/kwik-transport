@@ -9,4 +9,44 @@ je suis un peu embêté du fait que file transfer accede ditectement aux element
 actuellement je constate que le serveur secondaire est capable de faire des ouvertures de stream direct sur la session cliente comme le serveur principal; c'est le comportement actuel, pour les deux, ce comportement doit etre valide uniquement pour le serveur principal. donc je veux que pour le role secondaire tout se passe en interne quand le serverveur secondaire fait une ouverture de flux sur sa session, cela ne doit pas directement aller sur la session cliente publique mais la gestion des chemins doit rester transparente pour le client donc les ouvertures de flux venant des serveurs secondaires c'est a dire des chemins secondaires, doivent etre traitée à l'intérieur de kwik. cela suggere que quand le chemin secondaire va faire une ouverture de flux sur sa connection QUIC interne, elle sera recue coté client en interne par la connection QUIC du chemin mais sera handle à l'interieur de kwik. et les données que les serveurs secondaires vont ecrire dans ces flux devront etre prises par kwik et positionées dans le bon flux kwik et au bon offset. raison pour laquelle il faut une bonne aggregation des flux QUIC entrant sur les flux kwik et une bonne logique de communication quic entre les element interne de kwik coté client et serveur secondaire
 
 
-le probleme c'est qu'il faut imposer dans ce cas au niveau QUIC pour les flux ouverts sur le serveur secondaire une cadence lecture ecriture peut etre 
+le probleme c'est qu'il faut imposer dans ce cas au niveau QUIC pour les flux ouverts sur le serveur secondaire une cadence lecture ecriture peut etre
+
+peux tu lire les logs de mon usecase multi-path-demo dans le dossier logs dans examples? je veux que tu analyse et comprenne bien ces logs du client et des serveurs pour determiner ce qui bloque et ce qui fait en srte que le client tombe sur cette erreur Réponse invalide: invalid character '\x18' looking for beginning of value pourquoi le transport lui donne des données ilisibles? une analyse profonde du code source sera necessaire
+
+voici ce qui devrait se passer:
+1- le client envoi sa requete {json request} cette requete est serialisée par le client et envoyée 
+   le transport n'interprete pas le contenu d'un write, il fait son travail et le transprte a sa destinantion
+
+2- Le serveur recoit cette requete (le payload que le client a envoyé) il la traite et renvoie sa reponse
+   la reponse du serveur egalement un json {reponse serveur} qu'il serialise et envoie egalement
+   le transport n'interprete pas de write, il le transporte et l'aggrege pour qu'il soit presenté et lu par le client.
+
+3- le client lit les données qui viennet d'arriver puisqu'elles ne sont pas interprétée, elle arrivent serialisées,
+   il doit donc les lire, les deserialiser et ensuite les interpreter car il ne peut obtenir son json qu'apres deserialisation de ce qu'il a lu.
+
+4- Pour la suite on voit que le serveur primaire envoit des données via le stream qu'il a avec le client et qu'il
+   envoie des commandes via la session. ces deux element ne se melangent pas. actuellement les commandes
+   fonctionnent parfaitement comme on veut. c'est sur les stream envoyée qu'on doit investiguer. le serveur 
+   encapsule en json des portion de fichier paires les serialise et les envoie en definissant bien les
+   offsets sur le stream jusqu'a ce qu'il ait terminé
+
+5- le serveur secondaire recoit bien les commande les deserialise et les traite bien en envoyant comme le serveur
+   des portion de de fichier encapsulées exactement de la meme manier en definisant aussi les offset sur le stream
+   par ce qu'il recoit dans sa commande
+
+6- Le client doit lire en boucle ainsi et deserialiser les portions de données encapsulées dans du json que les
+   deux sereurs ont envoyés et les écrire dans le fichier de destination
+
+7- il doit envoyer un Ack quand il a tout lu
+8- Le serveur doit lire l'Ack et tout terminer.
+
+
+voila ce que le use case est sensé faire.
+
+Le transport doit parfaitement transporter toute ces données sans se soucier de leur contenu cependant il a ses propres structures de donées qui lui permetent de faire la separation l'identification, l'ordre d'aggregation egalemet. Nous avons des packets qui transportent des trames, et ce sont les trames qui transortent les données, (nous somme ici sur le plan de données).
+
+le transport n'est pas lié au use case car le use case est seulement sensé montrer que le transport fonctionne donc le transport doit etre agnostique des données du usecase
+
+quand on recoit une trame à mon avois il convient de faire comme on le fait depuis en stockant
+
+Chaque StreamData ou doit etre lu distinctement par l'application? si le serveur primaire fait un stream.Write(data1) et que le serveur secondaire fait un stream.Write(data2) ta solution consiste à faire concatener dat1 et data2 ainsi le client lira data1data2 mais nous ne voulons pas cela car on part du principe que les données que nous transportons peuvent etre structurées (et c'est le cas) mais que nous n'avons pas de main mise au niveau transport sur cette structuration, les metadonnées nous donne seulement le flux logique et l'offset dans lequel positionner les données transportées. (je me demande bien pourquoi les treamData ont un champ offset alors qu'il y en a déjà un dans les métadonnées si c'est le même) donc garde la lecture streamData par streamData mais on doit s'assurer de la coherence

@@ -3,6 +3,8 @@ package stream
 import (
 	"encoding/binary"
 	"fmt"
+	"hash/adler32"
+	"hash/crc32"
 	"time"
 )
 
@@ -21,6 +23,15 @@ type MetadataProtocol interface {
 	CreateStreamOpenMetadata(kwikStreamID uint64) (*StreamMetadata, error)
 }
 
+// ChecksumType defines the type of checksum used
+type ChecksumType uint8
+
+const (
+	ChecksumTypeNone   ChecksumType = iota // No checksum
+	ChecksumTypeCRC32                     // Standard CRC-32 checksum
+	ChecksumTypeAdler32                   // Adler-32 checksum
+)
+
 // StreamMetadata contains metadata information for secondary stream data
 type StreamMetadata struct {
 	KwikStreamID      uint64      // Target KWIK stream ID
@@ -30,6 +41,8 @@ type StreamMetadata struct {
 	Timestamp         uint64      // Timestamp when metadata was created
 	SourcePathID      string      // Source path identifier
 	MessageType       MetadataType // Type of metadata message
+	Checksum          uint32      // Data integrity checksum
+	ChecksumType      ChecksumType // Type of checksum used
 }
 
 // MetadataType defines the type of metadata message
@@ -84,8 +97,8 @@ type MetadataProtocolImpl struct {
 // NewMetadataProtocol creates a new metadata protocol instance
 func NewMetadataProtocol() *MetadataProtocolImpl {
 	return &MetadataProtocolImpl{
-		maxDataLength: 1024 * 1024, // 1MB max data length
-		maxPathIDLen:  255,         // 255 chars max path ID (1 byte length field)
+		maxDataLength: 16 * 1024 * 1024, // 16MB max data length
+		maxPathIDLen:  255,              // 255 chars max path ID (1 byte length field)
 	}
 }
 
@@ -158,31 +171,42 @@ func (p *MetadataProtocolImpl) ValidateMetadata(metadata *StreamMetadata) error 
 	if metadata == nil {
 		return &MetadataProtocolError{
 			Code:    ErrMetadataInvalid,
-			Message: "metadata is nil",
+			Message: "metadata cannot be nil",
 		}
 	}
-	
-	if metadata.KwikStreamID == 0 {
+
+	if metadata.KwikStreamID == 0 && metadata.MessageType != MetadataTypeStreamOpen {
 		return &MetadataProtocolError{
 			Code:    ErrMetadataInvalid,
-			Message: "KWIK stream ID cannot be 0",
+			Message: "KWIK stream ID cannot be zero for non-stream-open messages",
 		}
 	}
-	
+
 	if metadata.DataLength > p.maxDataLength {
 		return &MetadataProtocolError{
 			Code:    ErrMetadataDataTooLarge,
 			Message: fmt.Sprintf("data length %d exceeds maximum %d", metadata.DataLength, p.maxDataLength),
 		}
 	}
-	
+
 	if len(metadata.SourcePathID) > p.maxPathIDLen {
 		return &MetadataProtocolError{
 			Code:    ErrMetadataInvalid,
 			Message: fmt.Sprintf("path ID length %d exceeds maximum %d", len(metadata.SourcePathID), p.maxPathIDLen),
 		}
 	}
-	
+
+	// Validate checksum type
+	switch metadata.ChecksumType {
+	case ChecksumTypeNone, ChecksumTypeCRC32, ChecksumTypeAdler32:
+		// Valid types
+	default:
+		return &MetadataProtocolError{
+			Code:    ErrInvalidChecksum,
+			Message: fmt.Sprintf("invalid checksum type: %d", metadata.ChecksumType),
+		}
+	}
+
 	if metadata.MessageType < MetadataTypeData || metadata.MessageType > MetadataTypeOffsetSync {
 		return &MetadataProtocolError{
 			Code:    ErrMetadataInvalid,
@@ -279,137 +303,243 @@ func (p *MetadataProtocolImpl) DecapsulateDataBatch(encapsulatedFrames [][]byte)
 
 // encodeFrame encodes metadata and data into a binary frame
 func (p *MetadataProtocolImpl) encodeFrame(metadata *StreamMetadata, data []byte) ([]byte, error) {
+	if metadata == nil {
+		return nil, &MetadataProtocolError{
+			Code:    ErrMetadataInvalid,
+			Message: "metadata cannot be nil",
+		}
+	}
+
+	// Validate metadata
 	if err := p.ValidateMetadata(metadata); err != nil {
 		return nil, err
 	}
-	
-	pathIDBytes := []byte(metadata.SourcePathID)
-	frameSize := minMetadataFrameSize + len(pathIDBytes) + len(data)
-	
-	frame := make([]byte, frameSize)
+
+	// Calculate data length if not set
+	if metadata.DataLength == 0 && data != nil {
+		metadata.DataLength = uint32(len(data))
+	}
+
+	// Set timestamp if not set
+	if metadata.Timestamp == 0 {
+		metadata.Timestamp = uint64(time.Now().UnixNano())
+	}
+
+	// Calculate checksum if data is provided and checksum not already set
+	if data != nil && len(data) > 0 && metadata.ChecksumType == ChecksumTypeNone {
+		metadata.Checksum = crc32.ChecksumIEEE(data)
+		metadata.ChecksumType = ChecksumTypeCRC32
+	}
+
+	// Calculate total frame size
+	headerSize := 4 + 1 + 1 + 2 + 8 + 8 + 8 + 4 + 8 + 4 + 1 + 1 // Fixed header size
+	pathIDLen := len(metadata.SourcePathID)
+	if pathIDLen > 255 {
+		return nil, &MetadataProtocolError{
+			Code:    ErrMetadataInvalid,
+			Message: "path ID too long",
+		}
+	}
+
+	totalSize := headerSize + pathIDLen + int(metadata.DataLength)
+	frame := make([]byte, totalSize)
 	offset := 0
-	
-	// Header: Magic + Version + Type + Reserved
-	binary.BigEndian.PutUint32(frame[offset:], metadataFrameMagic)
+
+	// Write magic number (4 bytes)
+	binary.BigEndian.PutUint32(frame[offset:], 0x4B57494B) // "KWIK"
 	offset += 4
-	frame[offset] = metadataFrameVersion
+
+	// Write version (1 byte)
+	frame[offset] = 0x01
 	offset++
+
+	// Write message type (1 byte)
 	frame[offset] = byte(metadata.MessageType)
 	offset++
-	// Reserved 2 bytes (set to 0)
+
+	// Reserved (2 bytes)
 	binary.BigEndian.PutUint16(frame[offset:], 0)
 	offset += 2
-	
-	// Fixed fields
+
+	// Write KWIK stream ID (8 bytes)
 	binary.BigEndian.PutUint64(frame[offset:], metadata.KwikStreamID)
 	offset += 8
+
+	// Write secondary stream ID (8 bytes)
+	binary.BigEndian.PutUint64(frame[offset:], metadata.SecondaryStreamID)
+	offset += 8
+
+	// Write offset (8 bytes)
 	binary.BigEndian.PutUint64(frame[offset:], metadata.Offset)
 	offset += 8
-	binary.BigEndian.PutUint32(frame[offset:], uint32(len(data)))
+
+	// Write data length (4 bytes)
+	binary.BigEndian.PutUint32(frame[offset:], metadata.DataLength)
 	offset += 4
+
+	// Write timestamp (8 bytes)
 	binary.BigEndian.PutUint64(frame[offset:], metadata.Timestamp)
 	offset += 8
-	
-	// Path ID
-	frame[offset] = byte(len(pathIDBytes))
+
+	// Write checksum (4 bytes)
+	binary.BigEndian.PutUint32(frame[offset:], metadata.Checksum)
+	offset += 4
+
+	// Write checksum type (1 byte)
+	frame[offset] = byte(metadata.ChecksumType)
 	offset++
-	copy(frame[offset:], pathIDBytes)
-	offset += len(pathIDBytes)
-	
-	// Data
-	copy(frame[offset:], data)
-	
+
+	// Write path ID length (1 byte)
+	frame[offset] = byte(pathIDLen)
+	offset++
+
+	// Write path ID
+	copy(frame[offset:], metadata.SourcePathID)
+	offset += pathIDLen
+
+	// Write data if provided
+	if data != nil && len(data) > 0 {
+		copy(frame[offset:], data)
+	}
+
 	return frame, nil
 }
 
 // decodeFrame decodes a binary frame into metadata and data
 func (p *MetadataProtocolImpl) decodeFrame(frame []byte) (*StreamMetadata, []byte, error) {
-	if len(frame) < minMetadataFrameSize {
+	if len(frame) < 24 { // Minimum frame size
 		return nil, nil, &MetadataProtocolError{
 			Code:    ErrMetadataFrameTooSmall,
 			Message: "frame too small",
 		}
 	}
-	
+
 	offset := 0
-	
-	// Validate magic
+
+	// Read magic number
 	magic := binary.BigEndian.Uint32(frame[offset:])
 	offset += 4
-	if magic != metadataFrameMagic {
+	if magic != 0x4B57494B { // "KWIK"
 		return nil, nil, &MetadataProtocolError{
 			Code:    ErrMetadataInvalidMagic,
-			Message: fmt.Sprintf("invalid magic: expected 0x%08X, got 0x%08X", metadataFrameMagic, magic),
+			Message: "invalid magic number",
 		}
 	}
-	
-	// Validate version
+
+	// Read version
 	version := frame[offset]
 	offset++
-	if version != metadataFrameVersion {
+	if version != 0x01 {
 		return nil, nil, &MetadataProtocolError{
 			Code:    ErrMetadataUnsupportedVersion,
-			Message: fmt.Sprintf("unsupported version: expected %d, got %d", metadataFrameVersion, version),
+			Message: fmt.Sprintf("unsupported version: %d", version),
 		}
 	}
-	
-	// Message type
+
+	// Read message type
 	messageType := MetadataType(frame[offset])
 	offset++
-	
+
 	// Skip reserved bytes
 	offset += 2
-	
-	// Fixed fields
+
+	// Read KWIK stream ID
 	kwikStreamID := binary.BigEndian.Uint64(frame[offset:])
 	offset += 8
-	streamOffset := binary.BigEndian.Uint64(frame[offset:])
+
+	// Read secondary stream ID
+	secondaryStreamID := binary.BigEndian.Uint64(frame[offset:])
 	offset += 8
+
+	// Read offset
+	offsetVal := binary.BigEndian.Uint64(frame[offset:])
+	offset += 8
+
+	// Read data length
 	dataLength := binary.BigEndian.Uint32(frame[offset:])
 	offset += 4
+
+	// Read timestamp
 	timestamp := binary.BigEndian.Uint64(frame[offset:])
 	offset += 8
-	
-	// Path ID
+
+	// Read checksum
+	checksum := binary.BigEndian.Uint32(frame[offset:])
+	offset += 4
+
+	// Read checksum type
+	checksumType := ChecksumType(frame[offset])
+	offset++
+
+	// Read path ID length
 	pathIDLen := int(frame[offset])
 	offset++
-	
+
+	// Validate path ID length
 	if offset+pathIDLen > len(frame) {
 		return nil, nil, &MetadataProtocolError{
 			Code:    ErrMetadataFrameCorrupted,
 			Message: "path ID extends beyond frame",
 		}
 	}
-	
+
+	// Read path ID
 	pathID := string(frame[offset : offset+pathIDLen])
 	offset += pathIDLen
-	
-	// Data
-	expectedDataLen := int(dataLength)
-	if offset+expectedDataLen > len(frame) {
-		return nil, nil, &MetadataProtocolError{
-			Code:    ErrMetadataFrameCorrupted,
-			Message: "data extends beyond frame",
+
+	// Read data
+	var data []byte
+	if dataLength > 0 {
+		if offset+int(dataLength) > len(frame) {
+			return nil, nil, &MetadataProtocolError{
+				Code:    ErrMetadataFrameCorrupted,
+				Message: "data extends beyond frame",
+			}
+		}
+		data = make([]byte, dataLength)
+		copy(data, frame[offset:offset+int(dataLength)])
+
+		// Verify checksum if present
+		if checksumType != ChecksumTypeNone && len(data) > 0 {
+			var calculatedChecksum uint32
+			switch checksumType {
+			case ChecksumTypeCRC32:
+				calculatedChecksum = crc32.ChecksumIEEE(data)
+			case ChecksumTypeAdler32:
+				calculatedChecksum = adler32.Checksum(data)
+			default:
+				return nil, nil, &MetadataProtocolError{
+					Code:    ErrInvalidChecksum,
+					Message: fmt.Sprintf("unsupported checksum type: %d", checksumType),
+				}
+			}
+
+			if calculatedChecksum != checksum {
+				return nil, nil, &MetadataProtocolError{
+					Code:    ErrDataCorrupted,
+					Message: fmt.Sprintf("checksum mismatch: expected %x, got %x", checksum, calculatedChecksum),
+				}
+			}
 		}
 	}
-	
-	data := make([]byte, expectedDataLen)
-	copy(data, frame[offset:offset+expectedDataLen])
-	
+
 	metadata := &StreamMetadata{
-		KwikStreamID: kwikStreamID,
-		Offset:       streamOffset,
-		DataLength:   dataLength,
-		Timestamp:    timestamp,
-		SourcePathID: pathID,
-		MessageType:  messageType,
+		KwikStreamID:      kwikStreamID,
+		SecondaryStreamID: secondaryStreamID,
+		Offset:            offsetVal,
+		DataLength:        dataLength,
+		Timestamp:         timestamp,
+		SourcePathID:      pathID,
+		MessageType:       messageType,
+		Checksum:          checksum,
+		ChecksumType:      checksumType,
 	}
-	
+
 	// Validate the decoded metadata
 	if err := p.ValidateMetadata(metadata); err != nil {
 		return nil, nil, err
 	}
-	
+
 	return metadata, data, nil
 }
 
@@ -427,6 +557,8 @@ func (e *MetadataProtocolError) Error() string {
 const (
 	ErrMetadataInvalid            = "KWIK_METADATA_INVALID"
 	ErrMetadataDataTooLarge       = "KWIK_METADATA_DATA_TOO_LARGE"
+	ErrDataCorrupted             = "KWIK_DATA_CORRUPTED"
+	ErrInvalidChecksum           = "KWIK_INVALID_CHECKSUM"
 	ErrMetadataFrameTooSmall      = "KWIK_METADATA_FRAME_TOO_SMALL"
 	ErrMetadataFrameCorrupted     = "KWIK_METADATA_FRAME_CORRUPTED"
 	ErrMetadataInvalidMagic       = "KWIK_METADATA_INVALID_MAGIC"

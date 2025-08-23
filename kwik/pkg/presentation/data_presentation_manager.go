@@ -2,6 +2,7 @@ package presentation
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -303,7 +304,7 @@ func (dpm *DataPresentationManagerImpl) SetStreamTimeout(streamID uint64, timeou
 	return nil
 }
 
-// ReadFromStreamWithTimeout reads data from a stream with a timeout
+// ReadFromStream reads data from a stream with a timeout
 func (dpm *DataPresentationManagerImpl) ReadFromStream(streamID uint64, buffer []byte) (int, error) {
 	timeout := dpm.config.ReadTimeout
 	startTime := time.Now()
@@ -703,24 +704,73 @@ func (dpm *DataPresentationManagerImpl) performCleanup() {
 
 // bytesToHex returns a hex string representation of the data (first 32 bytes if longer)
 func bytesToHex(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
 	hexStr := hex.EncodeToString(data)
-	if len(hexStr) > 64 { // 32 bytes = 64 hex chars
-		return hexStr[:64] + "..."
+	if len(hexStr) > 32 { // Limit to first 16 bytes (32 hex chars)
+		hexStr = hexStr[:32] + "..."
 	}
 	return hexStr
 }
 
+// isJSON checks if the given byte slice contains valid JSON data
+func isJSON(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+
+	// Quick check for JSON-like start/end characters
+	firstChar := data[0]
+	lastChar := data[len(data)-1]
+	
+	// Check for JSON object or array
+	if (firstChar == '{' && lastChar == '}') || 
+	   (firstChar == '[' && lastChar == ']') {
+		// Try to unmarshal to validate JSON structure
+		var js map[string]interface{}
+		return json.Unmarshal(data, &js) == nil
+	}
+	
+	return false
+}
+
 // WriteToStream writes data to a specific stream (internal method for aggregators)
 func (dpm *DataPresentationManagerImpl) WriteToStream(streamID uint64, data []byte, offset uint64, metadata interface{}) error {
-	startTime := time.Now()
+	_ = time.Now() // Will be used in future statistics
 
-	// Log the data being written
+	// Validate input data
+	if len(data) == 0 {
+		err := fmt.Errorf("empty data provided for stream %d at offset %d", streamID, offset)
+		if dpm.logger != nil {
+			dpm.logger.Error("DPM WriteToStream - Validation failed", 
+				"error", err.Error(),
+				"stream", streamID,
+				"offset", offset)
+		}
+		dpm.incrementErrorCount()
+		return err
+	}
+
+	// Log the data being written with more context
 	if dpm.logger != nil {
+		// Create a sample of the data (first and last 16 bytes if available)
+		sampleSize := 16
+		sample := ""
+		if len(data) <= sampleSize*2 {
+			sample = fmt.Sprintf("% x", data)
+		} else {
+			sample = fmt.Sprintf("% x...% x", 
+				data[:sampleSize], 
+				data[len(data)-sampleSize:])
+		}
+
 		dpm.logger.Debug("DPM WriteToStream - Writing data", 
 			"stream", streamID,
 			"offset", offset,
 			"data_len", len(data),
-			"data_hex", bytesToHex(data),
+			"data_sample", sample,
+			"is_json", isJSON(data),
 		)
 	}
 
@@ -730,48 +780,100 @@ func (dpm *DataPresentationManagerImpl) WriteToStream(streamID uint64, data []by
 	dpm.mutex.RUnlock()
 
 	if !running {
+		err := fmt.Errorf("data presentation manager is not running")
+		if dpm.logger != nil {
+			dpm.logger.Error("DPM WriteToStream - Manager not running",
+				"stream", streamID,
+				"offset", offset,
+				"error", err.Error())
+		}
 		dpm.incrementErrorCount()
-		return fmt.Errorf("data presentation manager is not running")
+		return err
 	}
 
 	// Get the stream buffer
 	streamBuffer, err := dpm.GetStreamBuffer(streamID)
 	if err != nil {
+		if dpm.logger != nil {
+			dpm.logger.Error("DPM WriteToStream - Failed to get stream buffer",
+				"stream", streamID,
+				"offset", offset,
+				"error", err.Error())
+		}
 		dpm.incrementErrorCount()
-		return err
+		return fmt.Errorf("failed to get stream buffer: %w", err)
 	}
 
-	// Convert metadata to the expected type
+	// Convert metadata to the expected type with validation
 	var dataMetadata *DataMetadata
 	if metadata != nil {
 		if dm, ok := metadata.(*DataMetadata); ok {
 			dataMetadata = dm
+			// Validate metadata
+			if dataMetadata.Length != uint64(len(data)) {
+				dpm.logger.Warn("DPM WriteToStream - Metadata length mismatch",
+					"stream", streamID,
+					"metadata_length", dataMetadata.Length,
+					"actual_length", len(data))
+			}
 		} else {
-			// Create default metadata if conversion fails
+			// Create default metadata with additional context
 			dataMetadata = &DataMetadata{
 				Offset:    offset,
 				Length:    uint64(len(data)),
 				Timestamp: time.Now(),
+				Properties: map[string]interface{}{
+					"metadata_type": fmt.Sprintf("%T", metadata),
+				},
 			}
+			dpm.logger.Debug("DPM WriteToStream - Created default metadata",
+				"stream", streamID,
+				"offset", offset,
+				"metadata_type", fmt.Sprintf("%T", metadata))
 		}
 	}
 
-	// Write data to the buffer
+	// Write data to the buffer with metadata if available
 	var writeErr error
+	writeStart := time.Now()
+
 	if dataMetadata != nil {
 		writeErr = streamBuffer.WriteWithMetadata(data, offset, dataMetadata)
 	} else {
 		writeErr = streamBuffer.Write(data, offset)
 	}
-	if dpm.config.EnableDebugLogging {
-		if dpm.logger != nil {
-			dpm.logger.Debug(fmt.Sprintf("DPM WriteToStream stream=%d len=%d offset=%d err=%v", streamID, len(data), offset, writeErr))
+
+	duration := time.Since(writeStart)
+
+	// Log the result of the write operation
+	if dpm.logger != nil {
+		logLevel := "Debug"
+		if writeErr != nil {
+			logLevel = "Error"
+		}
+
+		logFields := []interface{}{
+			"stream", streamID,
+			"offset", offset,
+			"data_len", len(data),
+			"duration", duration.String(),
+		}
+
+		if writeErr != nil {
+			logFields = append(logFields, "error", writeErr.Error())
+		}
+
+		switch logLevel {
+		case "Error":
+			dpm.logger.Error("DPM WriteToStream - Write failed", logFields...)
+		default:
+			dpm.logger.Debug("DPM WriteToStream - Write successful", logFields...)
 		}
 	}
 
 	// Update statistics
 	if writeErr == nil {
-		dpm.updateWriteStats(len(data), time.Since(startTime))
+		dpm.updateWriteStats(len(data), duration)
 	} else {
 		dpm.incrementErrorCount()
 	}
