@@ -931,6 +931,8 @@ func (s *ClientSession) processControlFrame(frame *control.ControlFrame) {
 		s.handleRawPacketTransmission(frame)
 	case control.ControlFrameType_HEARTBEAT:
 		s.handleHeartbeat(frame)
+	case control.ControlFrameType_HEARTBEAT_RESPONSE:
+		s.handleHeartbeatResponse(frame)
 	case control.ControlFrameType_SESSION_CLOSE:
 		s.handleSessionClose(frame)
 	case control.ControlFrameType_WINDOW_UPDATE:
@@ -1255,7 +1257,41 @@ func (s *ClientSession) handleRawPacketTransmission(frame *control.ControlFrame)
 }
 
 func (s *ClientSession) handleHeartbeat(frame *control.ControlFrame) {
+	// Client typically doesn't receive heartbeat requests, only responses
+	// But if we do receive one (e.g., from a peer client), we can log it
+	s.logger.Debug("Client received unexpected heartbeat request")
+}
 
+// handleHeartbeatResponse processes HeartbeatResponse frames from the server
+func (s *ClientSession) handleHeartbeatResponse(frame *control.ControlFrame) {
+	if frame == nil || len(frame.Payload) == 0 {
+		s.logger.Debug("Client received empty heartbeat response frame")
+		return
+	}
+
+	s.logger.Debug(fmt.Sprintf("Client received HEARTBEAT_RESPONSE frame (%d bytes)", len(frame.Payload)))
+
+	// Deserialize the binary heartbeat response frame from the payload
+	heartbeatResponseFrame := &protocol.HeartbeatResponseFrame{}
+	err := heartbeatResponseFrame.Deserialize(frame.Payload)
+	if err != nil {
+		s.logger.Debug(fmt.Sprintf("Client failed to deserialize heartbeat response frame: %v", err))
+		return
+	}
+
+	s.logger.Debug(fmt.Sprintf("Client received HEARTBEAT_RESPONSE seq=%d from path=%s", heartbeatResponseFrame.RequestSequenceID, heartbeatResponseFrame.PathID))
+
+	// Pass to the heartbeat system for processing
+	if s.controlHeartbeatSystem != nil {
+		err := s.controlHeartbeatSystem.HandleControlHeartbeatResponse(heartbeatResponseFrame)
+		if err != nil {
+			s.logger.Debug(fmt.Sprintf("Client heartbeat system failed to handle response: %v", err))
+		} else {
+			s.logger.Debug(fmt.Sprintf("Client successfully processed heartbeat response seq=%d", heartbeatResponseFrame.RequestSequenceID))
+		}
+	} else {
+		s.logger.Debug("Client heartbeat system not available for response processing")
+	}
 }
 
 func (s *ClientSession) handleSessionClose(frame *control.ControlFrame) {
@@ -3055,39 +3091,59 @@ func (cpa *ControlPlaneAdapter) SendFrame(pathID string, frame protocol.Frame) e
 		return fmt.Errorf("path ID mismatch: expected %s, got %s", cpa.primaryPath.ID(), pathID)
 	}
 
-	// Get the QUIC connection
-	conn := cpa.primaryPath.GetConnection()
-	if conn == nil {
-		return fmt.Errorf("no QUIC connection available")
-	}
-
-	// Serialize the frame
-	data, err := frame.Serialize()
+	// Get the existing control stream from the path
+	controlStream, err := cpa.primaryPath.GetControlStream()
 	if err != nil {
-		return fmt.Errorf("failed to serialize heartbeat frame: %w", err)
+		return fmt.Errorf("failed to get control stream: %w", err)
 	}
 
-	// Send directly on the control stream (stream ID 0)
-	// For heartbeats, we'll send them on a dedicated heartbeat stream or the control stream
-	// Let's create a simple approach: send on stream ID 0 (control stream)
-
-	// Get or create control stream (stream ID 0)
-	controlStream, err := conn.OpenUniStreamSync(context.Background())
+	// For heartbeat frames, we need to wrap them in a control frame format
+	// that the server's handleControlFrames can understand
+	var controlFrame *control.ControlFrame
+	
+	switch f := frame.(type) {
+	case *protocol.HeartbeatFrame:
+		// Serialize the heartbeat frame as payload
+		payload, err := f.Serialize()
+		if err != nil {
+			return fmt.Errorf("failed to serialize heartbeat frame: %w", err)
+		}
+		
+		controlFrame = &control.ControlFrame{
+			FrameId:   f.FrameID,
+			Type:      control.ControlFrameType_HEARTBEAT,
+			Payload:   payload,
+			Timestamp: uint64(f.Timestamp.UnixNano()),
+		}
+		
+	case *protocol.HeartbeatResponseFrame:
+		// Serialize the heartbeat response frame as payload
+		payload, err := f.Serialize()
+		if err != nil {
+			return fmt.Errorf("failed to serialize heartbeat response frame: %w", err)
+		}
+		
+		controlFrame = &control.ControlFrame{
+			FrameId:   f.FrameID,
+			Type:      control.ControlFrameType_HEARTBEAT_RESPONSE,
+			Payload:   payload,
+			Timestamp: uint64(f.Timestamp.UnixNano()),
+		}
+		
+	default:
+		return fmt.Errorf("unsupported frame type for heartbeat: %T", frame)
+	}
+	
+	// Serialize the control frame
+	data, err := proto.Marshal(controlFrame)
 	if err != nil {
-		return fmt.Errorf("failed to open control stream for heartbeat: %w", err)
+		return fmt.Errorf("failed to serialize control frame: %w", err)
 	}
-
-	// Write the heartbeat frame data
+	
+	// Write the control frame to the existing control stream
 	_, err = controlStream.Write(data)
 	if err != nil {
-		controlStream.Close()
 		return fmt.Errorf("failed to write heartbeat frame: %w", err)
-	}
-
-	// Close the stream after sending (heartbeats are one-shot messages)
-	err = controlStream.Close()
-	if err != nil {
-		cpa.logger.Debug("Failed to close heartbeat stream", "error", err)
 	}
 
 	cpa.logger.Debug("Heartbeat frame sent successfully", "pathID", pathID, "frameType", frame.Type())

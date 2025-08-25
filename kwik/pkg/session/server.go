@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -940,6 +939,8 @@ func (s *ServerSession) handleControlFrames() {
 			s.handlePathStatusNotification(&frame)
 		case control.ControlFrameType_HEARTBEAT:
 			s.handleHeartbeat(&frame)
+		case control.ControlFrameType_HEARTBEAT_RESPONSE:
+			s.handleHeartbeatResponse(&frame)
 		case control.ControlFrameType_DATA_CHUNK_ACK:
 			s.handleDataChunkAck(&frame)
 		case control.ControlFrameType_PACKET_ACK:
@@ -992,44 +993,60 @@ func (s *ServerSession) handleHeartbeat(frame *control.ControlFrame) {
 		return
 	}
 
-	s.logger.Debug(fmt.Sprintf("Server received HEARTBEAT frame with payload: %s", string(frame.Payload)))
+	s.logger.Debug(fmt.Sprintf("Server received HEARTBEAT frame (%d bytes)", len(frame.Payload)))
 
-	// Parse the JSON payload to extract heartbeat frame data
-	var heartbeatData struct {
-		FrameId        uint64 `json:"frameId"`
-		SequenceId     uint64 `json:"sequenceId"`
-		PathId         string `json:"pathId"`
-		PlaneType      int    `json:"planeType"`
-		Timestamp      int64  `json:"timestamp"`
-		RttMeasurement bool   `json:"rttMeasurement"`
-	}
-
-	if err := json.Unmarshal(frame.Payload, &heartbeatData); err != nil {
-		s.logger.Debug(fmt.Sprintf("Server failed to parse heartbeat JSON payload: %v", err))
+	// Deserialize the binary heartbeat frame from the payload
+	heartbeatFrame := &protocol.HeartbeatFrame{}
+	err := heartbeatFrame.Deserialize(frame.Payload)
+	if err != nil {
+		s.logger.Debug(fmt.Sprintf("Server failed to deserialize heartbeat frame: %v", err))
 		return
 	}
 
-	s.logger.Debug(fmt.Sprintf("Server received HEARTBEAT seq=%d from path=%s", heartbeatData.SequenceId, heartbeatData.PathId))
-
-	// Create a protocol.HeartbeatFrame from the parsed data
-	heartbeatFrame := &protocol.HeartbeatFrame{
-		FrameID:        heartbeatData.FrameId,
-		SequenceID:     heartbeatData.SequenceId,
-		PathID:         heartbeatData.PathId,
-		PlaneType:      protocol.HeartbeatPlaneType(heartbeatData.PlaneType),
-		StreamID:       nil, // Control plane heartbeats don't have stream ID
-		Timestamp:      time.Unix(0, heartbeatData.Timestamp),
-		RTTMeasurement: heartbeatData.RttMeasurement,
-	}
+	s.logger.Debug(fmt.Sprintf("Server received HEARTBEAT seq=%d from path=%s", heartbeatFrame.SequenceID, heartbeatFrame.PathID))
 
 	// Pass to the new heartbeat system for processing
 	if s.controlHeartbeatSystem != nil {
 		err := s.controlHeartbeatSystem.HandleControlHeartbeatRequest(heartbeatFrame)
 		if err != nil {
 			s.logger.Debug(fmt.Sprintf("Server heartbeat system failed to handle request: %v", err))
+		} else {
+			s.logger.Debug(fmt.Sprintf("Server successfully processed heartbeat seq=%d", heartbeatFrame.SequenceID))
 		}
 	} else {
 		s.logger.Debug("Server heartbeat system not available")
+	}
+}
+
+// handleHeartbeatResponse processes HeartbeatResponse frames from the client
+func (s *ServerSession) handleHeartbeatResponse(frame *control.ControlFrame) {
+	if frame == nil || len(frame.Payload) == 0 {
+		s.logger.Debug("Server received empty heartbeat response frame")
+		return
+	}
+
+	s.logger.Debug(fmt.Sprintf("Server received HEARTBEAT_RESPONSE frame (%d bytes)", len(frame.Payload)))
+
+	// Deserialize the binary heartbeat response frame from the payload
+	heartbeatResponseFrame := &protocol.HeartbeatResponseFrame{}
+	err := heartbeatResponseFrame.Deserialize(frame.Payload)
+	if err != nil {
+		s.logger.Debug(fmt.Sprintf("Server failed to deserialize heartbeat response frame: %v", err))
+		return
+	}
+
+	s.logger.Debug(fmt.Sprintf("Server received HEARTBEAT_RESPONSE seq=%d from path=%s", heartbeatResponseFrame.RequestSequenceID, heartbeatResponseFrame.PathID))
+
+	// Pass to the heartbeat system for processing (servers don't typically process responses, but we log it)
+	if s.controlHeartbeatSystem != nil {
+		err := s.controlHeartbeatSystem.HandleControlHeartbeatResponse(heartbeatResponseFrame)
+		if err != nil {
+			s.logger.Debug(fmt.Sprintf("Server heartbeat system failed to handle response: %v", err))
+		} else {
+			s.logger.Debug(fmt.Sprintf("Server successfully processed heartbeat response seq=%d", heartbeatResponseFrame.RequestSequenceID))
+		}
+	} else {
+		s.logger.Debug("Server heartbeat system not available for response processing")
 	}
 }
 
@@ -2550,7 +2567,7 @@ func (adapter *SessionControlPlaneAdapter) SendFrame(pathID string, frame protoc
 		// Create a control frame from the heartbeat response frame
 		controlFrame = &control.ControlFrame{
 			FrameId:   f.FrameID,
-			Type:      control.ControlFrameType_HEARTBEAT,
+			Type:      control.ControlFrameType_HEARTBEAT_RESPONSE,
 			Payload:   adapter.serializeHeartbeatResponseFrame(f),
 			Timestamp: uint64(f.Timestamp.UnixNano()),
 		}
@@ -2569,20 +2586,26 @@ func (adapter *SessionControlPlaneAdapter) SendFrame(pathID string, frame protoc
 	}
 }
 
-// serializeHeartbeatFrame serializes a heartbeat frame to bytes
+// serializeHeartbeatFrame serializes a heartbeat frame to bytes using binary format
 func (adapter *SessionControlPlaneAdapter) serializeHeartbeatFrame(frame *protocol.HeartbeatFrame) []byte {
-	// Simple JSON serialization for now
-	payload := fmt.Sprintf(`{"frameId":%d,"sequenceId":%d,"pathId":"%s","planeType":%d,"timestamp":%d,"rttMeasurement":%t}`,
-		frame.FrameID, frame.SequenceID, frame.PathID, frame.PlaneType, frame.Timestamp.UnixNano(), frame.RTTMeasurement)
-	return []byte(payload)
+	// Use the protocol's binary serialization
+	data, err := frame.Serialize()
+	if err != nil {
+		// Fallback to empty payload on error
+		return []byte{}
+	}
+	return data
 }
 
-// serializeHeartbeatResponseFrame serializes a heartbeat response frame to bytes
+// serializeHeartbeatResponseFrame serializes a heartbeat response frame to bytes using binary format
 func (adapter *SessionControlPlaneAdapter) serializeHeartbeatResponseFrame(frame *protocol.HeartbeatResponseFrame) []byte {
-	// Simple JSON serialization for now
-	payload := fmt.Sprintf(`{"frameId":%d,"requestSequenceId":%d,"pathId":"%s","planeType":%d,"timestamp":%d,"requestTimestamp":%d,"serverLoad":%f}`,
-		frame.FrameID, frame.RequestSequenceID, frame.PathID, frame.PlaneType, frame.Timestamp.UnixNano(), frame.RequestTimestamp.UnixNano(), frame.ServerLoad)
-	return []byte(payload)
+	// Use the protocol's binary serialization
+	data, err := frame.Serialize()
+	if err != nil {
+		// Fallback to empty payload on error
+		return []byte{}
+	}
+	return data
 }
 
 // Stub implementations for other ControlPlane interface methods (not used by heartbeat system)

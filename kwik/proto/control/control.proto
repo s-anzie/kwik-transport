@@ -32,6 +32,7 @@ enum ControlFrameType {
     PACKET_ACK = 14;     // Ack for delivered transport packet
     WINDOW_UPDATE = 15;  // Flow control window update
     BACKPRESSURE_SIGNAL = 16; // Backpressure signal
+    HEARTBEAT_RESPONSE = 17; // Response to heartbeat
 }
 
 // Add path request - server requests client to connect to secondary server

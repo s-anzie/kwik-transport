@@ -42,6 +42,7 @@ const (
 	ControlFrameType_PACKET_ACK                 ControlFrameType = 14 // Ack for delivered transport packet
 	ControlFrameType_WINDOW_UPDATE              ControlFrameType = 15 // Flow control window update
 	ControlFrameType_BACKPRESSURE_SIGNAL        ControlFrameType = 16 // Backpressure signal
+	ControlFrameType_HEARTBEAT_RESPONSE         ControlFrameType = 17 // Response to heartbeat
 )
 
 // Enum value maps for ControlFrameType.
@@ -64,6 +65,7 @@ var (
 		14: "PACKET_ACK",
 		15: "WINDOW_UPDATE",
 		16: "BACKPRESSURE_SIGNAL",
+		17: "HEARTBEAT_RESPONSE",
 	}
 	ControlFrameType_value = map[string]int32{
 		"ADD_PATH_REQUEST":           0,
@@ -83,6 +85,7 @@ var (
 		"PACKET_ACK":                 14,
 		"WINDOW_UPDATE":              15,
 		"BACKPRESSURE_SIGNAL":        16,
+		"HEARTBEAT_RESPONSE":         17,
 	}
 )
 
@@ -1816,7 +1819,7 @@ const file_proto_control_control_proto_rawDesc = "" +
 	"\x06active\x18\x02 \x01(\bR\x06active\x12\x1c\n" +
 	"\ttimestamp\x18\x03 \x01(\x04R\ttimestamp\x12\x16\n" +
 	"\x06reason\x18\x04 \x01(\tR\x06reason\x12,\n" +
-	"\x12estimated_delay_ms\x18\x05 \x01(\x04R\x10estimatedDelayMs*\xab\x03\n" +
+	"\x12estimated_delay_ms\x18\x05 \x01(\x04R\x10estimatedDelayMs*\xc3\x03\n" +
 	"\x10ControlFrameType\x12\x14\n" +
 	"\x10ADD_PATH_REQUEST\x10\x00\x12\x15\n" +
 	"\x11ADD_PATH_RESPONSE\x10\x01\x12\x17\n" +
@@ -1836,7 +1839,8 @@ const file_proto_control_control_proto_rawDesc = "" +
 	"\n" +
 	"PACKET_ACK\x10\x0e\x12\x11\n" +
 	"\rWINDOW_UPDATE\x10\x0f\x12\x17\n" +
-	"\x13BACKPRESSURE_SIGNAL\x10\x10*\xb1\x01\n" +
+	"\x13BACKPRESSURE_SIGNAL\x10\x10\x12\x16\n" +
+	"\x12HEARTBEAT_RESPONSE\x10\x11*\xb1\x01\n" +
 	"\n" +
 	"PathStatus\x12\x17\n" +
 	"\x13CONTROL_PATH_ACTIVE\x10\x00\x12\x15\n" +

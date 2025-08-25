@@ -153,10 +153,10 @@ type Logger interface {
 // DefaultControlHeartbeatConfig returns default configuration
 func DefaultControlHeartbeatConfig() *ControlHeartbeatConfig {
 	return &ControlHeartbeatConfig{
-		DefaultInterval:     30 * time.Second,
+		DefaultInterval:     30 * time.Second,  // Much more frequent to keep QUIC connection alive
 		MinInterval:         5 * time.Second,
 		MaxInterval:         120 * time.Second,
-		TimeoutMultiplier:   3.0,
+		TimeoutMultiplier:   3.0,  // Shorter timeout multiplier
 		MaxRetries:          3,
 		RTTMeasurementRatio: 0.1, // 10% of heartbeats measure RTT
 	}
