@@ -42,6 +42,9 @@ type ControlPlaneHeartbeatSystem interface {
 	// Set server mode (for response generation)
 	SetServerMode(isServer bool)
 	
+	// Set control plane (for delayed initialization)
+	SetControlPlane(controlPlane ControlPlane)
+	
 	// Shutdown the heartbeat system
 	Shutdown() error
 }
@@ -207,6 +210,15 @@ func (c *ControlPlaneHeartbeatSystemImpl) SetServerMode(isServer bool) {
 	
 	c.isServer = isServer
 	c.logger.Info("Control heartbeat system mode set", "isServer", isServer)
+}
+
+// SetControlPlane sets the control plane for delayed initialization
+func (c *ControlPlaneHeartbeatSystemImpl) SetControlPlane(controlPlane ControlPlane) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	
+	c.controlPlane = controlPlane
+	c.logger.Info("Control plane set for heartbeat system")
 }
 
 // SetHeartbeatScheduler sets the heartbeat scheduler

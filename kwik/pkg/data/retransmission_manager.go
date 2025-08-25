@@ -4,39 +4,40 @@ import (
 	"fmt"
 	"sync"
 	"time"
-	
+
 	"kwik/internal/utils"
+	"kwik/pkg/logger"
 )
 
 // RetransmissionManager manages segment retransmissions with intelligent backoff
 type RetransmissionManager interface {
 	// TrackSegment registers a segment for retransmission monitoring
 	TrackSegment(segmentID string, data []byte, pathID string, timeout time.Duration) error
-	
+
 	// AckSegment marks a segment as acknowledged and stops retransmission
 	AckSegment(segmentID string) error
-	
+
 	// SetBackoffStrategy configures the backoff strategy for retransmissions
 	SetBackoffStrategy(strategy BackoffStrategy) error
-	
+
 	// GetStats returns current retransmission statistics
 	GetStats() RetransmissionStats
-	
+
 	// Start begins the retransmission monitoring
 	Start() error
-	
+
 	// Stop stops the retransmission monitoring and cleans up resources
 	Stop() error
-	
+
 	// RegisterPath registers a path for retransmission tracking
 	RegisterPath(pathID string) error
-	
+
 	// UnregisterPath unregisters a path from retransmission tracking
 	UnregisterPath(pathID string) error
-	
+
 	// TriggerFastRetransmission triggers fast retransmission for specific packets
 	TriggerFastRetransmission(pathID string, packetIDs []uint64, originalData map[uint64][]byte) error
-	
+
 	// TriggerTimeoutRetransmission triggers timeout-based retransmission
 	TriggerTimeoutRetransmission(pathID string, packetIDs []uint64, originalData map[uint64][]byte) error
 }
@@ -45,10 +46,10 @@ type RetransmissionManager interface {
 type BackoffStrategy interface {
 	// NextDelay calculates the delay before the next retransmission attempt
 	NextDelay(attempt int, baseRTT time.Duration) time.Duration
-	
+
 	// MaxAttempts returns the maximum number of retransmission attempts
 	MaxAttempts() int
-	
+
 	// ShouldRetry determines if a segment should be retransmitted
 	ShouldRetry(attempt int, lastError error) bool
 }
@@ -67,7 +68,7 @@ type TrackedSegment struct {
 	Acknowledged bool          `json:"acknowledged"`
 	BaseRTT      time.Duration `json:"base_rtt"`
 	LastError    error         `json:"-"`
-	
+
 	// Internal fields
 	mutex        sync.RWMutex
 	retryTimer   *time.Timer
@@ -77,36 +78,36 @@ type TrackedSegment struct {
 
 // RetransmissionStats provides statistics about retransmission activity
 type RetransmissionStats struct {
-	TotalSegments       uint64        `json:"total_segments"`
-	AcknowledgedSegments uint64        `json:"acknowledged_segments"`
-	RetransmittedSegments uint64       `json:"retransmitted_segments"`
-	DroppedSegments     uint64        `json:"dropped_segments"`
-	AverageRTT          time.Duration `json:"average_rtt"`
-	AverageRetries      float64       `json:"average_retries"`
-	ActiveSegments      int           `json:"active_segments"`
-	LastUpdate          time.Time     `json:"last_update"`
+	TotalSegments         uint64        `json:"total_segments"`
+	AcknowledgedSegments  uint64        `json:"acknowledged_segments"`
+	RetransmittedSegments uint64        `json:"retransmitted_segments"`
+	DroppedSegments       uint64        `json:"dropped_segments"`
+	AverageRTT            time.Duration `json:"average_rtt"`
+	AverageRetries        float64       `json:"average_retries"`
+	ActiveSegments        int           `json:"active_segments"`
+	LastUpdate            time.Time     `json:"last_update"`
 }
 
 // RetransmissionManagerImpl implements the RetransmissionManager interface
 type RetransmissionManagerImpl struct {
 	// Configuration
 	strategy BackoffStrategy
-	logger   DataLogger
-	
+	logger   logger.Logger
+
 	// State management
 	segments    map[string]*TrackedSegment
 	segmentsMux sync.RWMutex
-	
+
 	// Statistics
-	stats     RetransmissionStats
-	statsMux  sync.RWMutex
-	
+	stats    RetransmissionStats
+	statsMux sync.RWMutex
+
 	// Control
 	running   bool
 	stopChan  chan struct{}
 	waitGroup sync.WaitGroup
 	mutex     sync.RWMutex
-	
+
 	// Callbacks
 	onRetryCallback      func(segmentID string, data []byte, pathID string) error
 	onMaxRetriesCallback func(segmentID string, data []byte, pathID string) error
@@ -118,7 +119,7 @@ type RetransmissionConfig struct {
 	CleanupInterval      time.Duration
 	MaxConcurrentRetries int
 	EnableDetailedStats  bool
-	Logger               DataLogger
+	Logger               logger.Logger
 }
 
 // DefaultRetransmissionConfig returns default configuration
@@ -137,12 +138,12 @@ func NewRetransmissionManager(config *RetransmissionConfig) *RetransmissionManag
 	if config == nil {
 		config = DefaultRetransmissionConfig()
 	}
-	
+
 	return &RetransmissionManagerImpl{
-		strategy:  NewExponentialBackoffStrategy(),
-		logger:    config.Logger,
-		segments:  make(map[string]*TrackedSegment),
-		stopChan:  make(chan struct{}),
+		strategy: NewExponentialBackoffStrategy(),
+		logger:   config.Logger,
+		segments: make(map[string]*TrackedSegment),
+		stopChan: make(chan struct{}),
 		stats: RetransmissionStats{
 			LastUpdate: time.Now(),
 		},
@@ -171,46 +172,46 @@ func (rm *RetransmissionManagerImpl) TrackSegment(segmentID string, data []byte,
 		return ErrRetransmissionManagerNotRunning
 	}
 	rm.mutex.RUnlock()
-	
+
 	segment := &TrackedSegment{
-		ID:          segmentID,
-		Data:        make([]byte, len(data)),
-		PathID:      pathID,
-		SentAt:      time.Now(),
-		Attempts:    1,
-		MaxAttempts: rm.strategy.MaxAttempts(),
-		BaseRTT:     timeout,
-		onRetry:     rm.handleRetry,
+		ID:           segmentID,
+		Data:         make([]byte, len(data)),
+		PathID:       pathID,
+		SentAt:       time.Now(),
+		Attempts:     1,
+		MaxAttempts:  rm.strategy.MaxAttempts(),
+		BaseRTT:      timeout,
+		onRetry:      rm.handleRetry,
 		onMaxRetries: rm.handleMaxRetries,
 	}
 	copy(segment.Data, data)
-	
+
 	// Calculate next retry time
 	segment.NextRetry = time.Now().Add(rm.strategy.NextDelay(1, timeout))
-	
+
 	// Set up retry timer
 	segment.retryTimer = time.AfterFunc(rm.strategy.NextDelay(1, timeout), func() {
 		rm.handleSegmentTimeout(segmentID)
 	})
-	
+
 	rm.segmentsMux.Lock()
 	rm.segments[segmentID] = segment
 	rm.segmentsMux.Unlock()
-	
+
 	// Update statistics
 	rm.updateStats(func(stats *RetransmissionStats) {
 		stats.TotalSegments++
 		stats.ActiveSegments++
 	})
-	
+
 	if rm.logger != nil {
-		rm.logger.Debug("Tracking segment for retransmission", 
-			"segmentID", segmentID, 
+		rm.logger.Debug("Tracking segment for retransmission",
+			"segmentID", segmentID,
 			"pathID", pathID,
 			"timeout", timeout,
 			"nextRetry", segment.NextRetry)
 	}
-	
+
 	return nil
 }
 
@@ -222,7 +223,7 @@ func (rm *RetransmissionManagerImpl) AckSegment(segmentID string) error {
 		rm.segmentsMux.Unlock()
 		return ErrSegmentNotFound
 	}
-	
+
 	// Mark as acknowledged and stop timer
 	segment.mutex.Lock()
 	if !segment.Acknowledged {
@@ -232,29 +233,29 @@ func (rm *RetransmissionManagerImpl) AckSegment(segmentID string) error {
 		}
 	}
 	segment.mutex.Unlock()
-	
+
 	// Remove from tracking
 	delete(rm.segments, segmentID)
 	rm.segmentsMux.Unlock()
-	
+
 	// Update statistics
 	rm.updateStats(func(stats *RetransmissionStats) {
 		stats.AcknowledgedSegments++
 		stats.ActiveSegments--
-		
+
 		// Update average retries
 		totalRetries := stats.AcknowledgedSegments + stats.DroppedSegments
 		if totalRetries > 0 {
 			stats.AverageRetries = float64(stats.RetransmittedSegments) / float64(totalRetries)
 		}
 	})
-	
+
 	if rm.logger != nil {
-		rm.logger.Debug("Segment acknowledged", 
+		rm.logger.Debug("Segment acknowledged",
 			"segmentID", segmentID,
 			"attempts", segment.Attempts)
 	}
-	
+
 	return nil
 }
 
@@ -263,10 +264,10 @@ func (rm *RetransmissionManagerImpl) SetBackoffStrategy(strategy BackoffStrategy
 	if strategy == nil {
 		return ErrInvalidBackoffStrategy
 	}
-	
+
 	rm.mutex.Lock()
 	defer rm.mutex.Unlock()
-	
+
 	rm.strategy = strategy
 	return nil
 }
@@ -275,7 +276,7 @@ func (rm *RetransmissionManagerImpl) SetBackoffStrategy(strategy BackoffStrategy
 func (rm *RetransmissionManagerImpl) GetStats() RetransmissionStats {
 	rm.statsMux.RLock()
 	defer rm.statsMux.RUnlock()
-	
+
 	// Return a copy to avoid race conditions
 	stats := rm.stats
 	stats.LastUpdate = time.Now()
@@ -286,22 +287,22 @@ func (rm *RetransmissionManagerImpl) GetStats() RetransmissionStats {
 func (rm *RetransmissionManagerImpl) Start() error {
 	rm.mutex.Lock()
 	defer rm.mutex.Unlock()
-	
+
 	if rm.running {
 		return ErrRetransmissionManagerAlreadyRunning
 	}
-	
+
 	rm.running = true
 	rm.stopChan = make(chan struct{})
-	
+
 	// Start cleanup goroutine
 	rm.waitGroup.Add(1)
 	go rm.cleanupLoop()
-	
+
 	if rm.logger != nil {
 		rm.logger.Info("Retransmission manager started")
 	}
-	
+
 	return nil
 }
 
@@ -312,14 +313,14 @@ func (rm *RetransmissionManagerImpl) Stop() error {
 		rm.mutex.Unlock()
 		return nil
 	}
-	
+
 	rm.running = false
 	close(rm.stopChan)
 	rm.mutex.Unlock()
-	
+
 	// Wait for cleanup goroutine to finish
 	rm.waitGroup.Wait()
-	
+
 	// Clean up all remaining segments
 	rm.segmentsMux.Lock()
 	for _, segment := range rm.segments {
@@ -331,11 +332,11 @@ func (rm *RetransmissionManagerImpl) Stop() error {
 	}
 	rm.segments = make(map[string]*TrackedSegment)
 	rm.segmentsMux.Unlock()
-	
+
 	if rm.logger != nil {
 		rm.logger.Info("Retransmission manager stopped")
 	}
-	
+
 	return nil
 }
 
@@ -353,7 +354,7 @@ func (rm *RetransmissionManagerImpl) UnregisterPath(pathID string) error {
 	// Clean up any segments for this path
 	rm.segmentsMux.Lock()
 	defer rm.segmentsMux.Unlock()
-	
+
 	var segmentsToRemove []string
 	for segmentID, segment := range rm.segments {
 		segment.mutex.RLock()
@@ -362,7 +363,7 @@ func (rm *RetransmissionManagerImpl) UnregisterPath(pathID string) error {
 		}
 		segment.mutex.RUnlock()
 	}
-	
+
 	for _, segmentID := range segmentsToRemove {
 		if segment := rm.segments[segmentID]; segment != nil {
 			segment.mutex.Lock()
@@ -373,13 +374,13 @@ func (rm *RetransmissionManagerImpl) UnregisterPath(pathID string) error {
 		}
 		delete(rm.segments, segmentID)
 	}
-	
+
 	if rm.logger != nil {
-		rm.logger.Info("Unregistered path from retransmission tracking", 
-			"pathID", pathID, 
+		rm.logger.Info("Unregistered path from retransmission tracking",
+			"pathID", pathID,
 			"removedSegments", len(segmentsToRemove))
 	}
-	
+
 	return nil
 }
 
@@ -391,25 +392,25 @@ func (rm *RetransmissionManagerImpl) TriggerFastRetransmission(pathID string, pa
 		if !exists {
 			data = []byte{} // Empty data as fallback
 		}
-		
+
 		// Track the retransmitted segment with shorter timeout for fast retransmission
 		fastTimeout := 50 * time.Millisecond
 		err := rm.TrackSegment(segmentID, data, pathID, fastTimeout)
 		if err != nil {
 			if rm.logger != nil {
-				rm.logger.Error("Failed to track fast retransmission segment", 
-					"segmentID", segmentID, 
+				rm.logger.Error("Failed to track fast retransmission segment",
+					"segmentID", segmentID,
 					"error", err)
 			}
 		}
 	}
-	
+
 	if rm.logger != nil {
-		rm.logger.Info("Triggered fast retransmission", 
-			"pathID", pathID, 
+		rm.logger.Info("Triggered fast retransmission",
+			"pathID", pathID,
 			"packetCount", len(packetIDs))
 	}
-	
+
 	return nil
 }
 
@@ -421,25 +422,25 @@ func (rm *RetransmissionManagerImpl) TriggerTimeoutRetransmission(pathID string,
 		if !exists {
 			data = []byte{} // Empty data as fallback
 		}
-		
+
 		// Track the retransmitted segment with longer timeout
 		timeoutDuration := 1 * time.Second
 		err := rm.TrackSegment(segmentID, data, pathID, timeoutDuration)
 		if err != nil {
 			if rm.logger != nil {
-				rm.logger.Error("Failed to track timeout retransmission segment", 
-					"segmentID", segmentID, 
+				rm.logger.Error("Failed to track timeout retransmission segment",
+					"segmentID", segmentID,
 					"error", err)
 			}
 		}
 	}
-	
+
 	if rm.logger != nil {
-		rm.logger.Info("Triggered timeout retransmission", 
-			"pathID", pathID, 
+		rm.logger.Info("Triggered timeout retransmission",
+			"pathID", pathID,
 			"packetCount", len(packetIDs))
 	}
-	
+
 	return nil
 }
 
@@ -449,20 +450,20 @@ func (rm *RetransmissionManagerImpl) handleSegmentTimeout(segmentID string) {
 	rm.segmentsMux.RLock()
 	segment, exists := rm.segments[segmentID]
 	rm.segmentsMux.RUnlock()
-	
+
 	if !exists {
 		return // Segment was already acknowledged or removed
 	}
-	
+
 	segment.mutex.Lock()
 	defer segment.mutex.Unlock()
-	
+
 	if segment.Acknowledged {
 		return // Already acknowledged
 	}
-	
+
 	segment.Attempts++
-	
+
 	// Check if we should retry
 	if segment.Attempts <= segment.MaxAttempts && rm.strategy.ShouldRetry(segment.Attempts, segment.LastError) {
 		// Schedule next retry
@@ -471,19 +472,19 @@ func (rm *RetransmissionManagerImpl) handleSegmentTimeout(segmentID string) {
 		segment.retryTimer = time.AfterFunc(delay, func() {
 			rm.handleSegmentTimeout(segmentID)
 		})
-		
+
 		// Trigger retry callback
 		if segment.onRetry != nil {
 			segment.LastError = segment.onRetry(segment)
 		}
-		
+
 		// Update statistics
 		rm.updateStats(func(stats *RetransmissionStats) {
 			stats.RetransmittedSegments++
 		})
-		
+
 		if rm.logger != nil {
-			rm.logger.Debug("Retransmitting segment", 
+			rm.logger.Debug("Retransmitting segment",
 				"segmentID", segmentID,
 				"attempt", segment.Attempts,
 				"nextRetry", segment.NextRetry)
@@ -493,20 +494,20 @@ func (rm *RetransmissionManagerImpl) handleSegmentTimeout(segmentID string) {
 		if segment.onMaxRetries != nil {
 			segment.onMaxRetries(segment)
 		}
-		
+
 		// Remove from tracking
 		rm.segmentsMux.Lock()
 		delete(rm.segments, segmentID)
 		rm.segmentsMux.Unlock()
-		
+
 		// Update statistics
 		rm.updateStats(func(stats *RetransmissionStats) {
 			stats.DroppedSegments++
 			stats.ActiveSegments--
 		})
-		
+
 		if rm.logger != nil {
-			rm.logger.Warn("Segment dropped after max retries", 
+			rm.logger.Warn("Segment dropped after max retries",
 				"segmentID", segmentID,
 				"attempts", segment.Attempts)
 		}
@@ -517,11 +518,11 @@ func (rm *RetransmissionManagerImpl) handleRetry(segment *TrackedSegment) error 
 	rm.mutex.RLock()
 	callback := rm.onRetryCallback
 	rm.mutex.RUnlock()
-	
+
 	if callback != nil {
 		return callback(segment.ID, segment.Data, segment.PathID)
 	}
-	
+
 	return nil
 }
 
@@ -529,28 +530,28 @@ func (rm *RetransmissionManagerImpl) handleMaxRetries(segment *TrackedSegment) e
 	rm.mutex.RLock()
 	callback := rm.onMaxRetriesCallback
 	rm.mutex.RUnlock()
-	
+
 	if callback != nil {
 		return callback(segment.ID, segment.Data, segment.PathID)
 	}
-	
+
 	return nil
 }
 
 func (rm *RetransmissionManagerImpl) updateStats(updater func(*RetransmissionStats)) {
 	rm.statsMux.Lock()
 	defer rm.statsMux.Unlock()
-	
+
 	updater(&rm.stats)
 	rm.stats.LastUpdate = time.Now()
 }
 
 func (rm *RetransmissionManagerImpl) cleanupLoop() {
 	defer rm.waitGroup.Done()
-	
+
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ticker.C:
@@ -563,22 +564,22 @@ func (rm *RetransmissionManagerImpl) cleanupLoop() {
 
 func (rm *RetransmissionManagerImpl) performCleanup() {
 	now := time.Now()
-	
+
 	rm.segmentsMux.Lock()
 	defer rm.segmentsMux.Unlock()
-	
+
 	for segmentID, segment := range rm.segments {
 		segment.mutex.RLock()
 		acknowledged := segment.Acknowledged
 		stale := now.Sub(segment.SentAt) > 5*time.Minute
 		segment.mutex.RUnlock()
-		
+
 		if acknowledged || stale {
 			if segment.retryTimer != nil {
 				segment.retryTimer.Stop()
 			}
 			delete(rm.segments, segmentID)
-			
+
 			if stale && rm.logger != nil {
 				rm.logger.Warn("Cleaning up stale segment", "segmentID", segmentID)
 			}
@@ -588,8 +589,8 @@ func (rm *RetransmissionManagerImpl) performCleanup() {
 
 // Error definitions
 var (
-	ErrRetransmissionManagerNotRunning      = utils.NewKwikError(utils.ErrInvalidState, "retransmission manager is not running", nil)
-	ErrRetransmissionManagerAlreadyRunning  = utils.NewKwikError(utils.ErrInvalidState, "retransmission manager is already running", nil)
-	ErrSegmentNotFound                      = utils.NewKwikError(utils.ErrInvalidFrame, "segment not found", nil)
-	ErrInvalidBackoffStrategy               = utils.NewKwikError(utils.ErrInvalidFrame, "invalid backoff strategy", nil)
+	ErrRetransmissionManagerNotRunning     = utils.NewKwikError(utils.ErrInvalidState, "retransmission manager is not running", nil)
+	ErrRetransmissionManagerAlreadyRunning = utils.NewKwikError(utils.ErrInvalidState, "retransmission manager is already running", nil)
+	ErrSegmentNotFound                     = utils.NewKwikError(utils.ErrInvalidFrame, "segment not found", nil)
+	ErrInvalidBackoffStrategy              = utils.NewKwikError(utils.ErrInvalidFrame, "invalid backoff strategy", nil)
 )

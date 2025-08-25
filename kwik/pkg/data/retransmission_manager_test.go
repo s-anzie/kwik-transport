@@ -2,57 +2,14 @@ package data
 
 import (
 	"fmt"
+	"kwik/pkg/logger"
 	"sync"
 	"testing"
 	"time"
 )
 
-// Mock logger for testing
-type mockLogger struct {
-	logs []string
-	mu   sync.Mutex
-}
-
-func (m *mockLogger) Debug(msg string, keysAndValues ...interface{}) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.logs = append(m.logs, "DEBUG: "+msg)
-}
-
-func (m *mockLogger) Info(msg string, keysAndValues ...interface{}) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.logs = append(m.logs, "INFO: "+msg)
-}
-
-func (m *mockLogger) Warn(msg string, keysAndValues ...interface{}) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.logs = append(m.logs, "WARN: "+msg)
-}
-
-func (m *mockLogger) Error(msg string, keysAndValues ...interface{}) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.logs = append(m.logs, "ERROR: "+msg)
-}
-
-func (m *mockLogger) Critical(msg string, keysAndValues ...interface{}) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.logs = append(m.logs, "CRITICAL: "+msg)
-}
-
-func (m *mockLogger) getLogs() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	result := make([]string, len(m.logs))
-	copy(result, m.logs)
-	return result
-}
-
 func TestRetransmissionManager_Basic(t *testing.T) {
-	logger := &mockLogger{}
+	logger := &logger.MockLogger{}
 	config := &RetransmissionConfig{
 		DefaultTimeout:       100 * time.Millisecond,
 		CleanupInterval:      1 * time.Second,
@@ -89,7 +46,7 @@ func TestRetransmissionManager_Basic(t *testing.T) {
 }
 
 func TestRetransmissionManager_TrackSegment(t *testing.T) {
-	logger := &mockLogger{}
+	logger := &logger.MockLogger{}
 	rm := NewRetransmissionManager(DefaultRetransmissionConfig())
 	rm.logger = logger
 
@@ -121,7 +78,7 @@ func TestRetransmissionManager_TrackSegment(t *testing.T) {
 }
 
 func TestRetransmissionManager_AckSegment(t *testing.T) {
-	logger := &mockLogger{}
+	logger := &logger.MockLogger{}
 	rm := NewRetransmissionManager(DefaultRetransmissionConfig())
 	rm.logger = logger
 
@@ -165,7 +122,7 @@ func TestRetransmissionManager_AckSegment(t *testing.T) {
 }
 
 func TestRetransmissionManager_Retransmission(t *testing.T) {
-	logger := &mockLogger{}
+	logger := &logger.MockLogger{}
 	rm := NewRetransmissionManager(DefaultRetransmissionConfig())
 	rm.logger = logger
 
@@ -329,7 +286,7 @@ func TestAdaptiveBackoffStrategy(t *testing.T) {
 		strategy.NextDelay(1, rtt1)
 	}
 	delay1 := strategy.NextDelay(1, rtt1)
-	
+
 	for i := 0; i < 5; i++ {
 		strategy.NextDelay(1, rtt3)
 	}
@@ -354,7 +311,7 @@ func TestAdaptiveBackoffStrategy(t *testing.T) {
 }
 
 func TestRetransmissionManager_Concurrent(t *testing.T) {
-	logger := &mockLogger{}
+	logger := &logger.MockLogger{}
 	rm := NewRetransmissionManager(DefaultRetransmissionConfig())
 	rm.logger = logger
 

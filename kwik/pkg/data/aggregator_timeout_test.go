@@ -1,6 +1,7 @@
 package data
 
 import (
+	"kwik/pkg/logger"
 	"testing"
 	"time"
 )
@@ -107,7 +108,7 @@ func TestReorderBuffer_ForceFlush(t *testing.T) {
 	// Check that frames are sorted by sequence number
 	for i := 1; i < len(flushedFrames); i++ {
 		if flushedFrames[i-1].SequenceNum > flushedFrames[i].SequenceNum {
-			t.Errorf("Flushed frames not sorted: %d > %d", 
+			t.Errorf("Flushed frames not sorted: %d > %d",
 				flushedFrames[i-1].SequenceNum, flushedFrames[i].SequenceNum)
 		}
 	}
@@ -124,7 +125,7 @@ func TestReorderBuffer_FlushOlderThan(t *testing.T) {
 	defer rb.Close()
 
 	now := time.Now()
-	
+
 	// Add frames with different timestamps
 	// Frame 0: current time (should not be flushed)
 	// Frame 1: 60ms ago (should be flushed)
@@ -136,7 +137,7 @@ func TestReorderBuffer_FlushOlderThan(t *testing.T) {
 		} else {
 			timestamp = now.Add(-time.Duration(i*30+30) * time.Millisecond) // 60ms, 90ms ago
 		}
-		
+
 		frame := &ReorderFrame{
 			Data:        []byte("test data"),
 			Offset:      uint64(i * 10),
@@ -154,7 +155,7 @@ func TestReorderBuffer_FlushOlderThan(t *testing.T) {
 
 	// Flush frames older than 50ms
 	flushedFrames := rb.FlushFramesOlderThan(50 * time.Millisecond)
-	
+
 	// Should flush frames 1 and 2 (older than 50ms)
 	if len(flushedFrames) != 2 {
 		t.Errorf("Expected 2 flushed frames, got %d", len(flushedFrames))
@@ -208,7 +209,7 @@ func TestReorderBuffer_Stats(t *testing.T) {
 }
 
 func TestDataAggregator_FlushStreamBuffer(t *testing.T) {
-	logger := &MockLogger{}
+	logger := &logger.MockLogger{}
 	da := NewDataAggregator(logger).(*DataAggregatorImpl)
 
 	streamID := uint64(1)
@@ -267,7 +268,7 @@ func TestDataAggregator_FlushStreamBuffer(t *testing.T) {
 }
 
 func TestDataAggregator_MemoryPressure(t *testing.T) {
-	logger := &MockLogger{}
+	logger := &logger.MockLogger{}
 	da := NewDataAggregator(logger).(*DataAggregatorImpl)
 
 	streamID := uint64(1)
@@ -317,7 +318,7 @@ func TestDataAggregator_MemoryPressure(t *testing.T) {
 }
 
 func TestDataAggregator_CleanupExpiredStreams(t *testing.T) {
-	logger := &MockLogger{}
+	logger := &logger.MockLogger{}
 	da := NewDataAggregator(logger).(*DataAggregatorImpl)
 
 	// Create multiple streams
@@ -367,7 +368,7 @@ func TestDataAggregator_CleanupExpiredStreams(t *testing.T) {
 }
 
 func TestDataAggregator_UpdateStreamTimeout(t *testing.T) {
-	logger := &MockLogger{}
+	logger := &logger.MockLogger{}
 	da := NewDataAggregator(logger).(*DataAggregatorImpl)
 
 	streamID := uint64(1)
@@ -397,7 +398,7 @@ func TestDataAggregator_UpdateStreamTimeout(t *testing.T) {
 func TestReorderBuffer_TimeoutCallback(t *testing.T) {
 	timeout := 30 * time.Millisecond
 	var callbackFrames []*ReorderFrame
-	
+
 	callback := func(frames []*ReorderFrame) {
 		callbackFrames = append(callbackFrames, frames...)
 	}

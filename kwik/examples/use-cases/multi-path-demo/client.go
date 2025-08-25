@@ -12,6 +12,7 @@ import (
 
 	"kwik/examples/use-cases/multi-path-demo/types"
 	kwik "kwik/pkg"
+	"kwik/pkg/logger"
 )
 
 func main() {
@@ -22,16 +23,16 @@ func main() {
 	config := kwik.DefaultConfig()
 
 	// Activer les logs de débogage
-	config.LogLevel = kwik.LogLevelDebug
+	config.LogLevel = logger.LogLevelDebug
 	config.Logging = &kwik.LogConfig{
-		GlobalLevel: kwik.LogLevelDebug,
-		Components: map[string]kwik.LogLevel{
-			"SESSION":   kwik.LogLevelDebug,
-			"CONTROL":   kwik.LogLevelDebug,
-			"TRANSPORT": kwik.LogLevelDebug,
-			"DATA":      kwik.LogLevelDebug,
-			"STREAM":    kwik.LogLevelDebug,
-			"DPM":       kwik.LogLevelDebug,
+		GlobalLevel: logger.LogLevelDebug,
+		Components: map[string]logger.LogLevel{
+			"SESSION":   logger.LogLevelDebug,
+			"CONTROL":   logger.LogLevelDebug,
+			"TRANSPORT": logger.LogLevelDebug,
+			"DATA":      logger.LogLevelDebug,
+			"STREAM":    logger.LogLevelDebug,
+			"DPM":       logger.LogLevelDebug,
 		},
 	}
 

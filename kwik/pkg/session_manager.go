@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"kwik/pkg/logger"
 	"kwik/pkg/session"
 )
 
@@ -18,7 +19,7 @@ type SessionManager struct {
 
 	// Configuration
 	config *Config
-	logger Logger
+	logger logger.Logger
 
 	// Synchronization
 	mutex sync.RWMutex
@@ -28,7 +29,7 @@ type SessionManager struct {
 }
 
 // NewSessionManager creates a new session manager
-func NewSessionManager(config *Config, logger Logger) *SessionManager {
+func NewSessionManager(config *Config, logger logger.Logger) *SessionManager {
 	return &SessionManager{
 		clientSessions: make(map[string]*session.ClientSession),
 		serverSessions: make(map[string]*session.ServerSession),
@@ -99,7 +100,7 @@ func (sm *SessionManager) Stop() error {
 }
 
 // CreateClientSession creates a new client session
-func (sm *SessionManager) CreateClientSession(ctx context.Context, address string, config *session.SessionConfig) (*session.ClientSession, error) {
+func (sm *SessionManager) Dial(ctx context.Context, address string, config *session.SessionConfig) (*session.ClientSession, error) {
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
 
@@ -121,15 +122,16 @@ func (sm *SessionManager) CreateClientSession(ctx context.Context, address strin
 	}
 
 	// Use session.Dial which handles everything properly
-	dialedSession, err := session.Dial(ctx, address, sessionConfigForDial)
+	sm.logger.Info("[INVESTIGATION] SM Dialing new session", "address", address)
+	sess, err := session.Dial(ctx, address, sessionConfigForDial)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial session: %w", err)
 	}
-
+	sm.logger.Info("[INVESTIGATION] SM Session dialed successfully", "address", address)
 	// Convert to ClientSession (should be safe since Dial returns ClientSession)
-	clientSession, ok := dialedSession.(*session.ClientSession)
+	clientSession, ok := sess.(*session.ClientSession)
 	if !ok {
-		dialedSession.Close()
+		sess.Close()
 		return nil, fmt.Errorf("session.Dial returned unexpected session type")
 	}
 

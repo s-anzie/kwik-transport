@@ -7,11 +7,12 @@ import (
 	"sync"
 	"time"
 
-	"google.golang.org/protobuf/proto"
 	"kwik/internal/utils"
+	"kwik/pkg/logger"
 	"kwik/proto/data"
-)
 
+	"google.golang.org/protobuf/proto"
+)
 
 func (d *DefaultDataLogger) Critical(msg string, keysAndValues ...interface{}) {
 	log.Printf("[CRITICAL] %s", msg)
@@ -134,7 +135,7 @@ func NewDataPlane(config *DataPlaneConfig) *DataPlaneImpl {
 
 	// Initialize components
 	if config.AggregationEnabled {
-		defaultLogger := &DefaultDataLogger{}
+		defaultLogger := logger.NewEnhancedLogger(logger.LogLevelDebug, "[Data Plane] ")
 		dp.aggregator = NewDataAggregator(defaultLogger)
 	}
 
@@ -1085,6 +1086,16 @@ func (dp *DataPlaneImpl) updateRawPacketReceiveStats(pathID string, dataSize int
 		pathStats.BytesReceived += uint64(dataSize)
 		pathStats.PacketsReceived++
 	}
+}
+
+func (dp *DataPlaneImpl) SendFrame(pathID string, frame interface{}) error {
+	//TODO: Properly implement this function to send the given frame to the right path ID
+	return nil
+}
+
+func (dp *DataPlaneImpl) ReceiveFrame(pathID string) (frame interface{}, err error) {
+	//TODO: Properly implement this function to receive frames into the given path ID
+	return nil, nil
 }
 
 // calculateDataChecksum calculates a simple checksum for data integrity verification

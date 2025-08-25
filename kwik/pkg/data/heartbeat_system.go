@@ -299,14 +299,26 @@ func (d *DataPlaneHeartbeatSystemImpl) SendDataHeartbeat(streamID uint64, pathID
 
 	// Create heartbeat frame
 	frameID := d.generateFrameID()
+	heartbeatFrame := &protocol.HeartbeatFrame{
+		FrameID:        frameID,
+		SequenceID:     sequenceID,
+		PathID:         pathID,
+		PlaneType:      protocol.HeartbeatPlaneData,
+		StreamID:       &streamID,
+		Timestamp:      time.Now(),
+		RTTMeasurement: false, // Data plane heartbeats don't typically measure RTT
+	}
 
-	// Send frame via data plane (simplified - would need actual data plane integration)
-	// For now, just log that we would send it
-	d.logger.Debug("Data heartbeat would be sent",
-		"streamID", streamID,
-		"pathID", pathID,
-		"sequenceID", sequenceID,
-		"frameID", frameID)
+	// Send frame via data plane
+	err := d.dataPlane.SendFrame(pathID, heartbeatFrame)
+	if err != nil {
+		d.logger.Error("Failed to send data heartbeat",
+			"streamID", streamID,
+			"pathID", pathID,
+			"sequenceID", sequenceID,
+			"error", err)
+		return fmt.Errorf("failed to send data heartbeat: %w", err)
+	}
 
 	// Track pending request
 	now := time.Now()
@@ -505,9 +517,13 @@ func (d *DataPlaneHeartbeatSystemImpl) sendDataHeartbeatResponse(request *protoc
 		ServerLoad:        0.5, // Simplified server load
 	}
 
-	// Send response via data plane (simplified - would need actual data plane integration)
-	// For now, just log that we would send it
-	d.logger.Debug("Data heartbeat response would be sent",
+	// Send response via data plane
+	err := d.dataPlane.SendFrame(request.PathID, responseFrame)
+	if err != nil {
+		return fmt.Errorf("failed to send data heartbeat response: %w", err)
+	}
+
+	d.logger.Debug("Data heartbeat response sent",
 		"streamID", *request.StreamID,
 		"pathID", request.PathID,
 		"requestSequenceID", request.SequenceID,
@@ -526,7 +542,7 @@ func (d *DataPlaneHeartbeatSystemImpl) sendDataHeartbeatResponse(request *protoc
 			state.mutex.Unlock()
 		}
 	}
-	//TODO: Implementent the real working importantly
+
 	return nil
 }
 

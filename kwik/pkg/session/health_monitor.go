@@ -36,6 +36,15 @@ type ConnectionHealthMonitor interface {
 	
 	// GetHealthStats returns overall health monitoring statistics
 	GetHealthStats() HealthMonitorStats
+	
+	// UpdateHealthMetricsFromHeartbeat updates health metrics from heartbeat data
+	UpdateHealthMetricsFromHeartbeat(sessionID string, pathID string, heartbeatMetrics *HeartbeatHealthMetrics) error
+	
+	// RegisterHeartbeatFailureHandler registers a handler for heartbeat failure events
+	RegisterHeartbeatFailureHandler(handler HeartbeatFailureHandler) error
+	
+	// GetHeartbeatIntegratedHealth returns health status enhanced with heartbeat data
+	GetHeartbeatIntegratedHealth(sessionID string, pathID string) *HeartbeatIntegratedPathHealth
 }
 
 // PathHealth represents the current health status of a connection path
@@ -165,6 +174,88 @@ type SessionHealthStats struct {
 // FailoverCallback is called when a path failover occurs
 type FailoverCallback func(sessionID string, fromPath string, toPath string, reason FailoverReason)
 
+// HeartbeatFailureHandler is called when heartbeat failures are detected
+type HeartbeatFailureHandler func(sessionID string, pathID string, failure *HeartbeatFailureInfo)
+
+// HeartbeatFailureInfo contains information about a heartbeat failure
+type HeartbeatFailureInfo struct {
+	FailureType     string        `json:"failure_type"`
+	FailureCount    int           `json:"failure_count"`
+	LastSuccess     time.Time     `json:"last_success"`
+	FailureTime     time.Time     `json:"failure_time"`
+	RTTDegradation  bool          `json:"rtt_degradation"`
+	ConsecutiveFails int          `json:"consecutive_fails"`
+	ErrorMessage    string        `json:"error_message"`
+}
+
+// HeartbeatIntegratedPathHealth extends PathHealth with heartbeat-specific data
+type HeartbeatIntegratedPathHealth struct {
+	*PathHealth
+	
+	// Heartbeat-specific metrics
+	HeartbeatHealth         float64                    `json:"heartbeat_health"`          // 0.0 to 1.0
+	ControlPlaneHeartbeat   *ControlPlaneHeartbeatInfo `json:"control_plane_heartbeat"`
+	DataPlaneHeartbeat      *DataPlaneHeartbeatInfo    `json:"data_plane_heartbeat"`
+	HeartbeatTrend          HeartbeatHealthTrend       `json:"heartbeat_trend"`
+	LastHeartbeatUpdate     time.Time                  `json:"last_heartbeat_update"`
+}
+
+// ControlPlaneHeartbeatInfo contains control plane heartbeat information
+type ControlPlaneHeartbeatInfo struct {
+	Active              bool          `json:"active"`
+	CurrentInterval     time.Duration `json:"current_interval"`
+	SuccessRate         float64       `json:"success_rate"`
+	AverageRTT          time.Duration `json:"average_rtt"`
+	ConsecutiveFailures int           `json:"consecutive_failures"`
+	LastSent            time.Time     `json:"last_sent"`
+	LastReceived        time.Time     `json:"last_received"`
+}
+
+// DataPlaneHeartbeatInfo contains data plane heartbeat information
+type DataPlaneHeartbeatInfo struct {
+	ActiveStreams       int                              `json:"active_streams"`
+	AverageSuccessRate  float64                          `json:"average_success_rate"`
+	StreamHeartbeats    map[uint64]*StreamHeartbeatInfo  `json:"stream_heartbeats"`
+	LastActivity        time.Time                        `json:"last_activity"`
+}
+
+// StreamHeartbeatInfo contains heartbeat information for a specific stream
+type StreamHeartbeatInfo struct {
+	StreamID            uint64        `json:"stream_id"`
+	Active              bool          `json:"active"`
+	SuccessRate         float64       `json:"success_rate"`
+	ConsecutiveFailures int           `json:"consecutive_failures"`
+	LastSent            time.Time     `json:"last_sent"`
+	LastReceived        time.Time     `json:"last_received"`
+	CurrentInterval     time.Duration `json:"current_interval"`
+}
+
+// HeartbeatHealthTrend indicates the trend in heartbeat health
+type HeartbeatHealthTrend int
+
+const (
+	HeartbeatHealthTrendStable HeartbeatHealthTrend = iota
+	HeartbeatHealthTrendImproving
+	HeartbeatHealthTrendDegrading
+	HeartbeatHealthTrendCritical
+)
+
+// String returns string representation of HeartbeatHealthTrend
+func (t HeartbeatHealthTrend) String() string {
+	switch t {
+	case HeartbeatHealthTrendStable:
+		return "STABLE"
+	case HeartbeatHealthTrendImproving:
+		return "IMPROVING"
+	case HeartbeatHealthTrendDegrading:
+		return "DEGRADING"
+	case HeartbeatHealthTrendCritical:
+		return "CRITICAL"
+	default:
+		return "UNKNOWN"
+	}
+}
+
 // FailoverReason is defined in error_recovery.go
 
 // DefaultHealthThresholds returns sensible default health monitoring thresholds
@@ -203,6 +294,11 @@ type ConnectionHealthMonitorImpl struct {
 	// Configuration
 	thresholds HealthThresholds
 	callbacks  []FailoverCallback
+	
+	// Heartbeat integration
+	heartbeatFailureHandlers []HeartbeatFailureHandler
+	heartbeatMetrics         map[string]*HeartbeatHealthMetrics // pathID -> metrics
+	heartbeatMutex           sync.RWMutex
 	
 	// State management
 	sessions map[string]*sessionHealthState
@@ -244,9 +340,11 @@ func NewConnectionHealthMonitor(ctx context.Context) *ConnectionHealthMonitorImp
 	monitorCtx, cancel := context.WithCancel(ctx)
 	
 	monitor := &ConnectionHealthMonitorImpl{
-		thresholds: DefaultHealthThresholds(),
-		callbacks:  make([]FailoverCallback, 0),
-		sessions:   make(map[string]*sessionHealthState),
+		thresholds:               DefaultHealthThresholds(),
+		callbacks:                make([]FailoverCallback, 0),
+		heartbeatFailureHandlers: make([]HeartbeatFailureHandler, 0),
+		heartbeatMetrics:         make(map[string]*HeartbeatHealthMetrics),
+		sessions:                 make(map[string]*sessionHealthState),
 		stats: HealthMonitorStats{
 			SessionStats: make(map[string]*SessionHealthStats),
 			LastUpdate:   time.Now(),
@@ -965,5 +1063,238 @@ func (hm *ConnectionHealthMonitorImpl) calculateThroughput(pathHealth *PathHealt
 		if len(metrics.ThroughputHistory) > 100 {
 			metrics.ThroughputHistory = metrics.ThroughputHistory[1:]
 		}
+	}
+}
+
+// UpdateHealthMetricsFromHeartbeat updates health metrics from heartbeat data
+func (hm *ConnectionHealthMonitorImpl) UpdateHealthMetricsFromHeartbeat(sessionID string, pathID string, heartbeatMetrics *HeartbeatHealthMetrics) error {
+	if heartbeatMetrics == nil {
+		return fmt.Errorf("heartbeat metrics cannot be nil")
+	}
+	
+	// Store heartbeat metrics
+	hm.heartbeatMutex.Lock()
+	heartbeatMetrics.LastUpdate = time.Now()
+	hm.heartbeatMetrics[pathID] = heartbeatMetrics
+	hm.heartbeatMutex.Unlock()
+	
+	// Update path metrics based on heartbeat data
+	pathUpdate := PathMetricsUpdate{
+		Activity: true,
+	}
+	
+	// Add control plane heartbeat data
+	if heartbeatMetrics.ControlHeartbeatStats != nil {
+		if heartbeatMetrics.ControlHeartbeatStats.AverageRTT > 0 {
+			pathUpdate.RTT = &heartbeatMetrics.ControlHeartbeatStats.AverageRTT
+		}
+		
+		if heartbeatMetrics.ControlHeartbeatStats.HeartbeatsSent > 0 {
+			pathUpdate.HeartbeatSent = true
+		}
+		
+		if heartbeatMetrics.ControlHeartbeatStats.ResponsesReceived > 0 {
+			pathUpdate.HeartbeatReceived = true
+		}
+	}
+	
+	// Update path metrics
+	err := hm.UpdatePathMetrics(sessionID, pathID, pathUpdate)
+	if err != nil {
+		return fmt.Errorf("failed to update path metrics: %w", err)
+	}
+	
+	// Check for heartbeat failures and trigger handlers
+	hm.checkHeartbeatFailures(sessionID, pathID, heartbeatMetrics)
+	
+	return nil
+}
+
+// RegisterHeartbeatFailureHandler registers a handler for heartbeat failure events
+func (hm *ConnectionHealthMonitorImpl) RegisterHeartbeatFailureHandler(handler HeartbeatFailureHandler) error {
+	if handler == nil {
+		return fmt.Errorf("heartbeat failure handler cannot be nil")
+	}
+	
+	hm.heartbeatMutex.Lock()
+	defer hm.heartbeatMutex.Unlock()
+	
+	hm.heartbeatFailureHandlers = append(hm.heartbeatFailureHandlers, handler)
+	return nil
+}
+
+// GetHeartbeatIntegratedHealth returns health status enhanced with heartbeat data
+func (hm *ConnectionHealthMonitorImpl) GetHeartbeatIntegratedHealth(sessionID string, pathID string) *HeartbeatIntegratedPathHealth {
+	// Get base path health
+	pathHealth := hm.GetPathHealth(sessionID, pathID)
+	if pathHealth == nil {
+		return nil
+	}
+	
+	// Get heartbeat metrics
+	hm.heartbeatMutex.RLock()
+	heartbeatMetrics, exists := hm.heartbeatMetrics[pathID]
+	hm.heartbeatMutex.RUnlock()
+	
+	// Create integrated health
+	integrated := &HeartbeatIntegratedPathHealth{
+		PathHealth:          pathHealth,
+		HeartbeatHealth:     1.0, // Default to healthy
+		HeartbeatTrend:      HeartbeatHealthTrendStable,
+		LastHeartbeatUpdate: time.Now(),
+	}
+	
+	if exists && heartbeatMetrics != nil {
+		// Calculate heartbeat health score
+		integrated.HeartbeatHealth = hm.calculateHeartbeatHealthScore(heartbeatMetrics)
+		integrated.HeartbeatTrend = hm.calculateHeartbeatTrend(heartbeatMetrics)
+		integrated.LastHeartbeatUpdate = heartbeatMetrics.LastUpdate
+		
+		// Add control plane heartbeat info
+		if heartbeatMetrics.ControlHeartbeatStats != nil {
+			integrated.ControlPlaneHeartbeat = &ControlPlaneHeartbeatInfo{
+				Active:              true,
+				CurrentInterval:     heartbeatMetrics.ControlHeartbeatStats.CurrentInterval,
+				SuccessRate:         heartbeatMetrics.ControlHeartbeatStats.SuccessRate,
+				AverageRTT:          heartbeatMetrics.ControlHeartbeatStats.AverageRTT,
+				ConsecutiveFailures: heartbeatMetrics.ControlHeartbeatStats.ConsecutiveFailures,
+				LastSent:            heartbeatMetrics.ControlHeartbeatStats.LastHeartbeatSent,
+				LastReceived:        heartbeatMetrics.ControlHeartbeatStats.LastResponseReceived,
+			}
+		}
+		
+		// Add data plane heartbeat info
+		if heartbeatMetrics.DataHeartbeatStats != nil {
+			streamHeartbeats := make(map[uint64]*StreamHeartbeatInfo)
+			for streamID, streamMetrics := range heartbeatMetrics.DataHeartbeatStats.StreamMetrics {
+				streamHeartbeats[streamID] = &StreamHeartbeatInfo{
+					StreamID:            streamMetrics.StreamID,
+					Active:              streamMetrics.StreamActive,
+					SuccessRate:         streamMetrics.SuccessRate,
+					ConsecutiveFailures: streamMetrics.ConsecutiveFailures,
+					LastSent:            streamMetrics.LastHeartbeatSent,
+					LastReceived:        streamMetrics.LastResponseReceived,
+					CurrentInterval:     streamMetrics.CurrentInterval,
+				}
+			}
+			
+			integrated.DataPlaneHeartbeat = &DataPlaneHeartbeatInfo{
+				ActiveStreams:      heartbeatMetrics.DataHeartbeatStats.ActiveStreams,
+				AverageSuccessRate: heartbeatMetrics.DataHeartbeatStats.AverageSuccessRate,
+				StreamHeartbeats:   streamHeartbeats,
+			}
+		}
+	}
+	
+	return integrated
+}
+
+// checkHeartbeatFailures checks for heartbeat failures and triggers handlers
+func (hm *ConnectionHealthMonitorImpl) checkHeartbeatFailures(sessionID string, pathID string, heartbeatMetrics *HeartbeatHealthMetrics) {
+	var failures []*HeartbeatFailureInfo
+	
+	// Check control plane failures
+	if heartbeatMetrics.ControlHeartbeatStats != nil {
+		stats := heartbeatMetrics.ControlHeartbeatStats
+		if stats.ConsecutiveFailures >= hm.thresholds.HeartbeatFailureThreshold {
+			failure := &HeartbeatFailureInfo{
+				FailureType:      "CONTROL_PLANE_HEARTBEAT",
+				FailureCount:     stats.ConsecutiveFailures,
+				LastSuccess:      stats.LastResponseReceived,
+				FailureTime:      time.Now(),
+				RTTDegradation:   stats.AverageRTT > hm.thresholds.RTTCriticalThreshold,
+				ConsecutiveFails: stats.ConsecutiveFailures,
+				ErrorMessage:     fmt.Sprintf("Control plane heartbeat failed %d times consecutively", stats.ConsecutiveFailures),
+			}
+			failures = append(failures, failure)
+		}
+	}
+	
+	// Check data plane failures
+	if heartbeatMetrics.DataHeartbeatStats != nil {
+		for streamID, streamStats := range heartbeatMetrics.DataHeartbeatStats.StreamMetrics {
+			if streamStats.ConsecutiveFailures >= hm.thresholds.HeartbeatFailureThreshold {
+				failure := &HeartbeatFailureInfo{
+					FailureType:      fmt.Sprintf("DATA_PLANE_HEARTBEAT_STREAM_%d", streamID),
+					FailureCount:     streamStats.ConsecutiveFailures,
+					LastSuccess:      streamStats.LastResponseReceived,
+					FailureTime:      time.Now(),
+					RTTDegradation:   false, // Data plane doesn't typically measure RTT
+					ConsecutiveFails: streamStats.ConsecutiveFailures,
+					ErrorMessage:     fmt.Sprintf("Data plane heartbeat failed %d times consecutively for stream %d", streamStats.ConsecutiveFailures, streamID),
+				}
+				failures = append(failures, failure)
+			}
+		}
+	}
+	
+	// Trigger failure handlers
+	hm.heartbeatMutex.RLock()
+	handlers := make([]HeartbeatFailureHandler, len(hm.heartbeatFailureHandlers))
+	copy(handlers, hm.heartbeatFailureHandlers)
+	hm.heartbeatMutex.RUnlock()
+	
+	for _, failure := range failures {
+		for _, handler := range handlers {
+			go handler(sessionID, pathID, failure)
+		}
+	}
+}
+
+// calculateHeartbeatHealthScore calculates a health score based on heartbeat metrics
+func (hm *ConnectionHealthMonitorImpl) calculateHeartbeatHealthScore(metrics *HeartbeatHealthMetrics) float64 {
+	score := 1.0
+	
+	// Factor in control plane health
+	if metrics.ControlPlaneHealth < 1.0 {
+		score *= metrics.ControlPlaneHealth
+	}
+	
+	// Factor in data plane health
+	if metrics.DataPlaneHealth < 1.0 {
+		score *= metrics.DataPlaneHealth
+	}
+	
+	// Factor in overall health
+	if metrics.OverallHealth < 1.0 {
+		score *= metrics.OverallHealth
+	}
+	
+	// Factor in failure rate
+	if metrics.FailureRate > 0 {
+		score *= (1.0 - metrics.FailureRate)
+	}
+	
+	// Ensure score is within bounds
+	if score < 0.0 {
+		score = 0.0
+	} else if score > 1.0 {
+		score = 1.0
+	}
+	
+	return score
+}
+
+// calculateHeartbeatTrend calculates the trend in heartbeat health
+func (hm *ConnectionHealthMonitorImpl) calculateHeartbeatTrend(metrics *HeartbeatHealthMetrics) HeartbeatHealthTrend {
+	// Simple trend calculation based on RTT trend and failure rate
+	switch metrics.RTTTrend {
+	case RTTTrendImproving:
+		if metrics.FailureRate < 0.1 {
+			return HeartbeatHealthTrendImproving
+		}
+		return HeartbeatHealthTrendStable
+	case RTTTrendDegrading:
+		if metrics.FailureRate > 0.3 {
+			return HeartbeatHealthTrendCritical
+		}
+		return HeartbeatHealthTrendDegrading
+	default:
+		if metrics.FailureRate > 0.5 {
+			return HeartbeatHealthTrendCritical
+		} else if metrics.FailureRate > 0.2 {
+			return HeartbeatHealthTrendDegrading
+		}
+		return HeartbeatHealthTrendStable
 	}
 }

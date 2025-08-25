@@ -1,6 +1,7 @@
 package data
 
 import (
+	"kwik/pkg/logger"
 	"sync"
 	"time"
 )
@@ -399,7 +400,7 @@ type AggregatorMetrics struct {
 }
 
 // NewPerformanceOptimizedAggregator creates a performance-optimized aggregator
-func NewPerformanceOptimizedAggregator(logger DataLogger) *PerformanceOptimizedAggregator {
+func NewPerformanceOptimizedAggregator(logger logger.Logger) *PerformanceOptimizedAggregator {
 	baseAggregator := NewDataAggregator(logger).(*DataAggregatorImpl)
 
 	poa := &PerformanceOptimizedAggregator{

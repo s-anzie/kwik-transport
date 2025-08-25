@@ -18,6 +18,9 @@ type HeartbeatManager struct {
 	// State tracking
 	sessions map[string]*sessionHeartbeatState
 	
+	// Integration with new heartbeat system
+	integrationLayer HeartbeatIntegrationLayer
+	
 	// Synchronization
 	mutex sync.RWMutex
 	
@@ -42,6 +45,7 @@ type pathHeartbeatState struct {
 	targetInterval    time.Duration
 	lastSent          time.Time
 	lastReceived      time.Time
+	firstUnackedSent  time.Time // Time when we first sent a heartbeat without receiving a response
 	consecutiveFails  int
 	totalSent         uint64
 	totalReceived     uint64
@@ -126,6 +130,22 @@ func NewHeartbeatManager(ctx context.Context, config HeartbeatConfig) *Heartbeat
 	}
 }
 
+// SetIntegrationLayer sets the heartbeat integration layer for event synchronization
+func (hm *HeartbeatManager) SetIntegrationLayer(integrationLayer HeartbeatIntegrationLayer) {
+	hm.mutex.Lock()
+	defer hm.mutex.Unlock()
+	hm.integrationLayer = integrationLayer
+}
+
+// SyncHeartbeatEvent synchronizes heartbeat events with the integration layer
+func (hm *HeartbeatManager) SyncHeartbeatEvent(event *HeartbeatEvent) error {
+	if hm.integrationLayer == nil {
+		return nil // No integration layer configured
+	}
+	
+	return hm.integrationLayer.SyncHeartbeatEvent(event)
+}
+
 // StartHeartbeat starts heartbeat monitoring for a path
 func (hm *HeartbeatManager) StartHeartbeat(sessionID, pathID string, 
 	sendCallback HeartbeatSendCallback, timeoutCallback HeartbeatTimeoutCallback) error {
@@ -160,12 +180,11 @@ func (hm *HeartbeatManager) StartHeartbeatWithAuth(sessionID, pathID string,
 	
 	// Create path heartbeat state
 	initialInterval := (hm.minInterval + hm.maxInterval) / 2 // Start with middle interval
-	now := time.Now()
 	pathState := &pathHeartbeatState{
 		pathID:            pathID,
 		currentInterval:   initialInterval,
 		targetInterval:    initialInterval,
-		lastReceived:      now, // Initialize to current time to avoid immediate timeout
+		lastReceived:      time.Time{}, // Initialize to zero time so timeout detection works properly
 		responseTimes:     make([]time.Duration, 0, 100),
 		rttHistory:        make([]time.Duration, 0, 50),
 		lossHistory:       make([]bool, 0, 50),
@@ -280,10 +299,16 @@ func (hm *HeartbeatManager) OnHeartbeatReceived(sessionID, pathID string) error 
 	pathState.totalReceived++
 	pathState.consecutiveFails = 0
 	
+	// Reset first unacked sent time since we received a response
+	pathState.firstUnackedSent = time.Time{}
+	
+	var rtt *time.Duration
+	
 	// Calculate response time if we have a recent send time
 	if !pathState.lastSent.IsZero() && pathState.lastSent.Before(now) {
 		responseTime := now.Sub(pathState.lastSent)
 		pathState.responseTimes = append(pathState.responseTimes, responseTime)
+		rtt = &responseTime
 		
 		// Keep only last 100 response times
 		if len(pathState.responseTimes) > 100 {
@@ -292,6 +317,20 @@ func (hm *HeartbeatManager) OnHeartbeatReceived(sessionID, pathID string) error 
 		
 		// Calculate average response time
 		hm.calculateAverageResponseTime(pathState)
+	}
+	
+	// Sync event with integration layer
+	if hm.integrationLayer != nil {
+		event := &HeartbeatEvent{
+			Type:      HeartbeatEventResponseReceived,
+			PathID:    pathID,
+			SessionID: sessionID,
+			PlaneType: HeartbeatPlaneControl, // Assume control plane for existing manager
+			Timestamp: now,
+			RTT:       rtt,
+			Success:   true,
+		}
+		hm.integrationLayer.SyncHeartbeatEvent(event)
 	}
 	
 	// Trigger interval adaptation
@@ -416,6 +455,13 @@ func (hm *HeartbeatManager) heartbeatRoutine(sessionID, pathID string, pathState
 	pathState.ticker = time.NewTicker(pathState.currentInterval)
 	pathState.mutex.Unlock()
 	
+	// Create a separate ticker for timeout checks (check more frequently than heartbeat interval)
+	timeoutCheckInterval := pathState.currentInterval / 4
+	if timeoutCheckInterval < 10*time.Millisecond {
+		timeoutCheckInterval = 10 * time.Millisecond
+	}
+	timeoutTicker := time.NewTicker(timeoutCheckInterval)
+	
 	defer func() {
 		pathState.mutex.Lock()
 		if pathState.ticker != nil {
@@ -423,6 +469,7 @@ func (hm *HeartbeatManager) heartbeatRoutine(sessionID, pathID string, pathState
 			pathState.ticker = nil
 		}
 		pathState.mutex.Unlock()
+		timeoutTicker.Stop()
 	}()
 	
 	for {
@@ -433,8 +480,9 @@ func (hm *HeartbeatManager) heartbeatRoutine(sessionID, pathID string, pathState
 			return
 		case <-pathState.ticker.C:
 			hm.sendHeartbeat(sessionID, pathID, pathState)
-			hm.checkHeartbeatTimeout(sessionID, pathID, pathState)
 			hm.updateHeartbeatTicker(pathState)
+		case <-timeoutTicker.C:
+			hm.checkHeartbeatTimeout(sessionID, pathID, pathState)
 		}
 	}
 }
@@ -462,12 +510,56 @@ func (hm *HeartbeatManager) sendHeartbeat(sessionID, pathID string, pathState *p
 	now := time.Now()
 	pathState.lastSent = now
 	pathState.totalSent++
+	
+	// Track first unacknowledged heartbeat for timeout calculation
+	if pathState.firstUnackedSent.IsZero() || 
+		(!pathState.lastReceived.IsZero() && pathState.lastReceived.After(pathState.firstUnackedSent)) {
+		// Either this is the first heartbeat, or we received a response to previous heartbeats
+		pathState.firstUnackedSent = now
+	}
+	
 	sendCallback := pathState.sendCallback
 	pathState.mutex.Unlock()
 	
+	// Sync event with integration layer before sending
+	if hm.integrationLayer != nil {
+		event := &HeartbeatEvent{
+			Type:      HeartbeatEventSent,
+			PathID:    pathID,
+			SessionID: sessionID,
+			PlaneType: HeartbeatPlaneControl, // Assume control plane for existing manager
+			Timestamp: now,
+			Success:   true,
+		}
+		hm.integrationLayer.SyncHeartbeatEvent(event)
+	}
+	
 	// Call the send callback synchronously to avoid race conditions
 	if sendCallback != nil {
-		sendCallback(sessionID, pathID)
+		err := sendCallback(sessionID, pathID)
+		
+		// Sync failure event if send failed
+		if err != nil {
+			// Update failure count
+			pathState.mutex.Lock()
+			pathState.consecutiveFails++
+			pathState.mutex.Unlock()
+			
+			// Sync failure event with integration layer
+			if hm.integrationLayer != nil {
+				failureEvent := &HeartbeatEvent{
+					Type:         HeartbeatEventFailure,
+					PathID:       pathID,
+					SessionID:    sessionID,
+					PlaneType:    HeartbeatPlaneControl,
+					Timestamp:    time.Now(),
+					Success:      false,
+					ErrorCode:    "SEND_ERROR",
+					ErrorMessage: err.Error(),
+				}
+				hm.integrationLayer.SyncHeartbeatEvent(failureEvent)
+			}
+		}
 	}
 }
 
@@ -476,32 +568,46 @@ func (hm *HeartbeatManager) checkHeartbeatTimeout(sessionID, pathID string, path
 	pathState.mutex.Lock()
 	defer pathState.mutex.Unlock()
 	
-	if pathState.lastSent.IsZero() {
-		return
+	if pathState.firstUnackedSent.IsZero() {
+		return // No unacknowledged heartbeats
 	}
 	
 	timeout := time.Duration(float64(pathState.currentInterval) * hm.timeoutMultiplier)
-	timeSinceLastReceived := time.Since(pathState.lastReceived)
+	timeSinceFirstUnacked := time.Since(pathState.firstUnackedSent)
 	
-	// Check if we haven't received a response within the timeout period
-	if pathState.lastReceived.Before(pathState.lastSent) && time.Since(pathState.lastSent) > timeout {
+	shouldTimeout := timeSinceFirstUnacked > timeout
+	
+	if shouldTimeout {
 		pathState.consecutiveFails++
 		timeoutCallback := pathState.timeoutCallback
 		consecutiveFails := pathState.consecutiveFails
+		
+		// Reset first unacked time to avoid repeated timeouts
+		pathState.firstUnackedSent = time.Time{}
+		
+		// Sync timeout event with integration layer
+		if hm.integrationLayer != nil {
+			timeoutEvent := &HeartbeatEvent{
+				Type:         HeartbeatEventTimeout,
+				PathID:       pathID,
+				SessionID:    sessionID,
+				PlaneType:    HeartbeatPlaneControl,
+				Timestamp:    time.Now(),
+				Success:      false,
+				ErrorCode:    "TIMEOUT",
+				ErrorMessage: fmt.Sprintf("heartbeat timeout after %v", timeout),
+				Metadata: map[string]interface{}{
+					"consecutive_failures": consecutiveFails,
+					"timeout_duration":     timeout,
+				},
+			}
+			hm.integrationLayer.SyncHeartbeatEvent(timeoutEvent)
+		}
 		
 		// Adapt interval based on failure
 		hm.adaptHeartbeatInterval(pathState)
 		
 		// Call timeout callback synchronously
-		if timeoutCallback != nil {
-			timeoutCallback(sessionID, pathID, consecutiveFails)
-		}
-	} else if timeSinceLastReceived > timeout*2 {
-		// Haven't received any heartbeat in a long time
-		pathState.consecutiveFails++
-		timeoutCallback := pathState.timeoutCallback
-		consecutiveFails := pathState.consecutiveFails
-		
 		if timeoutCallback != nil {
 			timeoutCallback(sessionID, pathID, consecutiveFails)
 		}
@@ -672,9 +778,47 @@ func (hm *HeartbeatManager) IsPathAuthenticated(sessionID, pathID string) bool {
 	return authenticated
 }
 
+// GetIntegratedHeartbeatStats returns heartbeat statistics integrated with new system metrics
+func (hm *HeartbeatManager) GetIntegratedHeartbeatStats(sessionID, pathID string) *HeartbeatStats {
+	// Get base stats from existing system
+	stats := hm.GetHeartbeatStats(sessionID, pathID)
+	if stats == nil {
+		return nil
+	}
+	
+	// Enhance with integration layer metrics if available
+	if hm.integrationLayer != nil {
+		integrationStats := hm.integrationLayer.GetIntegrationStats()
+		if integrationStats != nil {
+			// Add integration-specific information to metadata or extend stats
+			// This could include event processing metrics, integration errors, etc.
+		}
+	}
+	
+	return stats
+}
+
+// SyncWithNewHeartbeatSystem synchronizes the existing heartbeat manager with new heartbeat systems
+func (hm *HeartbeatManager) SyncWithNewHeartbeatSystem(controlSystem interface{}, dataSystem interface{}) error {
+	// This method can be used to coordinate between the existing heartbeat manager
+	// and the new control/data plane heartbeat systems
+	
+	// For now, we rely on the integration layer for coordination
+	// Future implementations could add direct coordination logic here
+	
+	return nil
+}
+
 // Shutdown gracefully shuts down the heartbeat manager
 func (hm *HeartbeatManager) Shutdown() error {
 	hm.cancel()
+	
+	// Shutdown integration layer if available
+	if hm.integrationLayer != nil {
+		if err := hm.integrationLayer.Shutdown(); err != nil {
+			// Log error but continue shutdown
+		}
+	}
 	
 	hm.mutex.Lock()
 	sessionIDs := make([]string, 0, len(hm.sessions))

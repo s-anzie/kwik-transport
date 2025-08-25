@@ -1,4 +1,4 @@
-package kwik
+package logger
 
 import (
 	"context"
@@ -31,24 +31,24 @@ type Logger interface {
 	Warn(msg string, keysAndValues ...interface{})
 	Error(msg string, keysAndValues ...interface{})
 	SetLevel(level LogLevel)
-	
+
 	// Enhanced logging methods
 	DebugWithContext(ctx context.Context, msg string, keysAndValues ...interface{})
 	InfoWithContext(ctx context.Context, msg string, keysAndValues ...interface{})
 	WarnWithContext(ctx context.Context, msg string, keysAndValues ...interface{})
 	ErrorWithContext(ctx context.Context, msg string, keysAndValues ...interface{})
-	
+
 	// Error-specific logging
 	LogError(err error, msg string, keysAndValues ...interface{})
 	LogKwikError(err *utils.KwikError, msg string, keysAndValues ...interface{})
 	LogEnhancedError(err *utils.EnhancedKwikError, msg string, keysAndValues ...interface{})
-	
+
 	// Component-specific logging
 	WithComponent(component string) Logger
 	WithSession(sessionID string) Logger
 	WithPath(pathID string) Logger
 	WithStream(streamID uint64) Logger
-	
+
 	// Performance logging
 	LogPerformance(operation string, duration time.Duration, keysAndValues ...interface{})
 	LogMetrics(metrics map[string]interface{})
@@ -114,8 +114,6 @@ func (l *SimpleLogger) SetLevel(level LogLevel) {
 	l.level = level
 }
 
-
-
 func (l LogLevel) String() string {
 	switch l {
 	case LogLevelDebug:
@@ -132,6 +130,7 @@ func (l LogLevel) String() string {
 		return "UNKNOWN"
 	}
 }
+
 // Enhanced logging methods with context
 func (l *SimpleLogger) DebugWithContext(ctx context.Context, msg string, keysAndValues ...interface{}) {
 	if l.level <= LogLevelDebug && l.level != LogLevelSilent {
@@ -167,7 +166,7 @@ func (l *SimpleLogger) LogError(err error, msg string, keysAndValues ...interfac
 
 func (l *SimpleLogger) LogKwikError(err *utils.KwikError, msg string, keysAndValues ...interface{}) {
 	if l.level <= LogLevelError && l.level != LogLevelSilent {
-		kvs := append(keysAndValues, 
+		kvs := append(keysAndValues,
 			"errorCode", err.Code,
 			"errorMessage", err.Message,
 			"error", err.Error())
@@ -188,16 +187,16 @@ func (l *SimpleLogger) LogEnhancedError(err *utils.EnhancedKwikError, msg string
 			"timestamp", err.Timestamp.Format(time.RFC3339),
 			"recoverable", err.Recoverable,
 			"error", err.Error())
-		
+
 		if err.Cause != nil {
 			kvs = append(kvs, "cause", err.Cause.Error())
 		}
-		
+
 		// Add context information
 		for key, value := range err.Context {
 			kvs = append(kvs, fmt.Sprintf("ctx_%s", key), value)
 		}
-		
+
 		l.logWithLevel("ERROR", msg, kvs...)
 	}
 }
@@ -206,7 +205,7 @@ func (l *SimpleLogger) LogEnhancedError(err *utils.EnhancedKwikError, msg string
 func (l *SimpleLogger) WithComponent(component string) Logger {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
-	
+
 	newLogger := &SimpleLogger{
 		level:     l.level,
 		logger:    l.logger,
@@ -221,7 +220,7 @@ func (l *SimpleLogger) WithComponent(component string) Logger {
 func (l *SimpleLogger) WithSession(sessionID string) Logger {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
-	
+
 	newLogger := &SimpleLogger{
 		level:     l.level,
 		logger:    l.logger,
@@ -236,7 +235,7 @@ func (l *SimpleLogger) WithSession(sessionID string) Logger {
 func (l *SimpleLogger) WithPath(pathID string) Logger {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
-	
+
 	newLogger := &SimpleLogger{
 		level:     l.level,
 		logger:    l.logger,
@@ -251,7 +250,7 @@ func (l *SimpleLogger) WithPath(pathID string) Logger {
 func (l *SimpleLogger) WithStream(streamID uint64) Logger {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
-	
+
 	newLogger := &SimpleLogger{
 		level:     l.level,
 		logger:    l.logger,
@@ -288,19 +287,19 @@ func (l *SimpleLogger) LogMetrics(metrics map[string]interface{}) {
 func (l *SimpleLogger) logWithContext(ctx context.Context, level, msg string, keysAndValues ...interface{}) {
 	// Extract context values if available
 	var contextKVs []interface{}
-	
+
 	// Add trace information if available
 	if traceID := ctx.Value("traceID"); traceID != nil {
 		contextKVs = append(contextKVs, "traceID", traceID)
 	}
-	
+
 	if requestID := ctx.Value("requestID"); requestID != nil {
 		contextKVs = append(contextKVs, "requestID", requestID)
 	}
-	
+
 	// Combine context and provided key-value pairs
 	allKVs := append(contextKVs, keysAndValues...)
-	
+
 	l.logWithLevel(level, msg, allKVs...)
 }
 
@@ -312,7 +311,7 @@ func (l *SimpleLogger) logWithLevel(level, msg string, keysAndValues ...interfac
 	pathID := l.pathID
 	streamID := l.streamID
 	l.mutex.RUnlock()
-	
+
 	// Build context prefix
 	var contextParts []string
 	if component != "" {
@@ -327,12 +326,12 @@ func (l *SimpleLogger) logWithLevel(level, msg string, keysAndValues ...interfac
 	if streamID != 0 {
 		contextParts = append(contextParts, fmt.Sprintf("stream=%d", streamID))
 	}
-	
+
 	var contextPrefix string
 	if len(contextParts) > 0 {
 		contextPrefix = fmt.Sprintf("[%s] ", strings.Join(contextParts, ","))
 	}
-	
+
 	// Add caller information for debug level
 	var callerInfo string
 	if level == "DEBUG" || level == "ERROR" {
@@ -349,7 +348,7 @@ func (l *SimpleLogger) logWithLevel(level, msg string, keysAndValues ...interfac
 			callerInfo = fmt.Sprintf(" [%s:%d:%s]", file, line, funcName)
 		}
 	}
-	
+
 	// Format key-value pairs
 	var kvPairs string
 	if len(keysAndValues) > 0 {
@@ -362,7 +361,7 @@ func (l *SimpleLogger) logWithLevel(level, msg string, keysAndValues ...interfac
 			}
 		}
 	}
-	
+
 	// Log the message with full context
 	l.logger.Printf("[%s] %s%s%s%s", level, contextPrefix, msg, kvPairs, callerInfo)
 }
@@ -374,16 +373,16 @@ func NewEnhancedLogger(level LogLevel, component string) Logger {
 		logger:    log.New(os.Stdout, "[KWIK] ", log.LstdFlags|log.Lmicroseconds),
 		component: component,
 	}
-	
+
 	// Create error recovery manager
 	errorRecoveryManager := utils.NewErrorRecoveryManager(baseLogger)
-	
+
 	// Register default recovery strategies
 	defaultStrategies := utils.GetDefaultRecoveryStrategies()
 	for errorCode, strategy := range defaultStrategies {
 		errorRecoveryManager.RegisterRecoveryStrategy(errorCode, strategy)
 	}
-	
+
 	return &EnhancedLogger{
 		SimpleLogger:         baseLogger,
 		errorRecoveryManager: errorRecoveryManager,
@@ -397,7 +396,7 @@ func (e *EnhancedLogger) LogError(err error, msg string, keysAndValues ...interf
 	// Add correlation ID to error logging
 	kvs := append(keysAndValues, "correlationID", e.correlationID)
 	e.SimpleLogger.LogError(err, msg, kvs...)
-	
+
 	// Attempt error recovery if it's a KWIK error
 	if kwikErr, ok := err.(*utils.KwikError); ok {
 		e.attemptErrorRecovery(kwikErr)
@@ -408,7 +407,7 @@ func (e *EnhancedLogger) LogKwikError(err *utils.KwikError, msg string, keysAndV
 	// Add correlation ID to error logging
 	kvs := append(keysAndValues, "correlationID", e.correlationID)
 	e.SimpleLogger.LogKwikError(err, msg, kvs...)
-	
+
 	// Attempt error recovery
 	e.attemptErrorRecovery(err)
 }
@@ -417,7 +416,7 @@ func (e *EnhancedLogger) LogEnhancedError(err *utils.EnhancedKwikError, msg stri
 	// Add correlation ID to error logging
 	kvs := append(keysAndValues, "correlationID", e.correlationID)
 	e.SimpleLogger.LogEnhancedError(err, msg, kvs...)
-	
+
 	// Attempt error recovery if the error is recoverable
 	if err.Recoverable {
 		e.attemptErrorRecovery(err.KwikError)
@@ -429,8 +428,8 @@ func (e *EnhancedLogger) attemptErrorRecovery(err *utils.KwikError) {
 	// This is a placeholder for error recovery logic
 	// In a real implementation, this would coordinate with the recovery manager
 	// to attempt recovery strategies
-	e.Info("Error recovery attempted", 
-		"errorCode", err.Code, 
+	e.Info("Error recovery attempted",
+		"errorCode", err.Code,
 		"correlationID", e.correlationID)
 }
 
@@ -452,48 +451,48 @@ func NewLoggingMiddleware(logger Logger) *LoggingMiddleware {
 // WrapOperation wraps an operation with logging and error handling
 func (lm *LoggingMiddleware) WrapOperation(operationName string, operation func() error) error {
 	start := time.Now()
-	
+
 	lm.logger.Debug("Operation started", "operation", operationName)
-	
+
 	err := operation()
 	duration := time.Since(start)
-	
+
 	if err != nil {
-		lm.logger.LogError(err, "Operation failed", 
-			"operation", operationName, 
+		lm.logger.LogError(err, "Operation failed",
+			"operation", operationName,
 			"duration_ms", duration.Milliseconds())
 		return err
 	}
-	
+
 	lm.logger.LogPerformance(operationName, duration)
-	lm.logger.Debug("Operation completed successfully", 
-		"operation", operationName, 
+	lm.logger.Debug("Operation completed successfully",
+		"operation", operationName,
 		"duration_ms", duration.Milliseconds())
-	
+
 	return nil
 }
 
 // WrapOperationWithContext wraps an operation with context-aware logging
 func (lm *LoggingMiddleware) WrapOperationWithContext(ctx context.Context, operationName string, operation func(context.Context) error) error {
 	start := time.Now()
-	
+
 	lm.logger.DebugWithContext(ctx, "Operation started", "operation", operationName)
-	
+
 	err := operation(ctx)
 	duration := time.Since(start)
-	
+
 	if err != nil {
-		lm.logger.ErrorWithContext(ctx, "Operation failed", 
-			"operation", operationName, 
+		lm.logger.ErrorWithContext(ctx, "Operation failed",
+			"operation", operationName,
 			"duration_ms", duration.Milliseconds(),
 			"error", err.Error())
 		return err
 	}
-	
+
 	lm.logger.LogPerformance(operationName, duration)
-	lm.logger.DebugWithContext(ctx, "Operation completed successfully", 
-		"operation", operationName, 
+	lm.logger.DebugWithContext(ctx, "Operation completed successfully",
+		"operation", operationName,
 		"duration_ms", duration.Milliseconds())
-	
+
 	return nil
 }

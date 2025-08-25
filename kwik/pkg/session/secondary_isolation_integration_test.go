@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"kwik/pkg/data"
+	"kwik/pkg/logger"
 	"kwik/pkg/stream"
 	"kwik/pkg/transport"
 
@@ -368,7 +369,7 @@ func TestTransparentAggregation_Integration(t *testing.T) {
 	session.state = SessionStateActive
 
 	// Create aggregator for testing
-	mockLogger := &MockDataLogger{}
+	mockLogger := &logger.MockLogger{}
 	aggregator := data.NewStreamAggregator(mockLogger)
 
 	// Create primary stream

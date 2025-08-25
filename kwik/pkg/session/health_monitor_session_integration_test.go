@@ -1,9 +1,10 @@
 package session
 
 import (
+	"kwik/pkg/logger"
+	"kwik/pkg/transport"
 	"testing"
 	"time"
-	"kwik/pkg/transport"
 )
 
 // TestHealthMonitorSessionIntegration tests the integration of health monitor into session management
@@ -25,34 +26,34 @@ func TestHealthMonitorSessionIntegration(t *testing.T) {
 func testClientSessionHealthIntegration(t *testing.T) {
 	// Create path manager
 	pathManager := transport.NewPathManager()
-	
+
 	// Create client session
 	config := DefaultSessionConfig()
 	clientSession := NewClientSession(pathManager, config)
 	defer clientSession.Close()
-	
+
 	// Verify health monitor is initialized
 	healthMonitor := clientSession.GetHealthMonitor()
 	if healthMonitor == nil {
 		t.Fatal("Health monitor not initialized in client session")
 	}
-	
+
 	// Verify health monitor methods are available
 	if clientSession.GetPathHealthStatus("nonexistent") != nil {
 		t.Error("Expected nil for nonexistent path health status")
 	}
-	
+
 	// Test IsPathHealthy with nonexistent path
 	if clientSession.IsPathHealthy("nonexistent") {
 		t.Error("Expected false for nonexistent path health check")
 	}
-	
+
 	// Test GetBestAvailablePath with no paths
 	bestPath := clientSession.GetBestAvailablePath()
 	if bestPath != nil {
 		t.Error("Expected nil for best path when no paths available")
 	}
-	
+
 	// Test UpdatePathHealthMetrics (should not crash)
 	rtt := 50 * time.Millisecond
 	clientSession.UpdatePathHealthMetrics("test_path", &rtt, true, 1024)
@@ -61,34 +62,34 @@ func testClientSessionHealthIntegration(t *testing.T) {
 func testServerSessionHealthIntegration(t *testing.T) {
 	// Create path manager
 	pathManager := transport.NewPathManager()
-	
+
 	// Create server session
 	config := DefaultSessionConfig()
-	serverSession := NewServerSession("test-session", pathManager, config, &DefaultServerLogger{})
+	serverSession := NewServerSession("test-session", pathManager, config, &logger.MockLogger{})
 	defer serverSession.Close()
-	
+
 	// Verify health monitor is initialized
 	healthMonitor := serverSession.GetHealthMonitor()
 	if healthMonitor == nil {
 		t.Fatal("Health monitor not initialized in server session")
 	}
-	
+
 	// Verify health monitor methods are available
 	if serverSession.GetPathHealthStatus("nonexistent") != nil {
 		t.Error("Expected nil for nonexistent path health status")
 	}
-	
+
 	// Test IsPathHealthy with nonexistent path
 	if serverSession.IsPathHealthy("nonexistent") {
 		t.Error("Expected false for nonexistent path health check")
 	}
-	
+
 	// Test GetBestAvailablePath with no paths
 	bestPath := serverSession.GetBestAvailablePath()
 	if bestPath != nil {
 		t.Error("Expected nil for best path when no paths available")
 	}
-	
+
 	// Test UpdatePathHealthMetrics (should not crash)
 	rtt := 30 * time.Millisecond
 	serverSession.UpdatePathHealthMetrics("test_path", &rtt, true, 2048)
@@ -100,23 +101,23 @@ func testHealthMonitorInitialization(t *testing.T) {
 	config := DefaultSessionConfig()
 	clientSession := NewClientSession(pathManager, config)
 	defer clientSession.Close()
-	
+
 	// Verify health monitor is initialized
 	healthMonitor := clientSession.GetHealthMonitor()
 	if healthMonitor == nil {
 		t.Fatal("Health monitor not initialized in client session")
 	}
-	
+
 	// Test server session health monitor initialization
-	serverSession := NewServerSession("test-session", pathManager, config, &DefaultServerLogger{})
+	serverSession := NewServerSession("test-session", pathManager, config, &logger.MockLogger{})
 	defer serverSession.Close()
-	
+
 	// Verify health monitor is initialized
 	serverHealthMonitor := serverSession.GetHealthMonitor()
 	if serverHealthMonitor == nil {
 		t.Fatal("Health monitor not initialized in server session")
 	}
-	
+
 	// Verify both sessions have different health monitor instances
 	if healthMonitor == serverHealthMonitor {
 		t.Error("Expected different health monitor instances for client and server sessions")
@@ -129,28 +130,27 @@ func testHealthMetricsUpdate(t *testing.T) {
 	config := DefaultSessionConfig()
 	clientSession := NewClientSession(pathManager, config)
 	defer clientSession.Close()
-	
+
 	// Test UpdatePathHealthMetrics method
 	rtt := 50 * time.Millisecond
 	clientSession.UpdatePathHealthMetrics("test_path", &rtt, true, 1024)
-	
+
 	// Test with nil RTT
 	clientSession.UpdatePathHealthMetrics("test_path", nil, false, 512)
-	
+
 	// Test with zero bytes
 	clientSession.UpdatePathHealthMetrics("test_path", &rtt, true, 0)
-	
+
 	// Create server session and test the same
-	serverSession := NewServerSession("test-session", pathManager, config, &DefaultServerLogger{})
+	serverSession := NewServerSession("test-session", pathManager, config, &logger.MockLogger{})
 	defer serverSession.Close()
-	
+
 	// Test UpdatePathHealthMetrics method
 	serverSession.UpdatePathHealthMetrics("server_test_path", &rtt, true, 2048)
-	
+
 	// Test with nil RTT
 	serverSession.UpdatePathHealthMetrics("server_test_path", nil, false, 1024)
-	
+
 	// Test with zero bytes
 	serverSession.UpdatePathHealthMetrics("server_test_path", &rtt, true, 0)
 }
-

@@ -11,12 +11,13 @@ import (
 
 func main() {
 	// Connect to server (identical to QUIC)
+	fmt.Println("[APP-CLIENT] Connecting to server...")
 	session, err := kwik.Dial(context.Background(), "localhost:4433", nil)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer session.Close()
-
+	fmt.Println("[APP-CLIENT] Connected to server.")
 	// Open stream
 	stream, err := session.OpenStreamSync(context.Background())
 	if err != nil {

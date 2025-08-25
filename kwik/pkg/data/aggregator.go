@@ -6,16 +6,8 @@ import (
 	"time"
 
 	"kwik/internal/utils"
+	"kwik/pkg/logger"
 )
-
-// DataLogger interface to avoid circular imports
-type DataLogger interface {
-	Debug(msg string, keysAndValues ...interface{})
-	Info(msg string, keysAndValues ...interface{})
-	Warn(msg string, keysAndValues ...interface{})
-	Error(msg string, keysAndValues ...interface{})
-	Critical(msg string, keysAndValues ...interface{})
-}
 
 // DataAggregatorImpl implements the DataAggregator interface
 // It handles aggregation of data from multiple paths for client-side sessions
@@ -39,33 +31,33 @@ type DataAggregatorImpl struct {
 
 	// Configuration
 	config *AggregatorConfig
-	logger DataLogger
+	logger logger.Logger
 }
 
 // AggregatorConfig holds configuration for the data aggregator
 type AggregatorConfig struct {
-	BufferSize        int
-	MaxStreams        int
-	AggregationDelay  time.Duration
-	ReorderTimeout    time.Duration
-	ReorderBufferSize int           // Maximum number of out-of-order frames to buffer
-	MaxReorderDelay   time.Duration // Maximum time to wait for missing frames
-	DuplicateWindow   int           // Number of recent frames to track for duplicate detection
-	EnableDuplicateDetection bool   // Whether to enable duplicate detection
+	BufferSize               int
+	MaxStreams               int
+	AggregationDelay         time.Duration
+	ReorderTimeout           time.Duration
+	ReorderBufferSize        int           // Maximum number of out-of-order frames to buffer
+	MaxReorderDelay          time.Duration // Maximum time to wait for missing frames
+	DuplicateWindow          int           // Number of recent frames to track for duplicate detection
+	EnableDuplicateDetection bool          // Whether to enable duplicate detection
 }
 
 // AggregatedStreamState represents the state of an aggregated stream
 type AggregatedStreamState struct {
-	StreamID        uint64
-	Buffer          []byte
-	Offset          uint64
-	LastActivity    time.Time
-	PathBuffers     map[string][]byte
-	Stats           *AggregationStats
-	ReorderBuffer   *ReorderBuffer
+	StreamID         uint64
+	Buffer           []byte
+	Offset           uint64
+	LastActivity     time.Time
+	PathBuffers      map[string][]byte
+	Stats            *AggregationStats
+	ReorderBuffer    *ReorderBuffer
 	DuplicateTracker *DuplicateTracker
-	NextExpectedSeq uint64
-	mutex           sync.RWMutex
+	NextExpectedSeq  uint64
+	mutex            sync.RWMutex
 }
 
 // ReorderBuffer manages out-of-order frame reordering
@@ -74,21 +66,21 @@ type ReorderBuffer struct {
 	maxSize      int
 	timeout      time.Duration
 	nextExpected uint64
-	
+
 	// Enhanced timeout management
-	timeoutTicker    *time.Ticker
-	stopTimeoutChan  chan struct{}
-	timeoutCallback  func([]*ReorderFrame) // Callback for timed-out frames
-	
+	timeoutTicker   *time.Ticker
+	stopTimeoutChan chan struct{}
+	timeoutCallback func([]*ReorderFrame) // Callback for timed-out frames
+
 	// Buffer memory management
 	currentMemoryUsage uint64
 	maxMemoryUsage     uint64
-	
+
 	// Statistics
 	timeoutCount     uint64
 	forcedFlushCount uint64
-	
-	mutex        sync.RWMutex
+
+	mutex sync.RWMutex
 }
 
 // ReorderFrame represents a frame waiting for reordering in the aggregator
@@ -112,7 +104,7 @@ type DuplicateTracker struct {
 type FrameSignature struct {
 	SequenceNum uint64
 	Offset      uint64
-	DataHash    uint64    // Simple hash of data content
+	DataHash    uint64 // Simple hash of data content
 	PathID      string
 	Timestamp   time.Time
 }
@@ -126,7 +118,7 @@ type DuplicateStats struct {
 }
 
 // NewDataAggregator creates a new data aggregator
-func NewDataAggregator(logger DataLogger) DataAggregator {
+func NewDataAggregator(logger logger.Logger) DataAggregator {
 	return &DataAggregatorImpl{
 		pathStreams:         make(map[string]DataStream),
 		aggregatedStreams:   make(map[uint64]*AggregatedStreamState),
@@ -335,7 +327,7 @@ func (da *DataAggregatorImpl) AggregateSecondaryData(kwikStreamID uint64, second
 				da.logger.Debug("Failed to register data with offset coordinator", "error", err)
 			}
 		}
-		
+
 		// Check for gaps and request missing data if needed
 		gaps, err := da.offsetCoordinator.ValidateOffsetContinuity(kwikStreamID)
 		if err == nil && len(gaps) > 0 {
@@ -566,20 +558,20 @@ func (da *DataAggregatorImpl) CloseKwikStreamWithSecondaries(kwikStreamID uint64
 // NewReorderBuffer creates a new reorder buffer
 func NewReorderBuffer(maxSize int, timeout time.Duration) *ReorderBuffer {
 	rb := &ReorderBuffer{
-		frames:           make(map[uint64]*ReorderFrame),
-		maxSize:          maxSize,
-		timeout:          timeout,
-		nextExpected:     0,
-		stopTimeoutChan:  make(chan struct{}),
-		maxMemoryUsage:   1024 * 1024 * 10, // 10MB default max memory
+		frames:             make(map[uint64]*ReorderFrame),
+		maxSize:            maxSize,
+		timeout:            timeout,
+		nextExpected:       0,
+		stopTimeoutChan:    make(chan struct{}),
+		maxMemoryUsage:     1024 * 1024 * 10, // 10MB default max memory
 		currentMemoryUsage: 0,
-		timeoutCount:     0,
-		forcedFlushCount: 0,
+		timeoutCount:       0,
+		forcedFlushCount:   0,
 	}
-	
+
 	// Start timeout management goroutine
 	rb.startTimeoutManager()
-	
+
 	return rb
 }
 
@@ -594,10 +586,10 @@ func NewReorderBufferWithCallback(maxSize int, timeout time.Duration, callback f
 func (rb *ReorderBuffer) startTimeoutManager() {
 	// Check for timeouts every 10ms
 	rb.timeoutTicker = time.NewTicker(10 * time.Millisecond)
-	
+
 	go func() {
 		defer rb.timeoutTicker.Stop()
-		
+
 		for {
 			select {
 			case <-rb.timeoutTicker.C:
@@ -612,12 +604,12 @@ func (rb *ReorderBuffer) startTimeoutManager() {
 // processTimeouts processes frames that have timed out
 func (rb *ReorderBuffer) processTimeouts() {
 	timedOutFrames := rb.GetTimedOutFrames()
-	
+
 	if len(timedOutFrames) > 0 {
 		rb.mutex.Lock()
 		rb.timeoutCount += uint64(len(timedOutFrames))
 		rb.mutex.Unlock()
-		
+
 		// Call timeout callback if set
 		if rb.timeoutCallback != nil {
 			rb.timeoutCallback(timedOutFrames)
@@ -637,7 +629,7 @@ func (rb *ReorderBuffer) AddFrame(frame *ReorderFrame) error {
 		// Force flush oldest frames to make room
 		flushedFrames := rb.forceFlushOldestFrames(frameSize)
 		rb.forcedFlushCount += uint64(len(flushedFrames))
-		
+
 		// If still not enough room, return error
 		if rb.currentMemoryUsage+frameSize > rb.maxMemoryUsage {
 			return utils.NewKwikError(utils.ErrInvalidFrame, "insufficient memory for frame", nil)
@@ -649,7 +641,7 @@ func (rb *ReorderBuffer) AddFrame(frame *ReorderFrame) error {
 		// Force flush oldest frames
 		flushedFrames := rb.forceFlushOldestFrames(0)
 		rb.forcedFlushCount += uint64(len(flushedFrames))
-		
+
 		if len(rb.frames) >= rb.maxSize {
 			return utils.NewKwikError(utils.ErrInvalidFrame, "reorder buffer full", nil)
 		}
@@ -933,17 +925,18 @@ func (da *DataAggregatorImpl) FlushReorderBuffer(streamID uint64) ([]byte, error
 
 	return aggregatedData, nil
 }
+
 // forceFlushOldestFrames forces delivery of oldest frames to make room
 func (rb *ReorderBuffer) forceFlushOldestFrames(requiredSpace uint64) []*ReorderFrame {
 	var flushedFrames []*ReorderFrame
 	var freedSpace uint64
-	
+
 	// Find oldest frames (lowest sequence numbers)
 	var seqNums []uint64
 	for seqNum := range rb.frames {
 		seqNums = append(seqNums, seqNum)
 	}
-	
+
 	// Sort sequence numbers to flush oldest first
 	for i := 0; i < len(seqNums)-1; i++ {
 		for j := i + 1; j < len(seqNums); j++ {
@@ -952,7 +945,7 @@ func (rb *ReorderBuffer) forceFlushOldestFrames(requiredSpace uint64) []*Reorder
 			}
 		}
 	}
-	
+
 	// Flush frames until we have enough space or buffer is empty
 	for _, seqNum := range seqNums {
 		if frame, exists := rb.frames[seqNum]; exists {
@@ -961,19 +954,19 @@ func (rb *ReorderBuffer) forceFlushOldestFrames(requiredSpace uint64) []*Reorder
 			delete(rb.frames, seqNum)
 			rb.currentMemoryUsage -= frameSize
 			freedSpace += frameSize
-			
+
 			// Stop if we've freed enough space
 			if requiredSpace > 0 && freedSpace >= requiredSpace {
 				break
 			}
-			
+
 			// Stop if we've flushed half the buffer
 			if len(flushedFrames) >= rb.maxSize/2 {
 				break
 			}
 		}
 	}
-	
+
 	return flushedFrames
 }
 
@@ -981,18 +974,18 @@ func (rb *ReorderBuffer) forceFlushOldestFrames(requiredSpace uint64) []*Reorder
 func (rb *ReorderBuffer) FlushAllFrames() []*ReorderFrame {
 	rb.mutex.Lock()
 	defer rb.mutex.Unlock()
-	
+
 	var allFrames []*ReorderFrame
-	
+
 	// Collect all frames
 	for seqNum, frame := range rb.frames {
 		allFrames = append(allFrames, frame)
 		delete(rb.frames, seqNum)
 		rb.currentMemoryUsage -= uint64(len(frame.Data))
 	}
-	
+
 	rb.forcedFlushCount += uint64(len(allFrames))
-	
+
 	// Sort frames by sequence number for ordered delivery
 	for i := 0; i < len(allFrames)-1; i++ {
 		for j := i + 1; j < len(allFrames); j++ {
@@ -1001,7 +994,7 @@ func (rb *ReorderBuffer) FlushAllFrames() []*ReorderFrame {
 			}
 		}
 	}
-	
+
 	return allFrames
 }
 
@@ -1009,11 +1002,11 @@ func (rb *ReorderBuffer) FlushAllFrames() []*ReorderFrame {
 func (rb *ReorderBuffer) FlushFramesOlderThan(maxAge time.Duration) []*ReorderFrame {
 	rb.mutex.Lock()
 	defer rb.mutex.Unlock()
-	
+
 	now := time.Now()
 	cutoffTime := now.Add(-maxAge)
 	var flushedFrames []*ReorderFrame
-	
+
 	for seqNum, frame := range rb.frames {
 		if frame.Timestamp.Before(cutoffTime) {
 			flushedFrames = append(flushedFrames, frame)
@@ -1021,11 +1014,11 @@ func (rb *ReorderBuffer) FlushFramesOlderThan(maxAge time.Duration) []*ReorderFr
 			rb.currentMemoryUsage -= uint64(len(frame.Data))
 		}
 	}
-	
+
 	if len(flushedFrames) > 0 {
 		rb.forcedFlushCount += uint64(len(flushedFrames))
 	}
-	
+
 	return flushedFrames
 }
 
@@ -1033,9 +1026,9 @@ func (rb *ReorderBuffer) FlushFramesOlderThan(maxAge time.Duration) []*ReorderFr
 func (rb *ReorderBuffer) SetMemoryLimit(maxMemory uint64) {
 	rb.mutex.Lock()
 	defer rb.mutex.Unlock()
-	
+
 	rb.maxMemoryUsage = maxMemory
-	
+
 	// If current usage exceeds new limit, force flush
 	if rb.currentMemoryUsage > maxMemory {
 		rb.forceFlushOldestFrames(rb.currentMemoryUsage - maxMemory)
@@ -1046,7 +1039,7 @@ func (rb *ReorderBuffer) SetMemoryLimit(maxMemory uint64) {
 func (rb *ReorderBuffer) GetBufferStats() *ReorderBufferStats {
 	rb.mutex.RLock()
 	defer rb.mutex.RUnlock()
-	
+
 	return &ReorderBufferStats{
 		StreamID:           0, // Will be set by caller if needed
 		BufferedFrames:     len(rb.frames),
@@ -1062,23 +1055,21 @@ func (rb *ReorderBuffer) GetBufferStats() *ReorderBufferStats {
 	}
 }
 
-
-
 // Close shuts down the reorder buffer and stops timeout management
 func (rb *ReorderBuffer) Close() error {
 	rb.mutex.Lock()
 	defer rb.mutex.Unlock()
-	
+
 	// Stop timeout management
 	if rb.stopTimeoutChan != nil {
 		close(rb.stopTimeoutChan)
 		rb.stopTimeoutChan = nil
 	}
-	
+
 	// Clear all frames
 	rb.frames = make(map[uint64]*ReorderFrame)
 	rb.currentMemoryUsage = 0
-	
+
 	return nil
 }
 
@@ -1107,11 +1098,11 @@ func (rb *ReorderBuffer) GetMemoryUsage() (current, max uint64) {
 func (rb *ReorderBuffer) IsMemoryPressure(threshold float64) bool {
 	rb.mutex.RLock()
 	defer rb.mutex.RUnlock()
-	
+
 	if rb.maxMemoryUsage == 0 {
 		return false
 	}
-	
+
 	usage := float64(rb.currentMemoryUsage) / float64(rb.maxMemoryUsage)
 	return usage > threshold
 }
@@ -1299,7 +1290,7 @@ func (da *DataAggregatorImpl) CheckMemoryPressure(threshold float64) map[uint64]
 	defer da.streamsMutex.RUnlock()
 
 	pressureMap := make(map[uint64]bool)
-	
+
 	for streamID, streamState := range da.aggregatedStreams {
 		pressureMap[streamID] = streamState.ReorderBuffer.IsMemoryPressure(threshold)
 	}
@@ -1380,7 +1371,6 @@ func (da *DataAggregatorImpl) ValidateOffsetContinuity(streamID uint64) ([]Offse
 		// Fall back to existing offset manager validation
 		return nil, nil
 	}
-	
+
 	return da.offsetCoordinator.ValidateOffsetContinuity(streamID)
 }
-

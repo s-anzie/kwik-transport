@@ -1,6 +1,7 @@
 package data
 
 import (
+	"kwik/pkg/logger"
 	"testing"
 	"time"
 
@@ -11,18 +12,9 @@ import (
 // Test helper functions
 func createTestAggregator() *StreamAggregator {
 	// Create a mock logger for testing
-	mockLogger := &MockSecondaryLogger{}
+	mockLogger := &logger.MockLogger{}
 	return NewStreamAggregator(mockLogger)
 }
-
-// MockSecondaryLogger implements SecondaryLogger and DataLogger for testing
-type MockSecondaryLogger struct{}
-
-func (m *MockSecondaryLogger) Debug(msg string, args ...interface{})    {}
-func (m *MockSecondaryLogger) Info(msg string, args ...interface{})     {}
-func (m *MockSecondaryLogger) Warn(msg string, args ...interface{})     {}
-func (m *MockSecondaryLogger) Error(msg string, args ...interface{})    {}
-func (m *MockSecondaryLogger) Critical(msg string, args ...interface{}) {}
 
 func createTestSecondaryData(streamID, kwikStreamID, offset uint64, pathID string, data []byte) *DataFrame {
 	return &DataFrame{
@@ -38,7 +30,7 @@ func createTestSecondaryData(streamID, kwikStreamID, offset uint64, pathID strin
 
 // Tests for NewStreamAggregator
 func TestNewStreamAggregator(t *testing.T) {
-	mockLogger := &MockSecondaryLogger{}
+	mockLogger := &logger.MockLogger{}
 	aggregator := NewStreamAggregator(mockLogger)
 
 	assert.NotNil(t, aggregator)
@@ -543,7 +535,7 @@ func TestOffsetConflictResolution(t *testing.T) {
 func TestPerformanceAndLimits(t *testing.T) {
 	t.Run("respects maximum secondary streams limit", func(t *testing.T) {
 		// Create aggregator with low limit for testing
-		mockLogger := &MockSecondaryLogger{}
+		mockLogger := &logger.MockLogger{}
 		aggregator := NewStreamAggregator(mockLogger)
 		aggregator.config.MaxSecondaryStreams = 3
 
@@ -562,7 +554,7 @@ func TestPerformanceAndLimits(t *testing.T) {
 	})
 
 	t.Run("respects maximum pending data limit", func(t *testing.T) {
-		mockLogger := &MockSecondaryLogger{}
+		mockLogger := &logger.MockLogger{}
 		aggregator := NewStreamAggregator(mockLogger)
 		aggregator.config.MaxPendingData = 2
 

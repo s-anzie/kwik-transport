@@ -3,6 +3,7 @@ package kwik
 import (
 	"kwik/pkg/control"
 	"kwik/pkg/data"
+	"kwik/pkg/logger"
 	"kwik/pkg/stream"
 	"kwik/pkg/transport"
 )
@@ -11,7 +12,7 @@ import (
 type PathStatusHandler struct {
 	controlPlane control.ControlPlane
 	dataPlane    data.DataPlane
-	logger       Logger
+	logger       logger.Logger
 }
 
 // OnPathStatusChanged handles path status change notifications
@@ -34,7 +35,7 @@ type ControlMessageHandlers struct {
 	sessionManager *SessionManager
 	pathManager    transport.PathManager
 	dataPlane      data.DataPlane
-	logger         Logger
+	logger         logger.Logger
 }
 
 // MessageRouter handles inter-component communication
@@ -44,7 +45,7 @@ type MessageRouter struct {
 	sessionManager    *SessionManager
 	pathManager       transport.PathManager
 	streamMultiplexer stream.LogicalStreamManagerInterface
-	logger            Logger
+	logger            logger.Logger
 }
 
 // SetupRouting sets up message routing between components

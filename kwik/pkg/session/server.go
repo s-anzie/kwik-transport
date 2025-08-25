@@ -3,8 +3,8 @@ package session
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +13,8 @@ import (
 	"kwik/internal/utils"
 	controlpkg "kwik/pkg/control"
 	"kwik/pkg/data"
+	"kwik/pkg/logger"
+	"kwik/pkg/protocol"
 	"kwik/pkg/stream"
 	"kwik/pkg/transport"
 	"kwik/proto/control"
@@ -20,50 +22,6 @@ import (
 	"github.com/quic-go/quic-go"
 	"google.golang.org/protobuf/proto"
 )
-
-// DefaultServerLogger provides a simple logger implementation for server session
-type DefaultServerLogger struct{}
-
-func (d *DefaultServerLogger) Debug(msg string, keysAndValues ...interface{}) {
-	log.Printf("[DEBUG] %s %v", msg, formatKeyValues(keysAndValues...))
-}
-
-func (d *DefaultServerLogger) Info(msg string, keysAndValues ...interface{}) {
-	log.Printf("[INFO] %s %v", msg, formatKeyValues(keysAndValues...))
-}
-
-func (d *DefaultServerLogger) Warn(msg string, keysAndValues ...interface{}) {
-	log.Printf("[WARN] %s %v", msg, formatKeyValues(keysAndValues...))
-}
-
-func (d *DefaultServerLogger) Error(msg string, keysAndValues ...interface{}) {
-	log.Printf("[ERROR] %s %v", msg, formatKeyValues(keysAndValues...))
-}
-
-func (d *DefaultServerLogger) Critical(msg string, keysAndValues ...interface{}) {
-	log.Printf("[CRITICAL] %s %v", msg, formatKeyValues(keysAndValues...))
-}
-
-// formatKeyValues formats key-value pairs for logging
-func formatKeyValues(keysAndValues ...interface{}) string {
-	if len(keysAndValues) == 0 {
-		return ""
-	}
-	if len(keysAndValues)%2 != 0 {
-		keysAndValues = append(keysAndValues, "MISSING")
-	}
-
-	var sb strings.Builder
-	for i := 0; i < len(keysAndValues); i += 2 {
-		if i > 0 {
-			sb.WriteString(", ")
-		}
-		key := keysAndValues[i]
-		value := keysAndValues[i+1]
-		sb.WriteString(fmt.Sprintf("%v=%v", key, value))
-	}
-	return sb.String()
-}
 
 // ServerRole defines the role of a server in the KWIK architecture
 type ServerRole int
@@ -119,7 +77,7 @@ type ServerSession struct {
 	// Health monitoring
 	healthMonitor    ConnectionHealthMonitor
 	heartbeatManager *HeartbeatManager
-	
+
 	// Control plane heartbeat system
 	controlHeartbeatSystem controlpkg.ControlPlaneHeartbeatSystem
 
@@ -147,7 +105,7 @@ type ServerSession struct {
 	responseChannelsMutex sync.RWMutex
 
 	// Heartbeat management (now handled by health monitor)
-	heartbeatSequence   uint64
+	heartbeatSequence uint64
 
 	// Logger
 	logger stream.StreamLogger
@@ -198,7 +156,7 @@ func (l *LoggerAdapter) Critical(msg string, keysAndValues ...interface{}) {
 
 // NewServerSession creates a new KWIK server session
 // If logger is nil, a new DefaultServerLogger will be used
-func NewServerSession(sessionID string, pathManager transport.PathManager, config *SessionConfig, logger stream.StreamLogger) *ServerSession {
+func NewServerSession(sessionID string, pathManager transport.PathManager, config *SessionConfig, log logger.Logger) *ServerSession {
 	if config == nil {
 		config = DefaultSessionConfig()
 	}
@@ -207,7 +165,7 @@ func NewServerSession(sessionID string, pathManager transport.PathManager, confi
 
 	// Create offset coordinator
 	offsetCoordinatorConfig := data.DefaultOffsetCoordinatorConfig()
-	offsetCoordinatorConfig.Logger = &LoggerAdapter{logger}
+	offsetCoordinatorConfig.Logger = logger.NewEnhancedLogger(logger.LogLevelDebug, "OffsetCoordinator")
 	offsetCoordinator := data.NewOffsetCoordinator(offsetCoordinatorConfig)
 
 	// Create health monitor
@@ -216,46 +174,45 @@ func NewServerSession(sessionID string, pathManager transport.PathManager, confi
 	// Create heartbeat manager
 	heartbeatConfig := DefaultHeartbeatConfig()
 	heartbeatManager := NewHeartbeatManager(ctx, heartbeatConfig)
-	
+
 	// Create control plane heartbeat system (server mode)
 	controlHeartbeatConfig := controlpkg.DefaultControlHeartbeatConfig()
 	controlHeartbeatSystem := controlpkg.NewControlPlaneHeartbeatSystem(
 		nil, // Will be set later when control plane is available
 		controlHeartbeatConfig,
-		&LoggerAdapter{logger},
+		log,
 	)
 	controlHeartbeatSystem.SetServerMode(true) // Server mode
 
 	// Create metrics manager
 	metricsManager := NewMetricsManager(sessionID, DefaultMetricsConfig())
 	metricsCollector := NewMetricsCollector(metricsManager, DefaultMetricsCollectorConfig())
-
 	session := &ServerSession{
-		sessionID:            sessionID,
-		pathManager:          pathManager,
-		isClient:             false,
-		state:                SessionStateConnecting, // Commencer en état de connexion
-		createdAt:            time.Now(),
-		authManager:          NewAuthenticationManager(sessionID, false), // false = isServer
-		serverRole:           control.SessionRole_PRIMARY,                // Default to primary role
-		streams:              make(map[uint64]*stream.ServerStream),
-		acceptChan:           make(chan *stream.ServerStream, 100),
-		aggregator:           data.NewStreamAggregator(&LoggerAdapter{logger}),          // Initialize secondary stream aggregator
-		metadataProtocol:     stream.NewMetadataProtocol(),                              // Initialize metadata protocol
-		offsetCoordinator:    offsetCoordinator,                                         // Initialize offset coordinator
-		healthMonitor:        healthMonitor,                                             // Initialize health monitor
-		heartbeatManager:     heartbeatManager,                                          // Initialize heartbeat manager
-		controlHeartbeatSystem: controlHeartbeatSystem,                                  // Initialize control heartbeat system
-		stateManager:         NewSessionStateManager(sessionID, &LoggerAdapter{logger}), // Initialize state manager
-		ctx:                  ctx,
-		cancel:               cancel,
-		config:               config,
-		pendingPathIDs:       make(map[string]string),                        // Initialize pending path IDs map
-		addPathResponseChans: make(map[string]chan *control.AddPathResponse), // Initialize response channels
-		heartbeatSequence:    0,
-		logger:               logger,
-		metricsManager:       metricsManager,
-		metricsCollector:     metricsCollector,
+		sessionID:              sessionID,
+		pathManager:            pathManager,
+		isClient:               false,
+		state:                  SessionStateConnecting, // Commencer en état de connexion
+		createdAt:              time.Now(),
+		authManager:            NewAuthenticationManager(sessionID, false), // false = isServer
+		serverRole:             control.SessionRole_PRIMARY,                // Default to primary role
+		streams:                make(map[uint64]*stream.ServerStream),
+		acceptChan:             make(chan *stream.ServerStream, 100),
+		aggregator:             data.NewStreamAggregator(log),          // Initialize secondary stream aggregator
+		metadataProtocol:       stream.NewMetadataProtocol(),           // Initialize metadata protocol
+		offsetCoordinator:      offsetCoordinator,                      // Initialize offset coordinator
+		healthMonitor:          healthMonitor,                          // Initialize health monitor
+		heartbeatManager:       heartbeatManager,                       // Initialize heartbeat manager
+		controlHeartbeatSystem: controlHeartbeatSystem,                 // Initialize control heartbeat system
+		stateManager:           NewSessionStateManager(sessionID, log), // Initialize state manager
+		ctx:                    ctx,
+		cancel:                 cancel,
+		config:                 config,
+		pendingPathIDs:         make(map[string]string),                        // Initialize pending path IDs map
+		addPathResponseChans:   make(map[string]chan *control.AddPathResponse), // Initialize response channels
+		heartbeatSequence:      0,
+		logger:                 log,
+		metricsManager:         metricsManager,
+		metricsCollector:       metricsCollector,
 	}
 
 	return session
@@ -273,16 +230,17 @@ type KwikListener struct {
 	cancel         context.CancelFunc
 	closed         bool
 	mutex          sync.RWMutex
-	logger         stream.StreamLogger
+	logger         logger.Logger
 }
 
 // Listen creates a KWIK listener (QUIC-compatible)
 func Listen(address string, config *SessionConfig) (Listener, error) {
-	return ListenWithLogger(address, config, &DefaultServerLogger{})
+	listenerLogger := logger.NewEnhancedLogger(logger.LogLevelDebug, "KwikListener")
+	return ListenWithLogger(address, config, listenerLogger)
 }
 
 // ListenWithLogger creates a KWIK listener (QUIC-compatible) with a custom logger
-func ListenWithLogger(address string, config *SessionConfig, logger stream.StreamLogger) (Listener, error) {
+func ListenWithLogger(address string, config *SessionConfig, log logger.Logger) (Listener, error) {
 	if config == nil {
 		config = DefaultSessionConfig()
 	}
@@ -309,7 +267,7 @@ func ListenWithLogger(address string, config *SessionConfig, logger stream.Strea
 		ctx:            ctx,
 		cancel:         cancel,
 		closed:         false,
-		logger:         logger,
+		logger:         log,
 	}
 
 	return listener, nil
@@ -351,11 +309,11 @@ func (l *KwikListener) AcceptWithConfig(ctx context.Context, config *SessionConf
 
 	// Create server session with temporary session ID (will be updated during authentication)
 	tempSessionID := generateSessionID()
-	logger := l.logger
-	if logger == nil {
-		logger = &DefaultServerLogger{}
+	log := l.logger
+	if log == nil {
+		log = logger.NewEnhancedLogger(logger.LogLevelDebug, "ServerSession")
 	}
-	session := NewServerSession(tempSessionID, pathManager, config, logger)
+	session := NewServerSession(tempSessionID, pathManager, config, log)
 
 	// SERVER ACCEPTS THE CONTROL STREAM CREATED BY CLIENT (AcceptStream)
 	// This is the key fix - server accepts the stream created by client
@@ -423,7 +381,7 @@ func (l *KwikListener) AcceptWithConfig(ctx context.Context, config *SessionConf
 		return nil, utils.NewKwikError(utils.ErrInvalidState, "failed to set active state", err)
 	}
 	session.logger.Debug("Server session state set to ACTIVE", "sessionID", session.sessionID)
-	
+
 	// Start control plane heartbeats now that session is active (server mode - will respond to requests)
 	if session.controlHeartbeatSystem != nil && session.primaryPath != nil {
 		err := session.controlHeartbeatSystem.StartControlHeartbeats(session.sessionID, session.primaryPath.ID())
@@ -521,11 +479,12 @@ func (l *KwikListener) cleanupSession(session *ServerSession) {
 
 // AcceptSession accepts a new KWIK session from a listener with a default logger
 func AcceptSession(listener *quic.Listener) (Session, error) {
-	return AcceptSessionWithLogger(listener, &DefaultServerLogger{})
+	listenerLogger := logger.NewEnhancedLogger(logger.LogLevelDebug, "KwikListener")
+	return AcceptSessionWithLogger(listener, listenerLogger)
 }
 
 // AcceptSessionWithLogger accepts a new KWIK session from a listener with a custom logger
-func AcceptSessionWithLogger(listener *quic.Listener, logger stream.StreamLogger) (Session, error) {
+func AcceptSessionWithLogger(listener *quic.Listener, log logger.Logger) (Session, error) {
 	// Accept QUIC connection
 	conn, err := listener.Accept(context.Background())
 	if err != nil {
@@ -546,10 +505,10 @@ func AcceptSessionWithLogger(listener *quic.Listener, logger stream.StreamLogger
 	sessionID := generateSessionID()
 
 	// Create server session
-	if logger == nil {
-		logger = &DefaultServerLogger{}
+	if log == nil {
+		log = logger.NewEnhancedLogger(logger.LogLevelDebug, "[ServerSession]")
 	}
-	session := NewServerSession(sessionID, pathManager, nil, logger)
+	session := NewServerSession(sessionID, pathManager, nil, log)
 	session.primaryPath = primaryPath
 
 	// Start session management
@@ -1026,57 +985,51 @@ func (s *ServerSession) handleAddPathResponse(frame *control.ControlFrame) {
 	}
 }
 
-// handleHeartbeat processes Heartbeat frames from the client
+// handleHeartbeat processes Heartbeat frames from the client using the new heartbeat system
 func (s *ServerSession) handleHeartbeat(frame *control.ControlFrame) {
 	if frame == nil || len(frame.Payload) == 0 {
-		return
-	}
-	var hb control.Heartbeat
-	if err := proto.Unmarshal(frame.Payload, &hb); err != nil {
-		return
-	}
-	s.logger.Debug(fmt.Sprintf("Server received HEARTBEAT seq=%d from path=%s", hb.SequenceNumber, frame.SourcePathId))
-
-	// Compute RTT if echo present
-	if len(hb.EchoData) == 8 {
-		sendTs := int64(binary.BigEndian.Uint64(hb.EchoData))
-		rtt := time.Since(time.Unix(0, sendTs))
-		s.logger.Debug(fmt.Sprintf("Server computed RTT=%s on path=%s", rtt.String(), frame.SourcePathId))
+		s.logger.Debug("Server received empty heartbeat frame")
 		return
 	}
 
-	// Echo back to allow the client to compute RTT
-	// Use the same path when possible
-	var controlStream quic.Stream
-	if s.primaryPath != nil {
-		if cs, err := s.primaryPath.GetControlStream(); err == nil {
-			controlStream = cs
+	s.logger.Debug(fmt.Sprintf("Server received HEARTBEAT frame with payload: %s", string(frame.Payload)))
+
+	// Parse the JSON payload to extract heartbeat frame data
+	var heartbeatData struct {
+		FrameId        uint64 `json:"frameId"`
+		SequenceId     uint64 `json:"sequenceId"`
+		PathId         string `json:"pathId"`
+		PlaneType      int    `json:"planeType"`
+		Timestamp      int64  `json:"timestamp"`
+		RttMeasurement bool   `json:"rttMeasurement"`
+	}
+
+	if err := json.Unmarshal(frame.Payload, &heartbeatData); err != nil {
+		s.logger.Debug(fmt.Sprintf("Server failed to parse heartbeat JSON payload: %v", err))
+		return
+	}
+
+	s.logger.Debug(fmt.Sprintf("Server received HEARTBEAT seq=%d from path=%s", heartbeatData.SequenceId, heartbeatData.PathId))
+
+	// Create a protocol.HeartbeatFrame from the parsed data
+	heartbeatFrame := &protocol.HeartbeatFrame{
+		FrameID:        heartbeatData.FrameId,
+		SequenceID:     heartbeatData.SequenceId,
+		PathID:         heartbeatData.PathId,
+		PlaneType:      protocol.HeartbeatPlaneType(heartbeatData.PlaneType),
+		StreamID:       nil, // Control plane heartbeats don't have stream ID
+		Timestamp:      time.Unix(0, heartbeatData.Timestamp),
+		RTTMeasurement: heartbeatData.RttMeasurement,
+	}
+
+	// Pass to the new heartbeat system for processing
+	if s.controlHeartbeatSystem != nil {
+		err := s.controlHeartbeatSystem.HandleControlHeartbeatRequest(heartbeatFrame)
+		if err != nil {
+			s.logger.Debug(fmt.Sprintf("Server heartbeat system failed to handle request: %v", err))
 		}
-	}
-	if controlStream == nil {
-		return
-	}
-	echo := &control.Heartbeat{
-		SequenceNumber: hb.SequenceNumber,
-		Timestamp:      uint64(time.Now().UnixNano()),
-		EchoData:       make([]byte, 8),
-	}
-	binary.BigEndian.PutUint64(echo.EchoData, hb.Timestamp)
-	payload, err := proto.Marshal(echo)
-	if err != nil {
-		return
-	}
-	resp := &control.ControlFrame{
-		FrameId:      data.GenerateFrameID(),
-		Type:         control.ControlFrameType_HEARTBEAT,
-		Payload:      payload,
-		Timestamp:    uint64(time.Now().UnixNano()),
-		SourcePathId: frame.TargetPathId,
-		TargetPathId: frame.SourcePathId,
-	}
-	if data, err := proto.Marshal(resp); err == nil {
-		s.logger.Debug(fmt.Sprintf("Server sending HEARTBEAT echo seq=%d to path=%s", hb.SequenceNumber, frame.SourcePathId))
-		_, _ = controlStream.Write(data)
+	} else {
+		s.logger.Debug("Server heartbeat system not available")
 	}
 }
 
@@ -2267,7 +2220,7 @@ func (s *ServerSession) startHeartbeatForPath(pathID string) {
 	sendCallback := func(sessionID, pathID string) error {
 		// Send heartbeat through the path
 		s.logger.Debug("Sending heartbeat", "sessionID", sessionID, "pathID", pathID)
-		
+
 		// Send actual heartbeat packet using control frame
 		err := s.sendHeartbeatPacket(sessionID, pathID)
 		if err != nil {
@@ -2382,6 +2335,12 @@ func (s *ServerSession) setupFlowControlManager() {
 
 	// Create control plane interface directly with session
 	s.controlPlane = NewSessionControlPlane(s)
+
+	// Set control plane in heartbeat system now that it's available
+	if s.controlHeartbeatSystem != nil {
+		controlPlaneAdapter := &SessionControlPlaneAdapter{session: s}
+		s.controlHeartbeatSystem.SetControlPlane(controlPlaneAdapter)
+	}
 
 	// Create flow control manager
 	flowControlConfig := DefaultFlowControlConfig()
@@ -2498,6 +2457,7 @@ func (s *ServerSession) handleBackpressureSignal(frame *control.ControlFrame) {
 		}
 	}
 }
+
 // sendHeartbeatPacket sends an actual heartbeat packet through the specified path
 func (s *ServerSession) sendHeartbeatPacket(sessionID, pathID string) error {
 	// Get the path from path manager
@@ -2509,7 +2469,7 @@ func (s *ServerSession) sendHeartbeatPacket(sessionID, pathID string) error {
 			break
 		}
 	}
-	
+
 	if targetPath == nil {
 		return fmt.Errorf("path %s not found", pathID)
 	}
@@ -2564,4 +2524,88 @@ func (s *ServerSession) sendHeartbeatPacket(sessionID, pathID string) error {
 	}
 
 	return nil
+}
+
+// SessionControlPlaneAdapter adapts session control frame sending for heartbeat system
+// (This is a duplicate of the one in client.go - in a real implementation, this would be in a shared file)
+type SessionControlPlaneAdapter struct {
+	session interface{}
+}
+
+// SendFrame implements the ControlPlane interface for heartbeat system
+func (adapter *SessionControlPlaneAdapter) SendFrame(pathID string, frame protocol.Frame) error {
+	var controlFrame *control.ControlFrame
+
+	// Handle different frame types
+	switch f := frame.(type) {
+	case *protocol.HeartbeatFrame:
+		// Create a control frame from the heartbeat frame
+		controlFrame = &control.ControlFrame{
+			FrameId:   f.FrameID,
+			Type:      control.ControlFrameType_HEARTBEAT,
+			Payload:   adapter.serializeHeartbeatFrame(f),
+			Timestamp: uint64(f.Timestamp.UnixNano()),
+		}
+	case *protocol.HeartbeatResponseFrame:
+		// Create a control frame from the heartbeat response frame
+		controlFrame = &control.ControlFrame{
+			FrameId:   f.FrameID,
+			Type:      control.ControlFrameType_HEARTBEAT,
+			Payload:   adapter.serializeHeartbeatResponseFrame(f),
+			Timestamp: uint64(f.Timestamp.UnixNano()),
+		}
+	default:
+		return fmt.Errorf("unsupported frame type for heartbeat system: %T", frame)
+	}
+
+	// Send via the appropriate session
+	switch s := adapter.session.(type) {
+	case *ClientSession:
+		return s.SendControlFrame(pathID, controlFrame)
+	case *ServerSession:
+		return s.SendControlFrame(pathID, controlFrame)
+	default:
+		return fmt.Errorf("unsupported session type")
+	}
+}
+
+// serializeHeartbeatFrame serializes a heartbeat frame to bytes
+func (adapter *SessionControlPlaneAdapter) serializeHeartbeatFrame(frame *protocol.HeartbeatFrame) []byte {
+	// Simple JSON serialization for now
+	payload := fmt.Sprintf(`{"frameId":%d,"sequenceId":%d,"pathId":"%s","planeType":%d,"timestamp":%d,"rttMeasurement":%t}`,
+		frame.FrameID, frame.SequenceID, frame.PathID, frame.PlaneType, frame.Timestamp.UnixNano(), frame.RTTMeasurement)
+	return []byte(payload)
+}
+
+// serializeHeartbeatResponseFrame serializes a heartbeat response frame to bytes
+func (adapter *SessionControlPlaneAdapter) serializeHeartbeatResponseFrame(frame *protocol.HeartbeatResponseFrame) []byte {
+	// Simple JSON serialization for now
+	payload := fmt.Sprintf(`{"frameId":%d,"requestSequenceId":%d,"pathId":"%s","planeType":%d,"timestamp":%d,"requestTimestamp":%d,"serverLoad":%f}`,
+		frame.FrameID, frame.RequestSequenceID, frame.PathID, frame.PlaneType, frame.Timestamp.UnixNano(), frame.RequestTimestamp.UnixNano(), frame.ServerLoad)
+	return []byte(payload)
+}
+
+// Stub implementations for other ControlPlane interface methods (not used by heartbeat system)
+func (adapter *SessionControlPlaneAdapter) ReceiveFrame(pathID string) (protocol.Frame, error) {
+	return nil, fmt.Errorf("ReceiveFrame not implemented in adapter")
+}
+
+func (adapter *SessionControlPlaneAdapter) HandleAddPathRequest(req *controlpkg.AddPathRequest) error {
+	return fmt.Errorf("HandleAddPathRequest not implemented in adapter")
+}
+
+func (adapter *SessionControlPlaneAdapter) HandleRemovePathRequest(req *controlpkg.RemovePathRequest) error {
+	return fmt.Errorf("HandleRemovePathRequest not implemented in adapter")
+}
+
+func (adapter *SessionControlPlaneAdapter) HandleAuthenticationRequest(req *controlpkg.AuthenticationRequest) error {
+	return fmt.Errorf("HandleAuthenticationRequest not implemented in adapter")
+}
+
+func (adapter *SessionControlPlaneAdapter) HandleRawPacketTransmission(req *controlpkg.RawPacketTransmission) error {
+	return fmt.Errorf("HandleRawPacketTransmission not implemented in adapter")
+}
+
+func (adapter *SessionControlPlaneAdapter) SendPathStatusNotification(pathID string, status controlpkg.PathStatus) error {
+	return fmt.Errorf("SendPathStatusNotification not implemented in adapter")
 }

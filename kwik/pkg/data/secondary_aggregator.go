@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"kwik/internal/utils"
+	"kwik/pkg/logger"
 )
 
 // StreamAggregator handles aggregation of data from secondary streams into KWIK streams
@@ -39,7 +40,7 @@ type StreamAggregator struct {
 	resultChannel chan *AggregationResult
 
 	// Logger
-	logger SecondaryLogger
+	logger logger.Logger
 }
 
 // DataPresentationManagerInterface defines the interface for presentation manager integration
@@ -161,7 +162,7 @@ type ProcessedSecondaryData struct {
 }
 
 // NewStreamAggregator creates a new secondary stream aggregator
-func NewStreamAggregator(logger SecondaryLogger) *StreamAggregator {
+func NewStreamAggregator(logger logger.Logger) *StreamAggregator {
 	config := &SecondaryAggregatorConfig{
 		MaxSecondaryStreams:      1000,
 		MaxPendingData:           100,
@@ -937,7 +938,7 @@ func (ssa *StreamAggregator) AggregateDataFrames(frame *DataFrame) error {
 		return utils.NewKwikError(utils.ErrInvalidFrame, "secondary stream data is nil", nil)
 	}
 
-	ssa.logger.Debug(fmt.Sprintf("[AGGREGATOR] Processing frame: streamID=%d, offset=%d, size=%d", 
+	ssa.logger.Debug(fmt.Sprintf("[AGGREGATOR] Processing frame: streamID=%d, offset=%d, size=%d",
 		frame.StreamID, frame.Offset, len(frame.Data)))
 
 	// Validate the data
@@ -983,8 +984,8 @@ func (ssa *StreamAggregator) aggregateDataFrame(frame *DataFrame, manager DataPr
 
 	// Validate input data
 	if len(frame.Data) == 0 {
-		ssa.logger.Warn("Empty data frame received, skipping", 
-			"streamID", frame.StreamID, 
+		ssa.logger.Warn("Empty data frame received, skipping",
+			"streamID", frame.StreamID,
 			"kwikStreamID", frame.KwikStreamID,
 			"offset", frame.Offset)
 		return utils.NewKwikError(utils.ErrInvalidFrame, "empty data frame", nil)

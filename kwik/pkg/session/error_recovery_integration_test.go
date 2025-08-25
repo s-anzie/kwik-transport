@@ -9,27 +9,6 @@ import (
 	"kwik/internal/utils"
 )
 
-// MockSessionLogger implements SessionLogger for testing
-type MockSessionLogger struct {
-	logs []string
-}
-
-func (m *MockSessionLogger) Info(msg string, keysAndValues ...interface{}) {
-	m.logs = append(m.logs, fmt.Sprintf("INFO: %s %v", msg, keysAndValues))
-}
-
-func (m *MockSessionLogger) Debug(msg string, keysAndValues ...interface{}) {
-	m.logs = append(m.logs, fmt.Sprintf("DEBUG: %s %v", msg, keysAndValues))
-}
-
-func (m *MockSessionLogger) Warn(msg string, keysAndValues ...interface{}) {
-	m.logs = append(m.logs, fmt.Sprintf("WARN: %s %v", msg, keysAndValues))
-}
-
-func (m *MockSessionLogger) Error(msg string, keysAndValues ...interface{}) {
-	m.logs = append(m.logs, fmt.Sprintf("ERROR: %s %v", msg, keysAndValues))
-}
-
 // MockHealthMonitor implements ConnectionHealthMonitor for testing
 type MockHealthMonitor struct {
 	pathHealth map[string]*PathHealth
@@ -119,27 +98,26 @@ func (m *MockHealthMonitor) GetHealthStats() HealthMonitorStats {
 	return HealthMonitorStats{}
 }
 
-// MockFailoverManager implements FailoverManagerInterface for testing
-type MockFailoverManager struct {
-	failoverCalls []FailoverCall
-}
-
-type FailoverCall struct {
-	SessionID string
-	Reason    FailoverReason
-	Timestamp time.Time
-}
-
-func (m *MockFailoverManager) TriggerFailover(sessionID string, reason FailoverReason) error {
-	if m.failoverCalls == nil {
-		m.failoverCalls = make([]FailoverCall, 0)
-	}
-	m.failoverCalls = append(m.failoverCalls, FailoverCall{
-		SessionID: sessionID,
-		Reason:    reason,
-		Timestamp: time.Now(),
-	})
+// Add missing methods for heartbeat integration
+func (m *MockHealthMonitor) UpdateHealthMetricsFromHeartbeat(sessionID string, pathID string, heartbeatMetrics *HeartbeatHealthMetrics) error {
 	return nil
+}
+
+func (m *MockHealthMonitor) RegisterHeartbeatFailureHandler(handler HeartbeatFailureHandler) error {
+	return nil
+}
+
+func (m *MockHealthMonitor) GetHeartbeatIntegratedHealth(sessionID string, pathID string) *HeartbeatIntegratedPathHealth {
+	pathHealth := m.GetPathHealth(sessionID, pathID)
+	if pathHealth == nil {
+		return nil
+	}
+	
+	return &HeartbeatIntegratedPathHealth{
+		PathHealth:      pathHealth,
+		HeartbeatHealth: 1.0,
+		HeartbeatTrend:  HeartbeatHealthTrendStable,
+	}
 }
 
 // TestErrorRecoveryIntegration tests the complete error recovery system integration

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"kwik/pkg/data"
+	"kwik/pkg/logger"
 	"kwik/pkg/presentation"
 	"kwik/pkg/stream"
 	"kwik/pkg/transport"
@@ -1420,12 +1421,12 @@ func createSessionWithLargeWindow(pathManager transport.PathManager, config *Ses
 
 	// Create retransmission manager
 	retransmissionConfig := data.DefaultRetransmissionConfig()
-	retransmissionConfig.Logger = &DefaultSessionLogger{}
+	retransmissionConfig.Logger = &logger.MockLogger{}
 	retransmissionManager := data.NewRetransmissionManager(retransmissionConfig)
 
 	// Create offset coordinator
 	offsetCoordinatorConfig := data.DefaultOffsetCoordinatorConfig()
-	offsetCoordinatorConfig.Logger = &DefaultSessionLogger{}
+	offsetCoordinatorConfig.Logger = &logger.MockLogger{}
 	offsetCoordinator := data.NewOffsetCoordinator(offsetCoordinatorConfig)
 
 	// Create resource manager with large limits
@@ -1446,9 +1447,9 @@ func createSessionWithLargeWindow(pathManager transport.PathManager, config *Ses
 		streams:                 make(map[uint64]*stream.ClientStream),
 		appStreams:              make(map[uint64]bool), // Fix: Initialize appStreams map
 		secondaryStreamHandler:  stream.NewSecondaryStreamHandler(nil),
-		streamAggregator:        data.NewDataAggregator(&DefaultSessionLogger{}),
+		streamAggregator:        data.NewDataAggregator(&logger.MockLogger{}),
 		config:                  config,
-		aggregator:              data.NewStreamAggregator(&DefaultSessionLogger{}),
+		aggregator:              data.NewStreamAggregator(&logger.MockLogger{}),
 		metadataProtocol:        stream.NewMetadataProtocol(),
 		dataPresentationManager: dataPresentationManager,
 		retransmissionManager:   retransmissionManager,
@@ -1460,7 +1461,7 @@ func createSessionWithLargeWindow(pathManager transport.PathManager, config *Ses
 		ctx:                     ctx,
 		cancel:                  cancel,
 		heartbeatSequence:       0,
-		logger:                  &DefaultSessionLogger{},
+		logger:                  &logger.MockLogger{},
 	}
 
 	// Start the data presentation manager to avoid infinite loops in secondary stream processing

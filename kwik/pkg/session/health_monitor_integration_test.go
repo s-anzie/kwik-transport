@@ -1,6 +1,7 @@
 package session
 
 import (
+	"kwik/pkg/logger"
 	"kwik/pkg/transport"
 	"testing"
 	"time"
@@ -83,7 +84,7 @@ func TestHealthMonitorIntegrationServerSession(t *testing.T) {
 	pathManager := transport.NewPathManager()
 
 	// Create server session
-	serverSession := NewServerSession("test-server-session", pathManager, nil, &DefaultServerLogger{})
+	serverSession := NewServerSession("test-server-session", pathManager, nil, &logger.MockLogger{})
 	defer serverSession.Close()
 
 	// Verify health monitor is initialized

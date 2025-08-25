@@ -8,6 +8,9 @@ import (
 
 // DataPlane manages data plane operations for application data transmission
 type DataPlane interface {
+	//To replace core Data Transmission but not now
+	SendFrame(pathID string, frame interface{}) error
+	ReceiveFrame(pathID string) (interface{}, error)
 	// Core data transmission
 	SendData(pathID string, frame *data.DataFrame) error
 	ReceiveData(pathID string) (*data.DataFrame, error)

@@ -2,6 +2,7 @@ package data
 
 import (
 	"fmt"
+	"kwik/pkg/logger"
 	"runtime"
 	"sync"
 	"testing"
@@ -168,7 +169,7 @@ func TestBatchProcessor_BasicProcessing(t *testing.T) {
 	for _, batchSize := range processedBatches {
 		totalFrames += batchSize
 	}
-	
+
 	if totalFrames != 7 {
 		t.Errorf("Expected 7 total frames processed, got %d", totalFrames)
 	}
@@ -222,7 +223,7 @@ func TestBatchProcessor_TimeoutProcessing(t *testing.T) {
 }
 
 func TestPerformanceOptimizedAggregator_BatchProcessing(t *testing.T) {
-	logger := &MockLogger{}
+	logger := &logger.MockLogger{}
 	poa := NewPerformanceOptimizedAggregator(logger)
 	defer poa.Close()
 
@@ -263,7 +264,7 @@ func TestPerformanceOptimizedAggregator_BatchProcessing(t *testing.T) {
 }
 
 func TestPerformanceOptimizedAggregator_MemoryPool(t *testing.T) {
-	logger := &MockLogger{}
+	logger := &logger.MockLogger{}
 	poa := NewPerformanceOptimizedAggregator(logger)
 	defer poa.Close()
 
@@ -347,7 +348,7 @@ func BenchmarkMemoryPool_vs_MakeSlice(b *testing.B) {
 }
 
 func BenchmarkAggregator_SingleFrame_vs_Batch(b *testing.B) {
-	logger := &MockLogger{}
+	logger := &logger.MockLogger{}
 
 	b.Run("SingleFrame", func(b *testing.B) {
 		da := NewDataAggregator(logger).(*DataAggregatorImpl)
@@ -383,7 +384,7 @@ func BenchmarkAggregator_SingleFrame_vs_Batch(b *testing.B) {
 			if i+batchSize > b.N {
 				actualBatchSize = b.N - i
 			}
-			
+
 			currentBatch := make([]*DataFrame, actualBatchSize)
 			for j := 0; j < actualBatchSize; j++ {
 				currentBatch[j] = &DataFrame{
@@ -401,7 +402,7 @@ func BenchmarkAggregator_SingleFrame_vs_Batch(b *testing.B) {
 }
 
 func BenchmarkAggregator_ConcurrentProcessing(b *testing.B) {
-	logger := &MockLogger{}
+	logger := &logger.MockLogger{}
 	poa := NewPerformanceOptimizedAggregator(logger)
 	defer poa.Close()
 
@@ -436,7 +437,7 @@ func BenchmarkAggregator_ConcurrentProcessing(b *testing.B) {
 }
 
 func BenchmarkAggregator_LargeFrames(b *testing.B) {
-	logger := &MockLogger{}
+	logger := &logger.MockLogger{}
 	poa := NewPerformanceOptimizedAggregator(logger)
 	defer poa.Close()
 
@@ -464,7 +465,7 @@ func BenchmarkAggregator_LargeFrames(b *testing.B) {
 }
 
 func BenchmarkAggregator_MemoryUsage(b *testing.B) {
-	logger := &MockLogger{}
+	logger := &logger.MockLogger{}
 	poa := NewPerformanceOptimizedAggregator(logger)
 	defer poa.Close()
 
@@ -499,7 +500,7 @@ func BenchmarkAggregator_MemoryUsage(b *testing.B) {
 // Performance regression tests
 
 func TestPerformanceRegression_ProcessingLatency(t *testing.T) {
-	logger := &MockLogger{}
+	logger := &logger.MockLogger{}
 	poa := NewPerformanceOptimizedAggregator(logger)
 	defer poa.Close()
 
@@ -538,7 +539,7 @@ func TestPerformanceRegression_ProcessingLatency(t *testing.T) {
 }
 
 func TestPerformanceRegression_MemoryEfficiency(t *testing.T) {
-	logger := &MockLogger{}
+	logger := &logger.MockLogger{}
 	poa := NewPerformanceOptimizedAggregator(logger)
 	defer poa.Close()
 
@@ -574,7 +575,7 @@ func TestPerformanceRegression_MemoryEfficiency(t *testing.T) {
 	// Assert reasonable memory usage (adjust threshold as needed)
 	maxExpectedMemoryPerFrame := uint64(2048) // 2KB per frame
 	if memoryPerFrame > maxExpectedMemoryPerFrame {
-		t.Errorf("Memory usage per frame %d bytes exceeds threshold %d bytes", 
+		t.Errorf("Memory usage per frame %d bytes exceeds threshold %d bytes",
 			memoryPerFrame, maxExpectedMemoryPerFrame)
 	}
 

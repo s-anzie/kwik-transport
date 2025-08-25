@@ -13,7 +13,10 @@ import (
 	"kwik/internal/utils"
 	controlpkg "kwik/pkg/control"
 	"kwik/pkg/data"
+	"kwik/pkg/logger"
 	"kwik/pkg/presentation"
+	"kwik/pkg/protocol"
+
 	"kwik/pkg/stream"
 	"kwik/pkg/transport"
 	"kwik/proto/control"
@@ -154,12 +157,12 @@ func NewClientSession(pathManager transport.PathManager, config *SessionConfig) 
 
 	// Create retransmission manager
 	retransmissionConfig := data.DefaultRetransmissionConfig()
-	retransmissionConfig.Logger = &DefaultSessionLogger{}
+	retransmissionConfig.Logger = logger.NewEnhancedLogger(logger.LogLevelDebug, "Retransmission Manager")
 	retransmissionManager := data.NewRetransmissionManager(retransmissionConfig)
 
 	// Create offset coordinator
 	offsetCoordinatorConfig := data.DefaultOffsetCoordinatorConfig()
-	offsetCoordinatorConfig.Logger = &DefaultSessionLogger{}
+	offsetCoordinatorConfig.Logger = logger.NewEnhancedLogger(logger.LogLevelDebug, "Offset Coordinator")
 	offsetCoordinator := data.NewOffsetCoordinator(offsetCoordinatorConfig)
 
 	// Create health monitor
@@ -174,7 +177,7 @@ func NewClientSession(pathManager transport.PathManager, config *SessionConfig) 
 	controlHeartbeatSystem := controlpkg.NewControlPlaneHeartbeatSystem(
 		nil, // Will be set later when control plane is available
 		controlHeartbeatConfig,
-		&DefaultSessionLogger{},
+		logger.NewEnhancedLogger(logger.LogLevelDebug, "Control Heartbeat"),
 	)
 	controlHeartbeatSystem.SetServerMode(false) // Client mode
 
@@ -184,6 +187,12 @@ func NewClientSession(pathManager transport.PathManager, config *SessionConfig) 
 	// Create metrics manager
 	metricsManager := NewMetricsManager(sessionID, DefaultMetricsConfig())
 	metricsCollector := NewMetricsCollector(metricsManager, DefaultMetricsCollectorConfig())
+
+	// Propagate logger tocomponents that support it
+	streamAggreatorLogger := logger.NewEnhancedLogger(logger.LogLevelDebug, "Stream Aggregator")
+	dataAggregatorLogger := logger.NewEnhancedLogger(logger.LogLevelDebug, "Data Aggregator")
+	sessionStateManagerLogger := logger.NewEnhancedLogger(logger.LogLevelDebug, "Session State Manager")
+	sessionLogger := logger.NewEnhancedLogger(logger.LogLevelDebug, "Session")
 
 	session := &ClientSession{
 		sessionID:               sessionID,
@@ -196,23 +205,23 @@ func NewClientSession(pathManager transport.PathManager, config *SessionConfig) 
 		streams:                 make(map[uint64]*stream.ClientStream),
 		appStreams:              make(map[uint64]bool),
 		secondaryStreamHandler:  stream.NewSecondaryStreamHandler(nil), // Use default config
-		streamAggregator:        data.NewDataAggregator(&DefaultSessionLogger{}),
-		aggregator:              data.NewStreamAggregator(&DefaultSessionLogger{}),          // Initialize secondary stream aggregator
-		metadataProtocol:        stream.NewMetadataProtocol(),                               // Initialize metadata protocol
-		dataPresentationManager: dataPresentationManager,                                    // Initialize data presentation manager
-		retransmissionManager:   retransmissionManager,                                      // Initialize retransmission manager
-		offsetCoordinator:       offsetCoordinator,                                          // Initialize offset coordinator
-		healthMonitor:           healthMonitor,                                              // Initialize health monitor
-		heartbeatManager:        heartbeatManager,                                           // Initialize heartbeat manager
-		controlHeartbeatSystem:  controlHeartbeatSystem,                                     // Initialize control heartbeat system
-		stateManager:            NewSessionStateManager(sessionID, &DefaultSessionLogger{}), // Initialize state manager
-		resourceManager:         resourceManager,                                            // Initialize resource manager
-		acceptChan:              make(chan *stream.ClientStream, 100),                       // Buffered channel
+		streamAggregator:        data.NewDataAggregator(streamAggreatorLogger),
+		aggregator:              data.NewStreamAggregator(dataAggregatorLogger),               // Initialize secondary stream aggregator
+		metadataProtocol:        stream.NewMetadataProtocol(),                                 // Initialize metadata protocol
+		dataPresentationManager: dataPresentationManager,                                      // Initialize data presentation manager
+		retransmissionManager:   retransmissionManager,                                        // Initialize retransmission manager
+		offsetCoordinator:       offsetCoordinator,                                            // Initialize offset coordinator
+		healthMonitor:           healthMonitor,                                                // Initialize health monitor
+		heartbeatManager:        heartbeatManager,                                             // Initialize heartbeat manager
+		controlHeartbeatSystem:  controlHeartbeatSystem,                                       // Initialize control heartbeat system
+		stateManager:            NewSessionStateManager(sessionID, sessionStateManagerLogger), // Initialize state manager
+		resourceManager:         resourceManager,                                              // Initialize resource manager
+		acceptChan:              make(chan *stream.ClientStream, 100),                         // Buffered channel
 		ctx:                     ctx,
 		cancel:                  cancel,
 		config:                  config,
 		heartbeatSequence:       0,
-		logger:                  &DefaultSessionLogger{},
+		logger:                  sessionLogger,
 		metricsManager:          metricsManager,
 		metricsCollector:        metricsCollector,
 	}
@@ -285,7 +294,7 @@ func Dial(ctx context.Context, address string, config *SessionConfig) (Session, 
 
 	// Create client session
 	session := NewClientSession(pathManager, config)
-
+	session.logger.Info("[INVESTIGATION] Session Dialing new client session with Primary Path", "address", address)
 	// Establish primary path with QUIC connection
 	primaryPath, err := pathManager.CreatePath(address)
 	if err != nil {
@@ -293,7 +302,7 @@ func Dial(ctx context.Context, address string, config *SessionConfig) (Session, 
 		return nil, utils.NewKwikError(utils.ErrConnectionLost,
 			fmt.Sprintf("failed to create primary path to %s", address), err)
 	}
-
+	session.logger.Info("[INVESTIGATION] Session Dialed new client session with Primary Path", "address", address)
 	session.primaryPath = primaryPath
 
 	// Record primary path creation in metrics
@@ -339,8 +348,16 @@ func Dial(ctx context.Context, address string, config *SessionConfig) (Session, 
 	}
 	session.state = SessionStateActive // Maintenir la compatibilité avec l'ancien champ
 
-	// Start control plane heartbeats now that session is active
+	// Set up control plane for heartbeat system
 	if session.controlHeartbeatSystem != nil && session.primaryPath != nil {
+		// Create a simple control plane adapter that sends heartbeats directly on the control stream
+		controlPlaneAdapter := &ControlPlaneAdapter{
+			primaryPath: session.primaryPath,
+			logger:      session.logger,
+		}
+		session.controlHeartbeatSystem.SetControlPlane(controlPlaneAdapter)
+
+		// Start control plane heartbeats now that session is active
 		err := session.controlHeartbeatSystem.StartControlHeartbeats(session.sessionID, session.primaryPath.ID())
 		if err != nil {
 			session.logger.Error("Failed to start control heartbeats", "error", err)
@@ -1238,58 +1255,7 @@ func (s *ClientSession) handleRawPacketTransmission(frame *control.ControlFrame)
 }
 
 func (s *ClientSession) handleHeartbeat(frame *control.ControlFrame) {
-	if frame == nil || len(frame.Payload) == 0 {
-		return
-	}
 
-	var hb control.Heartbeat
-	if err := proto.Unmarshal(frame.Payload, &hb); err != nil {
-		return
-	}
-
-	// Record last heartbeat time per path for visibility/health
-	pathID := frame.SourcePathId
-	if pathID == "" {
-		pathID = s.primaryPath.ID()
-	}
-	// Heartbeat tracking now handled by health monitor
-
-	s.logger.Debug(fmt.Sprintf("Client received HEARTBEAT seq=%d from path=%s", hb.SequenceNumber, pathID))
-
-	// If echo data present (8 bytes timestamp), compute RTT
-	if len(hb.EchoData) == 8 {
-		sendTs := int64(binary.BigEndian.Uint64(hb.EchoData))
-		rtt := time.Since(time.Unix(0, sendTs))
-		s.logger.Debug(fmt.Sprintf("Client computed RTT=%s on path=%s", rtt.String(), pathID))
-		return
-	}
-
-	// If no echo data, respond with an echo to allow peer to compute RTT
-	if controlStream, err := s.primaryPath.GetControlStream(); err == nil && controlStream != nil {
-		// Echo back with EchoData = received timestamp
-		echo := &control.Heartbeat{
-			SequenceNumber: hb.SequenceNumber,
-			Timestamp:      uint64(time.Now().UnixNano()),
-			EchoData:       make([]byte, 8),
-		}
-		binary.BigEndian.PutUint64(echo.EchoData, hb.Timestamp)
-		payload, err := proto.Marshal(echo)
-		if err != nil {
-			return
-		}
-		resp := &control.ControlFrame{
-			FrameId:      data.GenerateFrameID(),
-			Type:         control.ControlFrameType_HEARTBEAT,
-			Payload:      payload,
-			Timestamp:    uint64(time.Now().UnixNano()),
-			SourcePathId: pathID,
-			TargetPathId: "",
-		}
-		if data, err := proto.Marshal(resp); err == nil {
-			s.logger.Debug(fmt.Sprintf("Client sending HEARTBEAT echo seq=%d to path=%s", hb.SequenceNumber, pathID))
-			_, _ = controlStream.Write(data)
-		}
-	}
 }
 
 func (s *ClientSession) handleSessionClose(frame *control.ControlFrame) {
@@ -2878,6 +2844,12 @@ func (s *ClientSession) setupFlowControlManager() {
 	// Create control plane interface directly with session
 	s.controlPlane = NewSessionControlPlane(s)
 
+	// Set control plane in heartbeat system now that it's available
+	if s.controlHeartbeatSystem != nil {
+		controlPlaneAdapter := &SessionControlPlaneAdapter{session: s}
+		s.controlHeartbeatSystem.SetControlPlane(controlPlaneAdapter)
+	}
+
 	// Create flow control manager
 	flowControlConfig := DefaultFlowControlConfig()
 	s.flowControlManager = NewFlowControlManager(
@@ -3065,4 +3037,89 @@ func (s *ClientSession) sendHeartbeatPacket(sessionID, pathID string) error {
 	}
 
 	return nil
+}
+
+// ControlPlaneAdapter adapts the control plane interface to send heartbeats directly on QUIC streams
+type ControlPlaneAdapter struct {
+	primaryPath transport.Path
+	logger      stream.StreamLogger
+}
+
+// SendFrame sends a frame directly on the control stream (stream ID 0)
+func (cpa *ControlPlaneAdapter) SendFrame(pathID string, frame protocol.Frame) error {
+	if cpa.primaryPath == nil {
+		return fmt.Errorf("no primary path available")
+	}
+
+	if cpa.primaryPath.ID() != pathID {
+		return fmt.Errorf("path ID mismatch: expected %s, got %s", cpa.primaryPath.ID(), pathID)
+	}
+
+	// Get the QUIC connection
+	conn := cpa.primaryPath.GetConnection()
+	if conn == nil {
+		return fmt.Errorf("no QUIC connection available")
+	}
+
+	// Serialize the frame
+	data, err := frame.Serialize()
+	if err != nil {
+		return fmt.Errorf("failed to serialize heartbeat frame: %w", err)
+	}
+
+	// Send directly on the control stream (stream ID 0)
+	// For heartbeats, we'll send them on a dedicated heartbeat stream or the control stream
+	// Let's create a simple approach: send on stream ID 0 (control stream)
+
+	// Get or create control stream (stream ID 0)
+	controlStream, err := conn.OpenUniStreamSync(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to open control stream for heartbeat: %w", err)
+	}
+
+	// Write the heartbeat frame data
+	_, err = controlStream.Write(data)
+	if err != nil {
+		controlStream.Close()
+		return fmt.Errorf("failed to write heartbeat frame: %w", err)
+	}
+
+	// Close the stream after sending (heartbeats are one-shot messages)
+	err = controlStream.Close()
+	if err != nil {
+		cpa.logger.Debug("Failed to close heartbeat stream", "error", err)
+	}
+
+	cpa.logger.Debug("Heartbeat frame sent successfully", "pathID", pathID, "frameType", frame.Type())
+	return nil
+}
+
+// ReceiveFrame is not implemented for this adapter (heartbeats are send-only from client)
+func (cpa *ControlPlaneAdapter) ReceiveFrame(pathID string) (protocol.Frame, error) {
+	return nil, fmt.Errorf("ReceiveFrame not implemented in ControlPlaneAdapter")
+}
+
+// HandleAddPathRequest is not implemented for this adapter
+func (cpa *ControlPlaneAdapter) HandleAddPathRequest(req *controlpkg.AddPathRequest) error {
+	return fmt.Errorf("HandleAddPathRequest not implemented in ControlPlaneAdapter")
+}
+
+// HandleRemovePathRequest is not implemented for this adapter
+func (cpa *ControlPlaneAdapter) HandleRemovePathRequest(req *controlpkg.RemovePathRequest) error {
+	return fmt.Errorf("HandleRemovePathRequest not implemented in ControlPlaneAdapter")
+}
+
+// HandleAuthenticationRequest is not implemented for this adapter
+func (cpa *ControlPlaneAdapter) HandleAuthenticationRequest(req *controlpkg.AuthenticationRequest) error {
+	return fmt.Errorf("HandleAuthenticationRequest not implemented in ControlPlaneAdapter")
+}
+
+// HandleRawPacketTransmission is not implemented for this adapter
+func (cpa *ControlPlaneAdapter) HandleRawPacketTransmission(req *controlpkg.RawPacketTransmission) error {
+	return fmt.Errorf("HandleRawPacketTransmission not implemented in ControlPlaneAdapter")
+}
+
+// SendPathStatusNotification is not implemented for this adapter
+func (cpa *ControlPlaneAdapter) SendPathStatusNotification(pathID string, status controlpkg.PathStatus) error {
+	return fmt.Errorf("SendPathStatusNotification not implemented in ControlPlaneAdapter")
 }

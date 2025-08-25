@@ -1,6 +1,7 @@
 package data
 
 import (
+	"kwik/pkg/logger"
 	"testing"
 	"time"
 )
@@ -178,7 +179,7 @@ func TestReorderBuffer_GetTimedOutFrames(t *testing.T) {
 }
 
 func TestDataAggregator_ProcessFrameWithReordering(t *testing.T) {
-	logger := &MockLogger{}
+	logger := &logger.MockLogger{}
 	da := NewDataAggregator(logger).(*DataAggregatorImpl)
 
 	streamID := uint64(1)
@@ -243,7 +244,7 @@ func TestDataAggregator_ProcessFrameWithReordering(t *testing.T) {
 }
 
 func TestDataAggregator_ProcessFrameWithReordering_OutOfOrder(t *testing.T) {
-	logger := &MockLogger{}
+	logger := &logger.MockLogger{}
 	da := NewDataAggregator(logger).(*DataAggregatorImpl)
 
 	streamID := uint64(1)
@@ -323,7 +324,7 @@ func TestDataAggregator_ProcessFrameWithReordering_OutOfOrder(t *testing.T) {
 }
 
 func TestDataAggregator_FlushReorderBuffer(t *testing.T) {
-	logger := &MockLogger{}
+	logger := &logger.MockLogger{}
 	da := NewDataAggregator(logger).(*DataAggregatorImpl)
 
 	streamID := uint64(1)
@@ -383,7 +384,7 @@ func TestDataAggregator_FlushReorderBuffer(t *testing.T) {
 }
 
 func TestDataAggregator_ReorderTimeout(t *testing.T) {
-	logger := &MockLogger{}
+	logger := &logger.MockLogger{}
 	da := NewDataAggregator(logger).(*DataAggregatorImpl)
 
 	// Configure short timeout for testing
@@ -418,7 +419,7 @@ func TestDataAggregator_ReorderTimeout(t *testing.T) {
 }
 
 func TestDataAggregator_MultiPath_Reordering(t *testing.T) {
-	logger := &MockLogger{}
+	logger := &logger.MockLogger{}
 	da := NewDataAggregator(logger).(*DataAggregatorImpl)
 
 	streamID := uint64(1)
@@ -493,12 +494,3 @@ func TestDataAggregator_MultiPath_Reordering(t *testing.T) {
 		t.Errorf("Expected bytes from both paths, got %v", stats.BytesPerPath)
 	}
 }
-
-// MockLogger for testing
-type MockLogger struct{}
-
-func (ml *MockLogger) Debug(msg string, keysAndValues ...interface{}) {}
-func (ml *MockLogger) Info(msg string, keysAndValues ...interface{})  {}
-func (ml *MockLogger) Warn(msg string, keysAndValues ...interface{})  {}
-func (ml *MockLogger) Error(msg string, keysAndValues ...interface{}) {}
-func (ml *MockLogger) Critical(msg string, keysAndValues ...interface{}) {}

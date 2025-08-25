@@ -1,6 +1,7 @@
 package data
 
 import (
+	"kwik/pkg/logger"
 	"testing"
 	"time"
 
@@ -10,18 +11,11 @@ import (
 
 // Test helper functions
 func createTestDataAggregator() *DataAggregatorImpl {
-	mockLogger := &MockDataLogger{}
+	mockLogger := &logger.MockLogger{}
 	return NewDataAggregator(mockLogger).(*DataAggregatorImpl)
 }
 
 // MockDataLogger implements DataLogger for testing
-type MockDataLogger struct{}
-
-func (m *MockDataLogger) Debug(msg string, keysAndValues ...interface{})    {}
-func (m *MockDataLogger) Info(msg string, keysAndValues ...interface{})     {}
-func (m *MockDataLogger) Warn(msg string, keysAndValues ...interface{})     {}
-func (m *MockDataLogger) Error(msg string, keysAndValues ...interface{})    {}
-func (m *MockDataLogger) Critical(msg string, keysAndValues ...interface{}) {}
 
 func createTestSecondaryStreamData(streamID, kwikStreamID, offset uint64, pathID string, data []byte) *DataFrame {
 	return &DataFrame{

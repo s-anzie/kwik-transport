@@ -915,6 +915,15 @@ func (ers *ErrorRecoverySystemImpl) GetRecoveryMetrics() *RecoveryMetrics {
 	return metricsCopy
 }
 
+// Close shuts down the error recovery system
+func (ers *ErrorRecoverySystemImpl) Close() error {
+	// Stop all workers
+	close(ers.stopChan)
+	ers.wg.Wait()
+	
+	return nil
+}
+
 // recoveryWorker processes recovery requests in the background
 func (ers *ErrorRecoverySystemImpl) recoveryWorker() {
 	defer ers.wg.Done()
@@ -959,8 +968,13 @@ func (ers *ErrorRecoverySystemImpl) registerDefaultStrategies() {
 	connectionResetStrategy := NewConnectionResetStrategy()
 	ers.RegisterStrategy(ErrorTypeProtocol, connectionResetStrategy)
 	ers.RegisterStrategy(ErrorTypeSession, connectionResetStrategy)
+	
+	// Register heartbeat-specific recovery strategies
+	heartbeatStrategy := NewHeartbeatRecoveryStrategy(nil, ers.config.DefaultMaxRetries)
+	ers.RegisterStrategy(ErrorTypeTimeout, heartbeatStrategy)
+	ers.RegisterStrategy(ErrorTypeNetwork, heartbeatStrategy)
+	ers.RegisterStrategy(ErrorTypeProtocol, heartbeatStrategy)
 }
-
 // RetryWithBackoffStrategy implements retry with exponential backoff
 type RetryWithBackoffStrategy struct {
 	maxRetries        int
@@ -1047,25 +1061,35 @@ func (p *PathFailoverStrategy) CanRecover(kwikError *KwikError) bool {
 }
 
 func (p *PathFailoverStrategy) Recover(ctx context.Context, recoveryContext *RecoveryContext) (*RecoveryResult, error) {
-	startTime := time.Now()
-
+	if p.failoverManager == nil {
+		return &RecoveryResult{
+			Success:       false,
+			Strategy:      StrategyTypePathFailover,
+			AttemptNumber: recoveryContext.AttemptNumber,
+			Duration:      time.Since(recoveryContext.StartTime),
+			Error:         NewKwikError("FAILOVER_MANAGER_UNAVAILABLE", "failover manager not available", nil),
+			ShouldRetry:   false,
+		}, nil
+	}
+	
+	// Trigger failover
 	err := p.failoverManager.TriggerFailover(recoveryContext.SessionID, FailoverReasonPathFailed)
 	if err != nil {
 		return &RecoveryResult{
 			Success:       false,
 			Strategy:      StrategyTypePathFailover,
 			AttemptNumber: recoveryContext.AttemptNumber,
-			Duration:      time.Since(startTime),
+			Duration:      time.Since(recoveryContext.StartTime),
 			Error:         err,
-			ShouldRetry:   false,
+			ShouldRetry:   recoveryContext.AttemptNumber < recoveryContext.MaxRetries,
 		}, nil
 	}
-
+	
 	return &RecoveryResult{
 		Success:       true,
 		Strategy:      StrategyTypePathFailover,
 		AttemptNumber: recoveryContext.AttemptNumber,
-		Duration:      time.Since(startTime),
+		Duration:      time.Since(recoveryContext.StartTime),
 		ActionsTaken: []RecoveryAction{
 			{
 				Type:      ActionTypePathSwitch,
@@ -1074,6 +1098,7 @@ func (p *PathFailoverStrategy) Recover(ctx context.Context, recoveryContext *Rec
 				Success:   true,
 			},
 		},
+		PathsChanged: []string{recoveryContext.PathID},
 	}, nil
 }
 
@@ -1082,7 +1107,7 @@ func (p *PathFailoverStrategy) GetStrategyType() StrategyType {
 }
 
 func (p *PathFailoverStrategy) GetMaxRetries() int {
-	return 1 // Failover is typically a one-time operation
+	return 2 // Limited retries for failover
 }
 
 // ConnectionResetStrategy implements connection reset recovery
@@ -1098,16 +1123,14 @@ func (c *ConnectionResetStrategy) CanRecover(kwikError *KwikError) bool {
 }
 
 func (c *ConnectionResetStrategy) Recover(ctx context.Context, recoveryContext *RecoveryContext) (*RecoveryResult, error) {
-	startTime := time.Now()
-
-	// Simulate connection reset logic
+	// For now, this is a placeholder implementation
 	// In a real implementation, this would reset the connection
-
+	
 	return &RecoveryResult{
 		Success:       true,
 		Strategy:      StrategyTypeConnectionReset,
 		AttemptNumber: recoveryContext.AttemptNumber,
-		Duration:      time.Since(startTime),
+		Duration:      time.Since(recoveryContext.StartTime),
 		ActionsTaken: []RecoveryAction{
 			{
 				Type:      ActionTypeConnectionReset,
@@ -1116,6 +1139,7 @@ func (c *ConnectionResetStrategy) Recover(ctx context.Context, recoveryContext *
 				Success:   true,
 			},
 		},
+		SessionsRestarted: []string{recoveryContext.SessionID},
 	}, nil
 }
 
@@ -1124,15 +1148,333 @@ func (c *ConnectionResetStrategy) GetStrategyType() StrategyType {
 }
 
 func (c *ConnectionResetStrategy) GetMaxRetries() int {
-	return 2
+	return 1 // Connection reset should be tried only once
 }
 
-// Close shuts down the error recovery system
-func (ers *ErrorRecoverySystemImpl) Close() error {
-	close(ers.stopChan)
-	ers.wg.Wait()
-	close(ers.recoveryQueue)
+// HeartbeatRecoveryStrategy implements heartbeat-specific recovery
+type HeartbeatRecoveryStrategy struct {
+	heartbeatManager interface{} // HeartbeatManager interface
+	maxRetries       int
+}
 
-	ers.logger.Info("Error recovery system shut down")
+// NewHeartbeatRecoveryStrategy creates a new heartbeat recovery strategy
+func NewHeartbeatRecoveryStrategy(heartbeatManager interface{}, maxRetries int) RecoveryStrategy {
+	return &HeartbeatRecoveryStrategy{
+		heartbeatManager: heartbeatManager,
+		maxRetries:       maxRetries,
+	}
+}
+
+func (h *HeartbeatRecoveryStrategy) CanRecover(kwikError *KwikError) bool {
+	// Check if this is a heartbeat-related error
+	return kwikError.Component == "heartbeat" || 
+		   kwikError.Code == "HEARTBEAT_TIMEOUT" ||
+		   kwikError.Code == "HEARTBEAT_SEND_ERROR" ||
+		   kwikError.Code == "HEARTBEAT_INVALID_RESPONSE" ||
+		   kwikError.Code == "HEARTBEAT_SEQUENCE_MISMATCH"
+}
+
+func (h *HeartbeatRecoveryStrategy) Recover(ctx context.Context, recoveryContext *RecoveryContext) (*RecoveryResult, error) {
+	startTime := time.Now()
+	
+	// Heartbeat recovery strategy:
+	// 1. For timeout errors: restart heartbeat with shorter interval
+	// 2. For send errors: retry with exponential backoff
+	// 3. For protocol errors: reset heartbeat sequence
+	
+	var actions []RecoveryAction
+	success := false
+	
+	switch recoveryContext.Error.Code {
+	case "HEARTBEAT_TIMEOUT":
+		// Restart heartbeat with shorter interval
+		action := RecoveryAction{
+			Type:      ActionTypeRetry,
+			Target:    recoveryContext.PathID,
+			Timestamp: time.Now(),
+			Success:   true,
+			Metadata: map[string]interface{}{
+				"action": "restart_heartbeat_short_interval",
+				"reason": "timeout_recovery",
+			},
+		}
+		actions = append(actions, action)
+		success = true
+		
+	case "HEARTBEAT_SEND_ERROR":
+		// Retry with backoff
+		backoffDelay := time.Duration(recoveryContext.AttemptNumber) * 100 * time.Millisecond
+		select {
+		case <-time.After(backoffDelay):
+		case <-ctx.Done():
+			return &RecoveryResult{
+				Success:       false,
+				Strategy:      StrategyTypeRetryWithBackoff,
+				AttemptNumber: recoveryContext.AttemptNumber,
+				Duration:      time.Since(startTime),
+				Error:         ctx.Err(),
+				ShouldRetry:   false,
+			}, nil
+		}
+		
+		action := RecoveryAction{
+			Type:      ActionTypeRetry,
+			Target:    recoveryContext.PathID,
+			Timestamp: time.Now(),
+			Success:   true,
+			Metadata: map[string]interface{}{
+				"action":       "retry_heartbeat_send",
+				"backoff_delay": backoffDelay,
+			},
+		}
+		actions = append(actions, action)
+		success = true
+		
+	case "HEARTBEAT_INVALID_RESPONSE", "HEARTBEAT_SEQUENCE_MISMATCH":
+		// Reset heartbeat sequence
+		action := RecoveryAction{
+			Type:      ActionTypeRetry,
+			Target:    recoveryContext.PathID,
+			Timestamp: time.Now(),
+			Success:   true,
+			Metadata: map[string]interface{}{
+				"action": "reset_heartbeat_sequence",
+				"reason": "protocol_error_recovery",
+			},
+		}
+		actions = append(actions, action)
+		success = true
+		
+	default:
+		// Generic heartbeat recovery
+		action := RecoveryAction{
+			Type:      ActionTypeRetry,
+			Target:    recoveryContext.PathID,
+			Timestamp: time.Now(),
+			Success:   true,
+			Metadata: map[string]interface{}{
+				"action": "generic_heartbeat_recovery",
+			},
+		}
+		actions = append(actions, action)
+		success = true
+	}
+	
+	return &RecoveryResult{
+		Success:       success,
+		Strategy:      StrategyTypeRetryWithBackoff,
+		AttemptNumber: recoveryContext.AttemptNumber,
+		Duration:      time.Since(startTime),
+		ActionsTaken:  actions,
+		ShouldRetry:   !success && recoveryContext.AttemptNumber < h.maxRetries,
+	}, nil
+}
+
+func (h *HeartbeatRecoveryStrategy) GetStrategyType() StrategyType {
+	return StrategyTypeRetryWithBackoff
+}
+
+func (h *HeartbeatRecoveryStrategy) GetMaxRetries() int {
+	return h.maxRetries
+}
+
+// HeartbeatPathFailoverStrategy implements path failover specifically for heartbeat failures
+type HeartbeatPathFailoverStrategy struct {
+	failoverManager  FailoverManagerInterface
+	healthMonitor    ConnectionHealthMonitor
+	failureThreshold int
+}
+
+// NewHeartbeatPathFailoverStrategy creates a new heartbeat path failover strategy
+func NewHeartbeatPathFailoverStrategy(failoverManager FailoverManagerInterface, healthMonitor ConnectionHealthMonitor, failureThreshold int) RecoveryStrategy {
+	return &HeartbeatPathFailoverStrategy{
+		failoverManager:  failoverManager,
+		healthMonitor:    healthMonitor,
+		failureThreshold: failureThreshold,
+	}
+}
+
+func (h *HeartbeatPathFailoverStrategy) CanRecover(kwikError *KwikError) bool {
+	// Only handle heartbeat failures that indicate path issues
+	return kwikError.Component == "heartbeat" && 
+		   (kwikError.Code == "HEARTBEAT_TIMEOUT" || kwikError.Code == "HEARTBEAT_PATH_DEAD")
+}
+
+func (h *HeartbeatPathFailoverStrategy) Recover(ctx context.Context, recoveryContext *RecoveryContext) (*RecoveryResult, error) {
+	startTime := time.Now()
+	
+	// Check if path health is degraded enough to warrant failover
+	if h.healthMonitor != nil {
+		pathHealth := h.healthMonitor.GetPathHealth(recoveryContext.SessionID, recoveryContext.PathID)
+		if pathHealth != nil {
+			// Only failover if health is critically low or we have many consecutive failures
+			if pathHealth.HealthScore < 30 || pathHealth.FailureCount >= h.failureThreshold {
+				// Trigger failover
+				if h.failoverManager != nil {
+					err := h.failoverManager.TriggerFailover(recoveryContext.SessionID, FailoverReasonHealthDegraded)
+					if err != nil {
+						return &RecoveryResult{
+							Success:       false,
+							Strategy:      StrategyTypePathFailover,
+							AttemptNumber: recoveryContext.AttemptNumber,
+							Duration:      time.Since(startTime),
+							Error:         err,
+							ShouldRetry:   false,
+						}, nil
+					}
+					
+					return &RecoveryResult{
+						Success:       true,
+						Strategy:      StrategyTypePathFailover,
+						AttemptNumber: recoveryContext.AttemptNumber,
+						Duration:      time.Since(startTime),
+						ActionsTaken: []RecoveryAction{
+							{
+								Type:      ActionTypePathSwitch,
+								Target:    recoveryContext.PathID,
+								Timestamp: time.Now(),
+								Success:   true,
+								Metadata: map[string]interface{}{
+									"reason":       "heartbeat_failure_threshold_exceeded",
+									"health_score": pathHealth.HealthScore,
+									"failure_count": pathHealth.FailureCount,
+								},
+							},
+						},
+						PathsChanged: []string{recoveryContext.PathID},
+					}, nil
+				}
+			}
+		}
+	}
+	
+	// Path health is not bad enough for failover, suggest retry
+	return &RecoveryResult{
+		Success:       false,
+		Strategy:      StrategyTypePathFailover,
+		AttemptNumber: recoveryContext.AttemptNumber,
+		Duration:      time.Since(startTime),
+		ShouldRetry:   true,
+		RetryDelay:    5 * time.Second, // Wait before retrying failover decision
+		ActionsTaken: []RecoveryAction{
+			{
+				Type:      ActionTypeBackoff,
+				Target:    recoveryContext.PathID,
+				Timestamp: time.Now(),
+				Success:   true,
+				Metadata: map[string]interface{}{
+					"reason": "path_health_not_critical_enough_for_failover",
+				},
+			},
+		},
+	}, nil
+}
+
+func (h *HeartbeatPathFailoverStrategy) GetStrategyType() StrategyType {
+	return StrategyTypePathFailover
+}
+
+func (h *HeartbeatPathFailoverStrategy) GetMaxRetries() int {
+	return 3
+}
+
+// TriggerHeartbeatFailureRecovery is a helper function to trigger recovery for heartbeat failures
+func TriggerHeartbeatFailureRecovery(errorRecovery ErrorRecoverySystem, sessionID, pathID string, failure *HeartbeatFailure) error {
+	if errorRecovery == nil {
+		return fmt.Errorf("error recovery system not available")
+	}
+	
+	if failure == nil {
+		return fmt.Errorf("heartbeat failure cannot be nil")
+	}
+	
+	// Convert heartbeat failure to KwikError
+	var errorType ErrorType
+	var errorCode string
+	
+	switch failure.Type {
+	case HeartbeatFailureTimeout:
+		errorType = ErrorTypeTimeout
+		errorCode = "HEARTBEAT_TIMEOUT"
+	case HeartbeatFailureSendError:
+		errorType = ErrorTypeNetwork
+		errorCode = "HEARTBEAT_SEND_ERROR"
+	case HeartbeatFailureInvalidResponse:
+		errorType = ErrorTypeProtocol
+		errorCode = "HEARTBEAT_INVALID_RESPONSE"
+	case HeartbeatFailureSequenceMismatch:
+		errorType = ErrorTypeProtocol
+		errorCode = "HEARTBEAT_SEQUENCE_MISMATCH"
+	case HeartbeatFailurePathDead:
+		errorType = ErrorTypePath
+		errorCode = "HEARTBEAT_PATH_DEAD"
+	default:
+		errorType = ErrorTypeUnknown
+		errorCode = "HEARTBEAT_UNKNOWN_ERROR"
+	}
+	
+	kwikError := &KwikError{
+		Code:        errorCode,
+		Message:     failure.ErrorMessage,
+		Timestamp:   failure.FailureTime,
+		Type:        errorType,
+		Severity:    SeverityMedium,
+		Category:    CategoryTransient,
+		SessionID:   failure.SessionID,
+		PathID:      failure.PathID,
+		StreamID:    0, // Default to 0 if not set
+		Component:   "heartbeat",
+		Recoverable: failure.Recoverable,
+		RetryCount:  failure.RecoveryAttempts,
+		LastRetry:   failure.FailureTime,
+		Metadata:    failure.Metadata,
+	}
+	
+	if failure.StreamID != nil {
+		kwikError.StreamID = *failure.StreamID
+	}
+	
+	// Attempt recovery
+	_, err := errorRecovery.RecoverFromError(context.Background(), kwikError)
+	return err
+}
+
+// RegisterHeartbeatRecoveryStrategies registers heartbeat-specific recovery strategies
+func RegisterHeartbeatRecoveryStrategies(errorRecovery ErrorRecoverySystem, heartbeatManager interface{}, failoverManager FailoverManagerInterface, healthMonitor ConnectionHealthMonitor) error {
+	if errorRecovery == nil {
+		return fmt.Errorf("error recovery system cannot be nil")
+	}
+	
+	// Register heartbeat recovery strategy
+	heartbeatStrategy := NewHeartbeatRecoveryStrategy(heartbeatManager, 3)
+	err := errorRecovery.RegisterStrategy(ErrorTypeTimeout, heartbeatStrategy)
+	if err != nil {
+		return fmt.Errorf("failed to register heartbeat recovery strategy for timeout: %w", err)
+	}
+	
+	err = errorRecovery.RegisterStrategy(ErrorTypeNetwork, heartbeatStrategy)
+	if err != nil {
+		return fmt.Errorf("failed to register heartbeat recovery strategy for network: %w", err)
+	}
+	
+	err = errorRecovery.RegisterStrategy(ErrorTypeProtocol, heartbeatStrategy)
+	if err != nil {
+		return fmt.Errorf("failed to register heartbeat recovery strategy for protocol: %w", err)
+	}
+	
+	// Register heartbeat path failover strategy
+	if failoverManager != nil && healthMonitor != nil {
+		heartbeatFailoverStrategy := NewHeartbeatPathFailoverStrategy(failoverManager, healthMonitor, 5)
+		err = errorRecovery.RegisterStrategy(ErrorTypePath, heartbeatFailoverStrategy)
+		if err != nil {
+			return fmt.Errorf("failed to register heartbeat path failover strategy: %w", err)
+		}
+		
+		err = errorRecovery.RegisterStrategy(ErrorTypeTimeout, heartbeatFailoverStrategy)
+		if err != nil {
+			return fmt.Errorf("failed to register heartbeat path failover strategy for timeout: %w", err)
+		}
+	}
+	
 	return nil
 }

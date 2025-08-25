@@ -9,6 +9,7 @@ import (
 	"kwik/internal/utils"
 	"kwik/pkg/control"
 	"kwik/pkg/data"
+	"kwik/pkg/logger"
 	"kwik/pkg/session"
 	"kwik/pkg/stream"
 	"kwik/pkg/transport"
@@ -35,7 +36,7 @@ type KWIK struct {
 
 	// Metrics and monitoring
 	metrics *SystemMetrics
-	logger  Logger
+	logger  logger.Logger
 }
 
 // Config holds configuration for the KWIK system
@@ -64,7 +65,7 @@ type Config struct {
 	LoadBalancingStrategy string
 
 	// Logging and monitoring
-	LogLevel        LogLevel
+	LogLevel        logger.LogLevel
 	MetricsEnabled  bool
 	MetricsInterval time.Duration
 
@@ -74,25 +75,25 @@ type Config struct {
 
 // LogConfig holds logging configuration
 type LogConfig struct {
-	GlobalLevel LogLevel
+	GlobalLevel logger.LogLevel
 	Format      string
 	Output      string
-	Components  map[string]LogLevel
+	Components  map[string]logger.LogLevel
 }
 
 // DefaultLogConfig returns default logging configuration
 func DefaultLogConfig() *LogConfig {
 	return &LogConfig{
-		GlobalLevel: LogLevelInfo,
+		GlobalLevel: logger.LogLevelInfo,
 		Format:      "text",
 		Output:      "stdout",
-		Components: map[string]LogLevel{
-			"SESSION":   LogLevelInfo,
-			"CONTROL":   LogLevelInfo,
-			"TRANSPORT": LogLevelInfo,
-			"DATA":      LogLevelInfo,
-			"STREAM":    LogLevelDebug,
-			"DPM":       LogLevelDebug,
+		Components: map[string]logger.LogLevel{
+			"SESSION":   logger.LogLevelInfo,
+			"CONTROL":   logger.LogLevelInfo,
+			"TRANSPORT": logger.LogLevelInfo,
+			"DATA":      logger.LogLevelInfo,
+			"STREAM":    logger.LogLevelDebug,
+			"DPM":       logger.LogLevelDebug,
 		},
 	}
 }
@@ -115,7 +116,7 @@ func DefaultConfig() *Config {
 		WriteBufferSize:         utils.DefaultWriteBufferSize,
 		AggregationEnabled:      true,
 		LoadBalancingStrategy:   "adaptive",
-		LogLevel:                LogLevelInfo,
+		LogLevel:                logger.LogLevelInfo,
 		MetricsEnabled:          true,
 		MetricsInterval:         30 * time.Second,
 		Logging:                 DefaultLogConfig(),
@@ -142,29 +143,29 @@ func New(config *Config) (*KWIK, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Create enhanced logger with error recovery
-	var logLevel LogLevel
+	var logLevel logger.LogLevel
 	if config.Logging != nil {
 		logLevel = config.Logging.GlobalLevel
 	} else {
 		logLevel = config.LogLevel
 	}
-	logger := NewEnhancedLogger(logLevel, "KWIK-SYSTEM")
+	log := logger.NewEnhancedLogger(logLevel, "KWIK-SYSTEM")
 
 	// Apply component-level overrides
-	componentLoggers := make(map[string]Logger)
+	componentLoggers := make(map[string]logger.Logger)
 	if config.Logging != nil && len(config.Logging.Components) > 0 {
 		for comp, lvl := range config.Logging.Components {
-			l := logger.WithComponent(comp)
+			l := log.WithComponent(comp)
 			l.SetLevel(lvl)
 			componentLoggers[comp] = l
 		}
 	}
 	// Helper to get component logger or fallback to base
-	getCompLogger := func(name string) Logger {
+	getCompLogger := func(name string) logger.Logger {
 		if l, ok := componentLoggers[name]; ok {
 			return l
 		}
-		return logger.WithComponent(name)
+		return log.WithComponent(name)
 	}
 
 	// Create metrics system
@@ -225,7 +226,7 @@ func New(config *Config) (*KWIK, error) {
 		ctx:               ctx,
 		cancel:            cancel,
 		metrics:           metrics,
-		logger:            logger,
+		logger:            log,
 	}
 
 	// Wire components together
@@ -479,24 +480,24 @@ func Dial(ctx context.Context, address string, config *Config) (session.Session,
 		EnableAggregation:     config.AggregationEnabled,
 		EnableMigration:       true,
 	}
-
+	kwikInstance.logger.Info("[INVESTIGATION] KWIK Dialing new client session", "address", address)
 	// Create client session through session manager
-	clientSession, err := kwikInstance.sessionManager.CreateClientSession(ctx, address, sessionConfig)
+	session, err := kwikInstance.sessionManager.Dial(ctx, address, sessionConfig)
 	if err != nil {
 		kwikInstance.Stop() // Clean up on failure
 		return nil, fmt.Errorf("failed to create client session: %w", err)
 	}
-
+	kwikInstance.logger.Info("[INVESTIGATION] KWIK session dialed successfully", "address", address)
 	// Update metrics
 	if kwikInstance.metrics != nil {
 		kwikInstance.metrics.IncrementSessionsCreated()
 	}
 
-	kwikInstance.logger.Info("Client session created", "address", address, "sessionID", clientSession.GetSessionID())
+	kwikInstance.logger.Info("Client session created", "address", address, "sessionID", session.GetSessionID())
 
 	// Wrap the session to handle cleanup when closed
 	wrappedSession := &ClientSessionWrapper{
-		Session:      clientSession,
+		Session:      session,
 		kwikInstance: kwikInstance,
 	}
 
