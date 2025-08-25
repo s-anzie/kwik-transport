@@ -71,6 +71,10 @@ type DataAggregator interface {
 	// Offset validation and management
 	ValidateOffset(kwikStreamID uint64, offset uint64, sourcePathID string) error
 	GetNextExpectedOffset(kwikStreamID uint64) uint64
+	
+	// Offset coordinator integration
+	SetOffsetCoordinator(coordinator OffsetCoordinator)
+	ValidateOffsetContinuity(streamID uint64) ([]OffsetGap, error)
 
 	// Statistics
 	GetAggregationStats(streamID uint64) (*AggregationStats, error)

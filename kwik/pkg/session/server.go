@@ -11,6 +11,7 @@ import (
 
 	kwiктls "kwik/internal/tls"
 	"kwik/internal/utils"
+	controlpkg "kwik/pkg/control"
 	"kwik/pkg/data"
 	"kwik/pkg/stream"
 	"kwik/pkg/transport"
@@ -112,6 +113,23 @@ type ServerSession struct {
 	aggregator       *data.StreamAggregator
 	metadataProtocol *stream.MetadataProtocolImpl
 
+	// Offset coordination management
+	offsetCoordinator data.OffsetCoordinator
+
+	// Health monitoring
+	healthMonitor    ConnectionHealthMonitor
+	heartbeatManager *HeartbeatManager
+	
+	// Control plane heartbeat system
+	controlHeartbeatSystem controlpkg.ControlPlaneHeartbeatSystem
+
+	// State management
+	stateManager SessionStateManager
+
+	// Flow control management
+	flowControlManager *FlowControlManager
+	controlPlane       *SessionControlPlane
+
 	// Synchronization
 	mutex  sync.RWMutex
 	ctx    context.Context
@@ -128,12 +146,15 @@ type ServerSession struct {
 	addPathResponseChans  map[string]chan *control.AddPathResponse // pathID -> response channel
 	responseChannelsMutex sync.RWMutex
 
-	// Heartbeat management
+	// Heartbeat management (now handled by health monitor)
 	heartbeatSequence   uint64
-	lastHeartbeatByPath map[string]time.Time
 
 	// Logger
 	logger stream.StreamLogger
+
+	// Metrics management
+	metricsManager   *MetricsManager
+	metricsCollector *MetricsCollector
 }
 
 // SetLogger sets the logger for this server session
@@ -141,6 +162,23 @@ func (s *ServerSession) SetLogger(l stream.StreamLogger) { s.logger = l }
 
 // GetLogger returns the logger for this server session
 func (s *ServerSession) GetLogger() stream.StreamLogger { return s.logger }
+
+// GetMetrics returns the current session metrics
+func (s *ServerSession) GetMetrics() *MetricsSummary {
+	if s.metricsCollector == nil {
+		return nil
+	}
+	return s.metricsCollector.GetMetricsSummary()
+}
+
+// GetMetricsReport returns a formatted metrics report
+func (s *ServerSession) GetMetricsReport() string {
+	if s.metricsCollector == nil {
+		return "Metrics collection not enabled"
+	}
+	reporter := NewMetricsReporter(s.metricsCollector)
+	return reporter.GenerateReport()
+}
 func (s *ServerSession) Aggregator() *data.StreamAggregator {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
@@ -167,26 +205,57 @@ func NewServerSession(sessionID string, pathManager transport.PathManager, confi
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Create offset coordinator
+	offsetCoordinatorConfig := data.DefaultOffsetCoordinatorConfig()
+	offsetCoordinatorConfig.Logger = &LoggerAdapter{logger}
+	offsetCoordinator := data.NewOffsetCoordinator(offsetCoordinatorConfig)
+
+	// Create health monitor
+	healthMonitor := NewConnectionHealthMonitor(ctx)
+
+	// Create heartbeat manager
+	heartbeatConfig := DefaultHeartbeatConfig()
+	heartbeatManager := NewHeartbeatManager(ctx, heartbeatConfig)
+	
+	// Create control plane heartbeat system (server mode)
+	controlHeartbeatConfig := controlpkg.DefaultControlHeartbeatConfig()
+	controlHeartbeatSystem := controlpkg.NewControlPlaneHeartbeatSystem(
+		nil, // Will be set later when control plane is available
+		controlHeartbeatConfig,
+		&LoggerAdapter{logger},
+	)
+	controlHeartbeatSystem.SetServerMode(true) // Server mode
+
+	// Create metrics manager
+	metricsManager := NewMetricsManager(sessionID, DefaultMetricsConfig())
+	metricsCollector := NewMetricsCollector(metricsManager, DefaultMetricsCollectorConfig())
+
 	session := &ServerSession{
 		sessionID:            sessionID,
 		pathManager:          pathManager,
 		isClient:             false,
-		state:                SessionStateActive,
+		state:                SessionStateConnecting, // Commencer en état de connexion
 		createdAt:            time.Now(),
 		authManager:          NewAuthenticationManager(sessionID, false), // false = isServer
 		serverRole:           control.SessionRole_PRIMARY,                // Default to primary role
 		streams:              make(map[uint64]*stream.ServerStream),
 		acceptChan:           make(chan *stream.ServerStream, 100),
-		aggregator:           data.NewStreamAggregator(&LoggerAdapter{logger}), // Initialize secondary stream aggregator
-		metadataProtocol:     stream.NewMetadataProtocol(),                     // Initialize metadata protocol
+		aggregator:           data.NewStreamAggregator(&LoggerAdapter{logger}),          // Initialize secondary stream aggregator
+		metadataProtocol:     stream.NewMetadataProtocol(),                              // Initialize metadata protocol
+		offsetCoordinator:    offsetCoordinator,                                         // Initialize offset coordinator
+		healthMonitor:        healthMonitor,                                             // Initialize health monitor
+		heartbeatManager:     heartbeatManager,                                          // Initialize heartbeat manager
+		controlHeartbeatSystem: controlHeartbeatSystem,                                  // Initialize control heartbeat system
+		stateManager:         NewSessionStateManager(sessionID, &LoggerAdapter{logger}), // Initialize state manager
 		ctx:                  ctx,
 		cancel:               cancel,
 		config:               config,
 		pendingPathIDs:       make(map[string]string),                        // Initialize pending path IDs map
 		addPathResponseChans: make(map[string]chan *control.AddPathResponse), // Initialize response channels
 		heartbeatSequence:    0,
-		lastHeartbeatByPath:  make(map[string]time.Time),
 		logger:               logger,
+		metricsManager:       metricsManager,
+		metricsCollector:     metricsCollector,
 	}
 
 	return session
@@ -280,15 +349,6 @@ func (l *KwikListener) AcceptWithConfig(ctx context.Context, config *SessionConf
 			"failed to create primary path", err)
 	}
 
-	// SERVER ACCEPTS THE CONTROL STREAM CREATED BY CLIENT (AcceptStream)
-	// This is the key fix - server accepts the stream created by client
-	_, err = primaryPath.AcceptControlStreamAsServer()
-	if err != nil {
-		conn.CloseWithError(0, "failed to accept control stream")
-		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
-			"failed to accept control stream as server", err)
-	}
-
 	// Create server session with temporary session ID (will be updated during authentication)
 	tempSessionID := generateSessionID()
 	logger := l.logger
@@ -296,6 +356,18 @@ func (l *KwikListener) AcceptWithConfig(ctx context.Context, config *SessionConf
 		logger = &DefaultServerLogger{}
 	}
 	session := NewServerSession(tempSessionID, pathManager, config, logger)
+
+	// SERVER ACCEPTS THE CONTROL STREAM CREATED BY CLIENT (AcceptStream)
+	// This is the key fix - server accepts the stream created by client
+	session.logger.Debug("Server attempting to accept control stream...")
+	controlStream, err := primaryPath.AcceptControlStreamAsServer()
+	if err != nil {
+		session.logger.Debug(fmt.Sprintf("Server FAILED to accept control stream: %v", err))
+		conn.CloseWithError(0, "failed to accept control stream")
+		return nil, utils.NewKwikError(utils.ErrStreamCreationFailed,
+			"failed to accept control stream as server", err)
+	}
+	session.logger.Debug(fmt.Sprintf("Server successfully accepted control stream (ID=%d)", controlStream.StreamID()))
 	session.primaryPath = primaryPath
 
 	// Mark primary path as default for operations (Requirement 2.5)
@@ -331,8 +403,60 @@ func (l *KwikListener) AcceptWithConfig(ctx context.Context, config *SessionConf
 	// Start control frame handler to process AddPathResponse and other control messages
 	go session.handleControlFrames()
 
-	// Start control-plane heartbeat loop on server side as well
-	go session.startHeartbeat()
+	// Set up and start offset coordinator
+	session.setupOffsetCoordinatorCallbacks()
+	err = session.startOffsetCoordinator()
+	if err != nil {
+		session.Close()
+		return nil, utils.NewKwikError(utils.ErrInvalidState, "failed to start offset coordinator", err)
+	}
+
+	// Attendre que l'authentification soit terminée avant de continuer
+	for !session.stateManager.IsAuthenticationComplete() {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Changer vers l'état actif
+	if err := session.stateManager.SetState(SessionStateActive); err != nil {
+		session.logger.Error("Failed to set active state", "error", err)
+		session.Close()
+		return nil, utils.NewKwikError(utils.ErrInvalidState, "failed to set active state", err)
+	}
+	session.logger.Debug("Server session state set to ACTIVE", "sessionID", session.sessionID)
+	
+	// Start control plane heartbeats now that session is active (server mode - will respond to requests)
+	if session.controlHeartbeatSystem != nil && session.primaryPath != nil {
+		err := session.controlHeartbeatSystem.StartControlHeartbeats(session.sessionID, session.primaryPath.ID())
+		if err != nil {
+			session.logger.Error("Failed to start control heartbeats", "error", err)
+			// Don't fail session creation for heartbeat issues, just log the error
+		} else {
+			session.logger.Debug("Control heartbeats started", "sessionID", session.sessionID, "pathID", session.primaryPath.ID())
+		}
+	}
+
+	// Start the health monitor after authentication is complete
+	err = session.startHealthMonitor()
+	if err != nil {
+		session.logger.Error("Failed to start health monitor after authentication", "error", err)
+		session.Close()
+		return nil, utils.NewKwikError(utils.ErrInvalidState, "failed to start health monitor", err)
+	}
+
+	// Start heartbeat management for existing paths
+	session.startHeartbeatManagement()
+
+	// Heartbeat management is now handled by the health monitor
+
+	// Set up flow control manager
+	session.setupFlowControlManager()
+
+	// Start flow control manager
+	err = session.startFlowControlManager()
+	if err != nil {
+		session.Close()
+		return nil, utils.NewKwikError(utils.ErrInvalidState, "failed to start flow control manager", err)
+	}
 
 	// Note: Stream handling is now on-demand via AcceptStream() calls
 
@@ -430,6 +554,15 @@ func AcceptSessionWithLogger(listener *quic.Listener, logger stream.StreamLogger
 
 	// Start session management
 	go session.managePaths()
+
+	// Set up and start offset coordinator
+	session.setupOffsetCoordinatorCallbacks()
+	err = session.startOffsetCoordinator()
+	if err != nil {
+		session.Close()
+		return nil, utils.NewKwikError(utils.ErrInvalidState, "failed to start offset coordinator", err)
+	}
+
 	// Note: Stream handling is now on-demand via AcceptStream() calls
 
 	return session, nil
@@ -443,7 +576,7 @@ func (s *ServerSession) OpenStreamSync(ctx context.Context) (Stream, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.state != SessionStateActive {
+	if s.stateManager != nil && !s.stateManager.IsActive() {
 		return nil, utils.NewKwikError(utils.ErrConnectionLost, "session is not active", nil)
 	}
 
@@ -598,7 +731,7 @@ func (s *ServerSession) AddPath(address string) error {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	if s.state != SessionStateActive {
+	if s.stateManager != nil && !s.stateManager.IsActive() {
 		return utils.NewKwikError(utils.ErrConnectionLost, "session is not active", nil)
 	}
 
@@ -803,7 +936,7 @@ func (s *ServerSession) handleControlFrames() {
 		return
 	}
 
-	s.logger.Debug(fmt.Sprintf("Server control frame handler started, listening for client responses..."))
+	s.logger.Debug(fmt.Sprintf("Server control frame handler started, listening for client responses... (stream=%d)", controlStream.StreamID()))
 
 	for {
 		// Check if session is still active
@@ -816,7 +949,7 @@ func (s *ServerSession) handleControlFrames() {
 
 		// Read control frame from client
 		buffer := make([]byte, 4096)
-		_ = controlStream.SetReadDeadline(time.Now().Add(2 * utils.DefaultKeepAliveInterval))
+		_ = controlStream.SetReadDeadline(time.Now().Add(5 * utils.DefaultKeepAliveInterval))
 		n, err := controlStream.Read(buffer)
 		if err != nil {
 			// Ignore timeouts
@@ -852,6 +985,10 @@ func (s *ServerSession) handleControlFrames() {
 			s.handleDataChunkAck(&frame)
 		case control.ControlFrameType_PACKET_ACK:
 			s.handlePacketAck(&frame)
+		case control.ControlFrameType_WINDOW_UPDATE:
+			s.handleWindowUpdate(&frame)
+		case control.ControlFrameType_BACKPRESSURE_SIGNAL:
+			s.handleBackpressureSignal(&frame)
 		default:
 			s.logger.Debug(fmt.Sprintf("Server ignoring unknown control frame type: %s", frame.Type))
 		}
@@ -1004,7 +1141,7 @@ func (s *ServerSession) RemovePath(pathID string) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.state != SessionStateActive {
+	if s.stateManager != nil && !s.stateManager.IsActive() {
 		return utils.NewKwikError(utils.ErrConnectionLost, "session is not active", nil)
 	}
 
@@ -1320,7 +1457,7 @@ func (s *ServerSession) SendRawData(rawData []byte, pathID string, remoteStreamI
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	if s.state != SessionStateActive {
+	if s.stateManager != nil && !s.stateManager.IsActive() {
 		return utils.NewKwikError(utils.ErrConnectionLost, "session is not active", nil)
 	}
 
@@ -1332,6 +1469,21 @@ func (s *ServerSession) SendRawData(rawData []byte, pathID string, remoteStreamI
 	if pathID == "" {
 		return utils.NewKwikError(utils.ErrInvalidFrame, "target path ID cannot be empty", nil)
 	}
+
+	// Check path health before proceeding
+	if !s.IsPathHealthy(pathID) {
+		s.logger.Warn("Attempting to send data on unhealthy path", "pathID", pathID)
+
+		// Try to find a better path if the requested path is unhealthy
+		betterPath := s.GetBestAvailablePath()
+		if betterPath != nil && betterPath.ID() != pathID {
+			s.logger.Info("Routing data to healthier path", "originalPath", pathID, "newPath", betterPath.ID())
+			pathID = betterPath.ID()
+		}
+	}
+
+	// Record start time for RTT measurement
+	startTime := time.Now()
 
 	// First check if target path exists in path manager
 	targetPath := s.pathManager.GetPath(pathID)
@@ -1449,9 +1601,18 @@ func (s *ServerSession) SendRawData(rawData []byte, pathID string, remoteStreamI
 		if pathErr := s.checkPathForOperation(pathID, "SendRawData"); pathErr != nil {
 			s.sendDeadPathNotification(pathID, "raw_data_transmission_failed")
 		}
+
+		// Update health metrics for failed operation
+		rtt := time.Since(startTime)
+		s.UpdatePathHealthMetrics(pathID, &rtt, false, uint64(len(finalData)))
+
 		return utils.NewKwikError(utils.ErrConnectionLost,
 			"failed to send raw packet transmission request", err)
 	}
+
+	// Update health metrics for successful operation
+	rtt := time.Since(startTime)
+	s.UpdatePathHealthMetrics(pathID, &rtt, true, uint64(len(finalData)))
 
 	return nil
 }
@@ -1490,7 +1651,7 @@ func (s *ServerSession) checkPathForOperation(pathID string, operationName strin
 // Requirements: 6.3 - send dead path notification frame when operations fail
 func (s *ServerSession) sendDeadPathNotification(pathID string, reason string) error {
 	// Don't send notification if session is not active
-	if s.state != SessionStateActive {
+	if s.stateManager != nil && !s.stateManager.IsActive() {
 		return nil
 	}
 
@@ -1558,12 +1719,38 @@ func (s *ServerSession) Close() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.state == SessionStateClosed {
+	if s.stateManager != nil && s.stateManager.GetState() == SessionStateClosed {
 		return nil
 	}
 
+	if s.stateManager != nil {
+		s.stateManager.SetState(SessionStateClosed)
+	}
 	s.state = SessionStateClosed
 	s.cancel()
+
+	// Stop offset coordinator
+	err := s.stopOffsetCoordinator()
+	if err != nil {
+		s.logger.Debug(fmt.Sprintf("Failed to stop offset coordinator: %v", err))
+	}
+
+	// Stop health monitor
+	err = s.stopHealthMonitor()
+	if err != nil {
+		s.logger.Debug(fmt.Sprintf("Failed to stop health monitor: %v", err))
+	}
+
+	// Stop control heartbeats
+	if s.controlHeartbeatSystem != nil && s.primaryPath != nil {
+		err = s.controlHeartbeatSystem.StopControlHeartbeats(s.sessionID, s.primaryPath.ID())
+		if err != nil {
+			s.logger.Debug(fmt.Sprintf("Failed to stop control heartbeats: %v", err))
+		}
+	}
+
+	// Stop all heartbeats
+	s.stopAllHeartbeats()
 
 	// Close all streams
 	s.streamsMutex.Lock()
@@ -1667,6 +1854,11 @@ func (s *ServerSession) GetPrimaryPath() transport.Path {
 
 // handleAuthenticationWithSessionID handles server-side authentication and returns client's session ID
 func (s *ServerSession) handleAuthenticationWithSessionID(ctx context.Context) (string, error) {
+	// Entrer en état d'authentification
+	if err := s.stateManager.SetState(SessionStateAuthenticating); err != nil {
+		return "", utils.NewKwikError(utils.ErrInvalidState,
+			"failed to set authenticating state", err)
+	}
 
 	// Get control stream from primary path
 	controlStream, err := s.primaryPath.GetControlStream()
@@ -1777,106 +1969,599 @@ func (s *ServerSession) handleAuthenticationWithSessionID(ctx context.Context) (
 			"failed to send authentication response", err)
 	}
 
+	// Attendre un délai de sécurité pour s'assurer que le client reçoit la réponse
+	// avant que les heartbeats commencent
+	time.Sleep(200 * time.Millisecond)
+
+	// Changer l'état vers authentifié
+	if err := s.stateManager.SetState(SessionStateAuthenticated); err != nil {
+		return "", utils.NewKwikError(utils.ErrInvalidState,
+			"failed to set authenticated state", err)
+	}
+
 	// Authentication state is now managed by AuthenticationManager.HandleAuthenticationRequest()
-	// No need to manually mark as authenticated
+	// Mark primary path as authenticated
+	if s.primaryPath != nil {
+		s.authManager.MarkPrimaryPathAuthenticated(s.primaryPath.ID())
+
+		// Also mark the path as authenticated in the heartbeat manager
+		if s.heartbeatManager != nil {
+			s.heartbeatManager.SetPathAuthenticated(clientSessionID, s.primaryPath.ID(), true)
+		}
+	}
 
 	return clientSessionID, nil
 }
 
-// startHeartbeat periodically sends heartbeat frames on all active paths' control streams (server side)
-func (s *ServerSession) startHeartbeat() {
-	s.logger.Debug(fmt.Sprintf("Server starting heartbeat loop (session=%s)", s.sessionID))
-	interval := utils.DefaultKeepAliveInterval
-	if s.config != nil && s.config.IdleTimeout > 0 {
-		interval = s.config.IdleTimeout
+// Old heartbeat functions removed - now using health monitor system
+
+// GetOffsetCoordinator returns the offset coordinator
+func (s *ServerSession) GetOffsetCoordinator() data.OffsetCoordinator {
+	return s.offsetCoordinator
+}
+
+// setupOffsetCoordinatorCallbacks configures the offset coordinator callbacks
+func (s *ServerSession) setupOffsetCoordinatorCallbacks() {
+	if s.offsetCoordinator == nil {
+		return
 	}
 
-	t := time.NewTicker(interval)
-	defer t.Stop()
-
-	// Start liveness monitor
-	go s.monitorHeartbeatLiveness(3 * interval)
-
-	// Send an initial heartbeat immediately
-	s.sendHeartbeatOnAllPaths()
-
-	for {
-		// Check session state outside of select, since select cases must be channel operations
-		if s.state != SessionStateActive {
-			s.logger.Debug(fmt.Sprintf("Server session %s is not active, stopping heartbeat", s.sessionID))
-			time.Sleep(1 * time.Second) // Give some time before stopping
-			continue
-		}
-		select {
-		case <-s.ctx.Done():
-			return
-		case <-t.C:
-			s.sendHeartbeatOnAllPaths()
-		}
+	// Cast to implementation type to access callback methods
+	if ocImpl, ok := s.offsetCoordinator.(*data.OffsetCoordinatorImpl); ok {
+		// Set missing data callback - called when gaps are detected
+		ocImpl.SetMissingDataCallback(func(streamID uint64, gaps []data.OffsetGap) error {
+			s.logger.Debug(fmt.Sprintf("Server requesting missing data for stream %d, gaps: %d", streamID, len(gaps)))
+			// Server can request missing data from clients or trigger retransmission
+			// For now, just log the gaps
+			for _, gap := range gaps {
+				s.logger.Debug(fmt.Sprintf("Gap detected: start=%d, end=%d, size=%d", gap.Start, gap.End, gap.Size))
+			}
+			return nil
+		})
 	}
 }
 
-func (s *ServerSession) sendHeartbeatOnAllPaths() {
+// startOffsetCoordinator starts the offset coordinator
+func (s *ServerSession) startOffsetCoordinator() error {
+	if s.offsetCoordinator == nil {
+		return utils.NewKwikError(utils.ErrInvalidState, "offset coordinator not initialized", nil)
+	}
+
+	err := s.offsetCoordinator.Start()
+	if err != nil {
+		return utils.NewKwikError(utils.ErrInvalidState, "failed to start offset coordinator", err)
+	}
+
+	s.logger.Debug("Server offset coordinator started")
+	return nil
+}
+
+// stopOffsetCoordinator stops the offset coordinator
+func (s *ServerSession) stopOffsetCoordinator() error {
+	if s.offsetCoordinator == nil {
+		return nil
+	}
+
+	return s.offsetCoordinator.Stop()
+}
+
+// reserveOffsetRange reserves an offset range for stream writing
+func (s *ServerSession) reserveOffsetRange(streamID uint64, size int) (int64, error) {
+	if s.offsetCoordinator == nil {
+		return 0, utils.NewKwikError(utils.ErrInvalidState, "offset coordinator not available", nil)
+	}
+
+	return s.offsetCoordinator.ReserveOffsetRange(streamID, size)
+}
+
+// commitOffsetRange commits an offset range after successful writing
+func (s *ServerSession) commitOffsetRange(streamID uint64, startOffset int64, actualSize int) error {
+	if s.offsetCoordinator == nil {
+		return utils.NewKwikError(utils.ErrInvalidState, "offset coordinator not available", nil)
+	}
+
+	return s.offsetCoordinator.CommitOffsetRange(streamID, startOffset, actualSize)
+}
+
+// validateOffsetContinuity checks for gaps in the offset sequence
+func (s *ServerSession) validateOffsetContinuity(streamID uint64) ([]data.OffsetGap, error) {
+	if s.offsetCoordinator == nil {
+		return nil, utils.NewKwikError(utils.ErrInvalidState, "offset coordinator not available", nil)
+	}
+
+	return s.offsetCoordinator.ValidateOffsetContinuity(streamID)
+}
+
+// registerDataReceived registers that data has been received at a specific offset
+func (s *ServerSession) registerDataReceived(streamID uint64, offset int64, size int) error {
+	if s.offsetCoordinator == nil {
+		return utils.NewKwikError(utils.ErrInvalidState, "offset coordinator not available", nil)
+	}
+
+	return s.offsetCoordinator.RegisterDataReceived(streamID, offset, size)
+}
+
+// getNextExpectedOffset returns the next expected offset for a stream
+func (s *ServerSession) getNextExpectedOffset(streamID uint64) int64 {
+	if s.offsetCoordinator == nil {
+		return 0
+	}
+
+	return s.offsetCoordinator.GetNextExpectedOffset(streamID)
+}
+
+// getOffsetCoordinatorStats returns current offset coordination statistics
+func (s *ServerSession) getOffsetCoordinatorStats() data.OffsetCoordinatorStats {
+	if s.offsetCoordinator == nil {
+		return data.OffsetCoordinatorStats{}
+	}
+
+	return s.offsetCoordinator.GetStats()
+}
+
+// startHealthMonitor starts the health monitor
+func (s *ServerSession) startHealthMonitor() error {
+	if s.healthMonitor == nil {
+		return utils.NewKwikError(utils.ErrInvalidState, "health monitor not initialized", nil)
+	}
+
+	// Vérifier que l'authentification est terminée avant de démarrer le health monitoring
+	if s.stateManager != nil && !s.stateManager.IsAuthenticationComplete() {
+		return utils.NewKwikError(utils.ErrInvalidState,
+			"cannot start health monitor: authentication not complete", nil)
+	}
+
+	// Start monitoring for the session with active paths
 	activePaths := s.pathManager.GetActivePaths()
-	for _, p := range activePaths {
-		controlStream, err := p.GetControlStream()
-		if err != nil || controlStream == nil {
-			continue
-		}
-
-		s.mutex.Lock()
-		s.heartbeatSequence++
-		seq := s.heartbeatSequence
-		s.mutex.Unlock()
-
-		now := time.Now().UnixNano()
-		hb := &control.Heartbeat{
-			SequenceNumber: seq,
-			Timestamp:      uint64(now),
-			EchoData:       make([]byte, 8),
-		}
-		binary.BigEndian.PutUint64(hb.EchoData, uint64(now))
-		payload, err := proto.Marshal(hb)
-		if err != nil {
-			continue
-		}
-
-		frame := &control.ControlFrame{
-			FrameId:      data.GenerateFrameID(),
-			Type:         control.ControlFrameType_HEARTBEAT,
-			Payload:      payload,
-			Timestamp:    uint64(time.Now().UnixNano()),
-			SourcePathId: p.ID(),
-			TargetPathId: "",
-		}
-		data, err := proto.Marshal(frame)
-		if err != nil {
-			continue
-		}
-		s.logger.Debug(fmt.Sprintf("Server sending HEARTBEAT seq=%d on path=%s", seq, p.ID()))
-		_, _ = controlStream.Write(data)
+	pathIDs := make([]string, len(activePaths))
+	for i, path := range activePaths {
+		pathIDs[i] = path.ID()
 	}
+
+	err := s.healthMonitor.StartMonitoring(s.sessionID, pathIDs)
+	if err != nil {
+		return utils.NewKwikError(utils.ErrInvalidState, "failed to start health monitor", err)
+	}
+
+	s.logger.Debug("Health monitor started for session", "sessionID", s.sessionID,
+		"sessionState", s.stateManager.GetState().String())
+	return nil
 }
 
-// monitorHeartbeatLiveness marks paths dead if no heartbeat received for threshold
-func (s *ServerSession) monitorHeartbeatLiveness(threshold time.Duration) {
-	ticker := time.NewTicker(threshold / 2)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		case <-ticker.C:
-			now := time.Now()
-			active := s.pathManager.GetActivePaths()
-			for _, p := range active {
-				s.mutex.RLock()
-				last, ok := s.lastHeartbeatByPath[p.ID()]
-				s.mutex.RUnlock()
-				if !ok || now.Sub(last) > threshold {
-					_ = s.pathManager.MarkPathDead(p.ID())
-				}
+// stopHealthMonitor stops the health monitor
+func (s *ServerSession) stopHealthMonitor() error {
+	if s.healthMonitor == nil {
+		return nil
+	}
+
+	err := s.healthMonitor.StopMonitoring(s.sessionID)
+	if err != nil {
+		s.logger.Error("Failed to stop health monitor", "error", err)
+		return err
+	}
+
+	s.logger.Debug("Health monitor stopped for session", "sessionID", s.sessionID)
+	return nil
+}
+
+// GetHealthMonitor returns the health monitor for external access
+func (s *ServerSession) GetHealthMonitor() ConnectionHealthMonitor {
+	return s.healthMonitor
+}
+
+// GetPathHealthStatus returns the health status of a specific path
+func (s *ServerSession) GetPathHealthStatus(pathID string) *PathHealth {
+	if s.healthMonitor == nil {
+		return nil
+	}
+	return s.healthMonitor.GetPathHealth(s.sessionID, pathID)
+}
+
+// IsPathHealthy checks if a path is healthy enough for operations
+func (s *ServerSession) IsPathHealthy(pathID string) bool {
+	pathHealth := s.GetPathHealthStatus(pathID)
+	if pathHealth == nil {
+		return false
+	}
+
+	// Consider path healthy if status is Active and health score is above warning threshold
+	return pathHealth.Status == PathStatusActive && pathHealth.HealthScore >= 70
+}
+
+// GetBestAvailablePath returns the healthiest available path for operations
+func (s *ServerSession) GetBestAvailablePath() transport.Path {
+	activePaths := s.pathManager.GetActivePaths()
+	if len(activePaths) == 0 {
+		return nil
+	}
+
+	var bestPath transport.Path
+	var bestScore int = -1
+
+	for _, path := range activePaths {
+		if s.IsPathHealthy(path.ID()) {
+			pathHealth := s.GetPathHealthStatus(path.ID())
+			if pathHealth != nil && pathHealth.HealthScore > bestScore {
+				bestScore = pathHealth.HealthScore
+				bestPath = path
 			}
 		}
 	}
+
+	// If no healthy path found, return primary path as fallback
+	if bestPath == nil && s.primaryPath != nil && s.primaryPath.IsActive() {
+		return s.primaryPath
+	}
+
+	return bestPath
+}
+
+// UpdatePathHealthMetrics updates health metrics for a path based on operation results
+func (s *ServerSession) UpdatePathHealthMetrics(pathID string, rtt *time.Duration, success bool, bytesTransferred uint64) {
+	if s.healthMonitor == nil {
+		return
+	}
+
+	update := PathMetricsUpdate{
+		Activity: true,
+	}
+
+	if rtt != nil {
+		update.RTT = rtt
+	}
+
+	if success {
+		update.PacketAcked = true
+		update.BytesAcked = bytesTransferred
+	} else {
+		update.PacketLost = true
+	}
+
+	update.BytesSent = bytesTransferred
+
+	s.healthMonitor.UpdatePathMetrics(s.sessionID, pathID, update)
+}
+
+// startHeartbeatManagement starts heartbeat management for all paths
+func (s *ServerSession) startHeartbeatManagement() {
+	if s.heartbeatManager == nil {
+		s.logger.Warn("Heartbeat manager not initialized")
+		return
+	}
+
+	// Vérifier que l'authentification est terminée et que la session est active
+	if s.stateManager != nil {
+		if !s.stateManager.IsAuthenticationComplete() {
+			s.logger.Debug("Cannot start heartbeat management: authentication not complete",
+				"sessionID", s.sessionID,
+				"sessionState", s.stateManager.GetState().String())
+			return
+		}
+
+		if !s.stateManager.IsActive() {
+			s.logger.Debug("Cannot start heartbeat management: session not active",
+				"sessionID", s.sessionID,
+				"sessionState", s.stateManager.GetState().String())
+			return
+		}
+	}
+
+	s.logger.Debug("Starting heartbeat management for session",
+		"sessionID", s.sessionID,
+		"sessionState", s.stateManager.GetState().String())
+
+	// Start heartbeats for all active paths
+	activePaths := s.pathManager.GetActivePaths()
+	for _, path := range activePaths {
+		s.startHeartbeatForPath(path.ID())
+	}
+}
+
+// startHeartbeatForPath starts heartbeat monitoring for a specific path
+func (s *ServerSession) startHeartbeatForPath(pathID string) {
+	if s.heartbeatManager == nil {
+		return
+	}
+
+	// Define heartbeat send callback
+	sendCallback := func(sessionID, pathID string) error {
+		// Send heartbeat through the path
+		s.logger.Debug("Sending heartbeat", "sessionID", sessionID, "pathID", pathID)
+		
+		// Send actual heartbeat packet using control frame
+		err := s.sendHeartbeatPacket(sessionID, pathID)
+		if err != nil {
+			s.logger.Debug("Failed to send heartbeat packet", "sessionID", sessionID, "pathID", pathID, "error", err)
+			return err
+		}
+
+		// Update health monitor that we sent a heartbeat
+		if s.healthMonitor != nil {
+			s.healthMonitor.UpdatePathMetrics(sessionID, pathID, PathMetricsUpdate{
+				HeartbeatSent: true,
+				Activity:      true,
+			})
+		}
+		return nil
+	}
+
+	// Define heartbeat timeout callback
+	timeoutCallback := func(sessionID, pathID string, timeoutCount int) {
+		s.logger.Warn("Heartbeat timeout detected", "sessionID", sessionID, "pathID", pathID, "timeoutCount", timeoutCount)
+
+		// Update health monitor with timeout information
+		if s.healthMonitor != nil {
+			s.healthMonitor.UpdatePathMetrics(sessionID, pathID, PathMetricsUpdate{
+				PacketLost: true,
+				Activity:   false,
+			})
+		}
+	}
+
+	// Define authentication check callback
+	authCheckCallback := func(sessionID, pathID string) bool {
+		// Check if the path is authenticated
+		if s.authManager == nil {
+			return false
+		}
+		return s.authManager.IsPathAuthenticated(pathID)
+	}
+
+	// Start heartbeat monitoring with authentication awareness
+	err := s.heartbeatManager.StartHeartbeatWithAuth(s.sessionID, pathID, sendCallback, timeoutCallback, authCheckCallback)
+	if err != nil {
+		s.logger.Error("Failed to start heartbeat for path", "pathID", pathID, "error", err)
+	}
+}
+
+// stopHeartbeatForPath stops heartbeat monitoring for a specific path
+func (s *ServerSession) stopHeartbeatForPath(pathID string) {
+	if s.heartbeatManager == nil {
+		return
+	}
+
+	err := s.heartbeatManager.StopHeartbeat(s.sessionID, pathID)
+	if err != nil {
+		s.logger.Error("Failed to stop heartbeat for path", "pathID", pathID, "error", err)
+	}
+}
+
+// stopAllHeartbeats stops heartbeat monitoring for all paths
+func (s *ServerSession) stopAllHeartbeats() {
+	if s.heartbeatManager == nil {
+		return
+	}
+
+	err := s.heartbeatManager.StopSession(s.sessionID)
+	if err != nil {
+		s.logger.Error("Failed to stop heartbeats for session", "error", err)
+	}
+
+	// Shutdown the heartbeat manager
+	err = s.heartbeatManager.Shutdown()
+	if err != nil {
+		s.logger.Error("Failed to shutdown heartbeat manager", "error", err)
+	}
+}
+
+// onHeartbeatReceived should be called when a heartbeat response is received
+func (s *ServerSession) onHeartbeatReceived(pathID string, rtt time.Duration) {
+	if s.heartbeatManager == nil {
+		return
+	}
+
+	// Notify heartbeat manager
+	err := s.heartbeatManager.OnHeartbeatReceived(s.sessionID, pathID)
+	if err != nil {
+		s.logger.Error("Failed to process heartbeat response", "pathID", pathID, "error", err)
+		return
+	}
+
+	// Update health monitor with RTT information
+	if s.healthMonitor != nil {
+		s.healthMonitor.UpdatePathMetrics(s.sessionID, pathID, PathMetricsUpdate{
+			RTT:               &rtt,
+			HeartbeatReceived: true,
+			Activity:          true,
+		})
+	}
+
+	// Update heartbeat manager with path health
+	if s.healthMonitor != nil {
+		pathHealth := s.healthMonitor.GetPathHealth(s.sessionID, pathID)
+		if pathHealth != nil {
+			s.heartbeatManager.UpdatePathHealth(s.sessionID, pathID, rtt, false, int(pathHealth.HealthScore))
+		}
+	}
+}
+
+// setupFlowControlManager sets up the flow control manager for the server session
+func (s *ServerSession) setupFlowControlManager() {
+	// Create a simple receive window manager for flow control
+	receiveWindowManager := NewSimpleReceiveWindowManager(1024 * 1024) // 1MB initial window
+
+	// Create control plane interface directly with session
+	s.controlPlane = NewSessionControlPlane(s)
+
+	// Create flow control manager
+	flowControlConfig := DefaultFlowControlConfig()
+	s.flowControlManager = NewFlowControlManager(
+		s.sessionID,
+		false, // isClient = false for server
+		receiveWindowManager,
+		s.controlPlane,
+		flowControlConfig,
+		s.logger,
+	)
+
+	// Set up flow control callbacks
+	s.flowControlManager.SetWindowUpdateCallback(func(pathID string, windowSize uint64) {
+		s.logger.Debug("Window update sent", "pathID", pathID, "windowSize", windowSize)
+	})
+
+	s.flowControlManager.SetBackpressureCallback(func(pathID string, active bool) {
+		s.logger.Debug("Backpressure signal", "pathID", pathID, "active", active)
+
+		// Update health monitor with backpressure information
+		if s.healthMonitor != nil {
+			s.healthMonitor.UpdatePathMetrics(s.sessionID, pathID, PathMetricsUpdate{
+				Activity: !active,
+			})
+		}
+	})
+
+	s.flowControlManager.SetWindowFullCallback(func() {
+		s.logger.Warn("Receive window is full - applying backpressure")
+	})
+
+	s.flowControlManager.SetWindowAvailableCallback(func() {
+		s.logger.Debug("Receive window is available - releasing backpressure")
+	})
+}
+
+// SendControlFrame sends a control frame via the specified path
+func (s *ServerSession) SendControlFrame(pathID string, frame *control.ControlFrame) error {
+	// Get the path - for server, we typically use the primary path
+	path := s.primaryPath
+	if path == nil {
+		return fmt.Errorf("no path available to send control frame")
+	}
+
+	// Get control stream
+	controlStream, err := path.GetControlStream()
+	if err != nil {
+		return fmt.Errorf("failed to get control stream: %w", err)
+	}
+
+	// Serialize and send frame
+	frameData, err := proto.Marshal(frame)
+	if err != nil {
+		return fmt.Errorf("failed to serialize control frame: %w", err)
+	}
+
+	_, err = controlStream.Write(frameData)
+	if err != nil {
+		return fmt.Errorf("failed to send control frame: %w", err)
+	}
+
+	return nil
+}
+
+// startFlowControlManager starts the flow control manager
+func (s *ServerSession) startFlowControlManager() error {
+	if s.flowControlManager == nil {
+		return nil // Flow control not initialized
+	}
+
+	// Add primary path to flow control
+	if s.primaryPath != nil {
+		err := s.flowControlManager.AddPath(s.primaryPath.ID())
+		if err != nil {
+			return fmt.Errorf("failed to add primary path to flow control: %w", err)
+		}
+	}
+
+	// Start flow control manager
+	err := s.flowControlManager.Start()
+	if err != nil {
+		return fmt.Errorf("failed to start flow control manager: %w", err)
+	}
+
+	return nil
+}
+
+// stopFlowControlManager stops the flow control manager
+func (s *ServerSession) stopFlowControlManager() error {
+	if s.flowControlManager == nil {
+		return nil
+	}
+
+	return s.flowControlManager.Stop()
+}
+
+// handleWindowUpdate handles incoming window update frames
+func (s *ServerSession) handleWindowUpdate(frame *control.ControlFrame) {
+	if s.controlPlane != nil {
+		err := s.controlPlane.HandleControlFrame(frame)
+		if err != nil {
+			s.logger.Error("Failed to handle window update", "error", err)
+		}
+	}
+}
+
+// handleBackpressureSignal handles incoming backpressure signal frames
+func (s *ServerSession) handleBackpressureSignal(frame *control.ControlFrame) {
+	if s.controlPlane != nil {
+		err := s.controlPlane.HandleControlFrame(frame)
+		if err != nil {
+			s.logger.Error("Failed to handle backpressure signal", "error", err)
+		}
+	}
+}
+// sendHeartbeatPacket sends an actual heartbeat packet through the specified path
+func (s *ServerSession) sendHeartbeatPacket(sessionID, pathID string) error {
+	// Get the path from path manager
+	activePaths := s.pathManager.GetActivePaths()
+	var targetPath transport.Path
+	for _, p := range activePaths {
+		if p.ID() == pathID {
+			targetPath = p
+			break
+		}
+	}
+	
+	if targetPath == nil {
+		return fmt.Errorf("path %s not found", pathID)
+	}
+
+	// Get control stream
+	controlStream, err := targetPath.GetControlStream()
+	if err != nil || controlStream == nil {
+		return fmt.Errorf("failed to get control stream for path %s: %v", pathID, err)
+	}
+
+	// Build heartbeat payload
+	s.mutex.Lock()
+	s.heartbeatSequence++
+	seq := s.heartbeatSequence
+	s.mutex.Unlock()
+
+	now := time.Now().UnixNano()
+	hb := &control.Heartbeat{
+		SequenceNumber: seq,
+		Timestamp:      uint64(now),
+		EchoData:       make([]byte, 8),
+	}
+	binary.BigEndian.PutUint64(hb.EchoData, uint64(now))
+	payload, err := proto.Marshal(hb)
+	if err != nil {
+		return fmt.Errorf("failed to marshal heartbeat: %v", err)
+	}
+
+	frame := &control.ControlFrame{
+		FrameId:      data.GenerateFrameID(),
+		Type:         control.ControlFrameType_HEARTBEAT,
+		Payload:      payload,
+		Timestamp:    uint64(time.Now().UnixNano()),
+		SourcePathId: pathID,
+		TargetPathId: "",
+	}
+
+	frameData, err := proto.Marshal(frame)
+	if err != nil {
+		return fmt.Errorf("failed to marshal control frame: %v", err)
+	}
+
+	// Send the heartbeat packet with no write deadline to avoid timeouts
+	_ = controlStream.SetWriteDeadline(time.Time{}) // No deadline for heartbeat writes
+	s.logger.Debug(fmt.Sprintf("Server sending HEARTBEAT seq=%d on path=%s (stream=%d, %d bytes)", seq, pathID, controlStream.StreamID(), len(frameData)))
+	n, err := controlStream.Write(frameData)
+	if err != nil {
+		s.logger.Debug(fmt.Sprintf("Server heartbeat write error: %v", err))
+		return fmt.Errorf("failed to write heartbeat: %v", err)
+	} else {
+		s.logger.Debug(fmt.Sprintf("Server heartbeat write success: %d bytes", n))
+	}
+
+	return nil
 }

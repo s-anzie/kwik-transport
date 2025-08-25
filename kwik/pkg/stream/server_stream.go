@@ -26,7 +26,12 @@ type ServerSession interface {
 	Aggregator() *data.StreamAggregator
 	// GetServerRole returns the server role (PRIMARY or SECONDARY)
 	GetServerRole() control.SessionRole
+	
+	// Expose offset coordinator for offset management
+	GetOffsetCoordinator() data.OffsetCoordinator
 }
+
+
 
 // ServerSession interface to avoid circular imports
 type ServerStream struct {
@@ -159,8 +164,23 @@ func (s *ServerStream) writeWithMetadata(data []byte) (int, error) {
 	// Create metadata protocol instance
 	metadataProtocol := NewMetadataProtocol()
 
+	// Reserve offset range for coordinated writing
+	var reservedOffset int64 = -1
+	if oc := s.session.GetOffsetCoordinator(); oc != nil {
+		var err error
+		reservedOffset, err = oc.ReserveOffsetRange(s.id, len(data))
+		if err != nil {
+			s.session.GetLogger().Debug(fmt.Sprintf("Failed to reserve offset range for server stream %d: %v", s.id, err))
+			// Fall back to simple offset management
+			reservedOffset = int64(s.offset)
+		}
+	} else {
+		// Fall back to simple offset management
+		reservedOffset = int64(s.offset)
+	}
+
 	// Encapsulate data with metadata
-	currentOffset := uint64(s.offset)
+	currentOffset := uint64(reservedOffset)
 	dataFrame, err := metadataProtocol.EncapsulateData(
 		s.remoteStreamID, // Target KWIK stream ID
 		s.id,             // Secondary stream ID (placeholder; not serialized in current format)
@@ -199,6 +219,14 @@ func (s *ServerStream) writeWithMetadata(data []byte) (int, error) {
 
 	// Update offset for next write
 	s.offset += len(data)
+
+	// Commit the offset range after successful write
+	if oc := s.session.GetOffsetCoordinator(); oc != nil && reservedOffset >= 0 {
+		commitErr := oc.CommitOffsetRange(s.id, reservedOffset, len(data))
+		if commitErr != nil {
+			s.session.GetLogger().Debug(fmt.Sprintf("Failed to commit offset range for server stream %d: %v", s.id, commitErr))
+		}
+	}
 
 	// Log for debugging
 	s.session.GetLogger().Info(fmt.Sprintf("[SERVER] Stream %d wrote %d bytes (payload) to KWIK stream %d at offset %d",

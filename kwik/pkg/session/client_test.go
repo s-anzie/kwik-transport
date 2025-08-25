@@ -653,6 +653,7 @@ func TestClientSession_SendRawData_ValidPath(t *testing.T) {
 	mockStream := &MockQuicStream{}
 
 	mockPathManager.On("GetPath", "path-1").Return(mockPath)
+	mockPathManager.On("GetActivePaths").Return([]transport.Path{mockPath}) // Add this for health-aware routing
 	mockPath.On("GetDataStreams").Return([]quic.Stream{})
 	mockPath.On("GetConnection").Return(mockConnection)
 	mockConnection.On("OpenStreamSync", mock.Anything).Return(mockStream, nil)
@@ -801,10 +802,11 @@ func TestSessionState_String(t *testing.T) {
 		state    SessionState
 		expected string
 	}{
-		{SessionStateIdle, "IDLE"},
+		{SessionStateConnecting, "CONNECTING"},
 		{SessionStateConnecting, "CONNECTING"},
 		{SessionStateActive, "ACTIVE"},
-		{SessionStateClosing, "CLOSING"},
+		{SessionStateAuthenticating, "AUTHENTICATING"},
+		{SessionStateAuthenticated, "AUTHENTICATED"},
 		{SessionStateClosed, "CLOSED"},
 		{SessionState(999), "UNKNOWN"},
 	}

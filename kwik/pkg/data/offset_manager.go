@@ -81,11 +81,7 @@ type PhysicalFragment struct {
 	TotalFragments int
 }
 
-// OffsetGap represents a gap in received data
-type OffsetGap struct {
-	StartOffset uint64
-	EndOffset   uint64
-}
+// Note: OffsetGap is defined in offset_coordinator.go
 
 // OffsetManagerConfig contains configuration for offset management
 type OffsetManagerConfig struct {
@@ -472,21 +468,22 @@ func (om *OffsetManager) updateGaps(logicalOffsets *LogicalStreamOffsets, offset
 		logicalOffsets.NextReadOffset = endOffset
 		
 		// Check if this fills additional gaps
-		for len(logicalOffsets.Gaps) > 0 && logicalOffsets.Gaps[0].StartOffset == logicalOffsets.NextReadOffset {
-			logicalOffsets.NextReadOffset = logicalOffsets.Gaps[0].EndOffset
+		for len(logicalOffsets.Gaps) > 0 && logicalOffsets.Gaps[0].Start == int64(logicalOffsets.NextReadOffset) {
+			logicalOffsets.NextReadOffset = uint64(logicalOffsets.Gaps[0].End)
 			logicalOffsets.Gaps = logicalOffsets.Gaps[1:]
 		}
 	} else if offset > logicalOffsets.NextReadOffset {
 		// This creates or extends a gap
 		gap := OffsetGap{
-			StartOffset: logicalOffsets.NextReadOffset,
-			EndOffset:   offset,
+			Start: int64(logicalOffsets.NextReadOffset),
+			End:   int64(offset),
+			Size:  int64(offset - logicalOffsets.NextReadOffset),
 		}
 		
 		// Insert gap in sorted order
 		inserted := false
 		for i, existingGap := range logicalOffsets.Gaps {
-			if gap.StartOffset < existingGap.StartOffset {
+			if gap.Start < existingGap.Start {
 				// Insert before this gap
 				logicalOffsets.Gaps = append(logicalOffsets.Gaps[:i], append([]OffsetGap{gap}, logicalOffsets.Gaps[i:]...)...)
 				inserted = true

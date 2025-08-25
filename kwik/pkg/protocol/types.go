@@ -3,6 +3,7 @@ package protocol
 import (
 	"fmt"
 	"time"
+	"unsafe"
 )
 
 // FrameType represents different types of KWIK frames
@@ -19,6 +20,8 @@ const (
 	FrameTypeAuthenticationResponse
 	FrameTypeStreamCreateNotification
 	FrameTypeRawPacketTransmission
+	FrameTypeHeartbeat
+	FrameTypeHeartbeatResponse
 	
 	// Data plane frame types
 	FrameTypeData
@@ -114,6 +117,291 @@ func (cf *ControlFrame) Deserialize(data []byte) error {
 		timestamp = (timestamp << 8) | uint64(data[timestampStart+i])
 	}
 	cf.Timestamp = time.Unix(0, int64(timestamp))
+	
+	return nil
+}
+
+// HeartbeatPlaneType represents the plane type for heartbeat frames
+type HeartbeatPlaneType int
+
+const (
+	HeartbeatPlaneControl HeartbeatPlaneType = iota
+	HeartbeatPlaneData
+)
+
+// HeartbeatFrame represents a heartbeat request frame
+type HeartbeatFrame struct {
+	FrameID        uint64
+	SequenceID     uint64
+	PathID         string
+	PlaneType      HeartbeatPlaneType
+	StreamID       *uint64 // Optional, for data plane heartbeats
+	Timestamp      time.Time
+	RTTMeasurement bool // Whether this heartbeat measures RTT
+}
+
+// Type returns the frame type (implements Frame interface)
+func (hf *HeartbeatFrame) Type() FrameType {
+	return FrameTypeHeartbeat
+}
+
+// Serialize serializes the heartbeat frame to bytes (implements Frame interface)
+func (hf *HeartbeatFrame) Serialize() ([]byte, error) {
+	// Format: [FrameID:8][SequenceID:8][PlaneType:1][StreamID:9][RTTMeasurement:1][Timestamp:8][PathIDLen:2][PathID:N]
+	pathIDBytes := []byte(hf.PathID)
+	result := make([]byte, 0, 37+len(pathIDBytes))
+	
+	// FrameID (8 bytes)
+	for i := 0; i < 8; i++ {
+		result = append(result, byte(hf.FrameID>>(8*(7-i))))
+	}
+	
+	// SequenceID (8 bytes)
+	for i := 0; i < 8; i++ {
+		result = append(result, byte(hf.SequenceID>>(8*(7-i))))
+	}
+	
+	// PlaneType (1 byte)
+	result = append(result, byte(hf.PlaneType))
+	
+	// StreamID (9 bytes: 1 byte for presence + 8 bytes for value)
+	if hf.StreamID != nil {
+		result = append(result, 1) // Present
+		for i := 0; i < 8; i++ {
+			result = append(result, byte(*hf.StreamID>>(8*(7-i))))
+		}
+	} else {
+		result = append(result, 0) // Not present
+		for i := 0; i < 8; i++ {
+			result = append(result, 0)
+		}
+	}
+	
+	// RTTMeasurement (1 byte)
+	if hf.RTTMeasurement {
+		result = append(result, 1)
+	} else {
+		result = append(result, 0)
+	}
+	
+	// Timestamp (8 bytes - Unix nano)
+	timestamp := uint64(hf.Timestamp.UnixNano())
+	for i := 0; i < 8; i++ {
+		result = append(result, byte(timestamp>>(8*(7-i))))
+	}
+	
+	// PathIDLen (2 bytes)
+	pathIDLen := uint16(len(pathIDBytes))
+	result = append(result, byte(pathIDLen>>8))
+	result = append(result, byte(pathIDLen))
+	
+	// PathID
+	result = append(result, pathIDBytes...)
+	
+	return result, nil
+}
+
+// Deserialize deserializes bytes into the heartbeat frame (implements Frame interface)
+func (hf *HeartbeatFrame) Deserialize(data []byte) error {
+	if len(data) < 35 { // Minimum size without PathID
+		return fmt.Errorf("heartbeat frame data too short: %d bytes", len(data))
+	}
+	
+	// FrameID (8 bytes)
+	hf.FrameID = 0
+	for i := 0; i < 8; i++ {
+		hf.FrameID = (hf.FrameID << 8) | uint64(data[i])
+	}
+	
+	// SequenceID (8 bytes)
+	hf.SequenceID = 0
+	for i := 0; i < 8; i++ {
+		hf.SequenceID = (hf.SequenceID << 8) | uint64(data[8+i])
+	}
+	
+	// PlaneType (1 byte)
+	hf.PlaneType = HeartbeatPlaneType(data[16])
+	
+	// StreamID (9 bytes: 1 byte for presence + 8 bytes for value)
+	if data[17] == 1 { // Present
+		streamID := uint64(0)
+		for i := 0; i < 8; i++ {
+			streamID = (streamID << 8) | uint64(data[18+i])
+		}
+		hf.StreamID = &streamID
+	} else {
+		hf.StreamID = nil
+	}
+	
+	// RTTMeasurement (1 byte)
+	hf.RTTMeasurement = data[26] == 1
+	
+	// Timestamp (8 bytes)
+	timestamp := uint64(0)
+	for i := 0; i < 8; i++ {
+		timestamp = (timestamp << 8) | uint64(data[27+i])
+	}
+	hf.Timestamp = time.Unix(0, int64(timestamp))
+	
+	// PathIDLen (2 bytes)
+	if len(data) < 37 {
+		return fmt.Errorf("heartbeat frame incomplete: missing PathID length")
+	}
+	pathIDLen := uint16(data[35])<<8 | uint16(data[36])
+	
+	// PathID
+	pathIDStart := 37
+	if len(data) < pathIDStart+int(pathIDLen) {
+		return fmt.Errorf("heartbeat frame incomplete: missing PathID data")
+	}
+	hf.PathID = string(data[pathIDStart : pathIDStart+int(pathIDLen)])
+	
+	return nil
+}
+
+// HeartbeatResponseFrame represents a heartbeat response frame
+type HeartbeatResponseFrame struct {
+	FrameID           uint64
+	RequestSequenceID uint64 // Matches the request
+	PathID            string
+	PlaneType         HeartbeatPlaneType
+	StreamID          *uint64 // Optional, for data plane heartbeats
+	Timestamp         time.Time
+	RequestTimestamp  time.Time // From original request for RTT calculation
+	ServerLoad        float64   // Optional server load indicator
+}
+
+// Type returns the frame type (implements Frame interface)
+func (hrf *HeartbeatResponseFrame) Type() FrameType {
+	return FrameTypeHeartbeatResponse
+}
+
+// Serialize serializes the heartbeat response frame to bytes (implements Frame interface)
+func (hrf *HeartbeatResponseFrame) Serialize() ([]byte, error) {
+	// Format: [FrameID:8][RequestSequenceID:8][PlaneType:1][StreamID:9][Timestamp:8][RequestTimestamp:8][ServerLoad:8][PathIDLen:2][PathID:N]
+	pathIDBytes := []byte(hrf.PathID)
+	result := make([]byte, 0, 52+len(pathIDBytes))
+	
+	// FrameID (8 bytes)
+	for i := 0; i < 8; i++ {
+		result = append(result, byte(hrf.FrameID>>(8*(7-i))))
+	}
+	
+	// RequestSequenceID (8 bytes)
+	for i := 0; i < 8; i++ {
+		result = append(result, byte(hrf.RequestSequenceID>>(8*(7-i))))
+	}
+	
+	// PlaneType (1 byte)
+	result = append(result, byte(hrf.PlaneType))
+	
+	// StreamID (9 bytes: 1 byte for presence + 8 bytes for value)
+	if hrf.StreamID != nil {
+		result = append(result, 1) // Present
+		for i := 0; i < 8; i++ {
+			result = append(result, byte(*hrf.StreamID>>(8*(7-i))))
+		}
+	} else {
+		result = append(result, 0) // Not present
+		for i := 0; i < 8; i++ {
+			result = append(result, 0)
+		}
+	}
+	
+	// Timestamp (8 bytes - Unix nano)
+	timestamp := uint64(hrf.Timestamp.UnixNano())
+	for i := 0; i < 8; i++ {
+		result = append(result, byte(timestamp>>(8*(7-i))))
+	}
+	
+	// RequestTimestamp (8 bytes - Unix nano)
+	requestTimestamp := uint64(hrf.RequestTimestamp.UnixNano())
+	for i := 0; i < 8; i++ {
+		result = append(result, byte(requestTimestamp>>(8*(7-i))))
+	}
+	
+	// ServerLoad (8 bytes - float64 as uint64)
+	serverLoadBits := *(*uint64)(unsafe.Pointer(&hrf.ServerLoad))
+	for i := 0; i < 8; i++ {
+		result = append(result, byte(serverLoadBits>>(8*(7-i))))
+	}
+	
+	// PathIDLen (2 bytes)
+	pathIDLen := uint16(len(pathIDBytes))
+	result = append(result, byte(pathIDLen>>8))
+	result = append(result, byte(pathIDLen))
+	
+	// PathID
+	result = append(result, pathIDBytes...)
+	
+	return result, nil
+}
+
+// Deserialize deserializes bytes into the heartbeat response frame (implements Frame interface)
+func (hrf *HeartbeatResponseFrame) Deserialize(data []byte) error {
+	if len(data) < 50 { // Minimum size without PathID
+		return fmt.Errorf("heartbeat response frame data too short: %d bytes", len(data))
+	}
+	
+	// FrameID (8 bytes)
+	hrf.FrameID = 0
+	for i := 0; i < 8; i++ {
+		hrf.FrameID = (hrf.FrameID << 8) | uint64(data[i])
+	}
+	
+	// RequestSequenceID (8 bytes)
+	hrf.RequestSequenceID = 0
+	for i := 0; i < 8; i++ {
+		hrf.RequestSequenceID = (hrf.RequestSequenceID << 8) | uint64(data[8+i])
+	}
+	
+	// PlaneType (1 byte)
+	hrf.PlaneType = HeartbeatPlaneType(data[16])
+	
+	// StreamID (9 bytes: 1 byte for presence + 8 bytes for value)
+	if data[17] == 1 { // Present
+		streamID := uint64(0)
+		for i := 0; i < 8; i++ {
+			streamID = (streamID << 8) | uint64(data[18+i])
+		}
+		hrf.StreamID = &streamID
+	} else {
+		hrf.StreamID = nil
+	}
+	
+	// Timestamp (8 bytes)
+	timestamp := uint64(0)
+	for i := 0; i < 8; i++ {
+		timestamp = (timestamp << 8) | uint64(data[26+i])
+	}
+	hrf.Timestamp = time.Unix(0, int64(timestamp))
+	
+	// RequestTimestamp (8 bytes)
+	requestTimestamp := uint64(0)
+	for i := 0; i < 8; i++ {
+		requestTimestamp = (requestTimestamp << 8) | uint64(data[34+i])
+	}
+	hrf.RequestTimestamp = time.Unix(0, int64(requestTimestamp))
+	
+	// ServerLoad (8 bytes - uint64 as float64)
+	serverLoadBits := uint64(0)
+	for i := 0; i < 8; i++ {
+		serverLoadBits = (serverLoadBits << 8) | uint64(data[42+i])
+	}
+	hrf.ServerLoad = *(*float64)(unsafe.Pointer(&serverLoadBits))
+	
+	// PathIDLen (2 bytes)
+	if len(data) < 52 {
+		return fmt.Errorf("heartbeat response frame incomplete: missing PathID length")
+	}
+	pathIDLen := uint16(data[50])<<8 | uint16(data[51])
+	
+	// PathID
+	pathIDStart := 52
+	if len(data) < pathIDStart+int(pathIDLen) {
+		return fmt.Errorf("heartbeat response frame incomplete: missing PathID data")
+	}
+	hrf.PathID = string(data[pathIDStart : pathIDStart+int(pathIDLen)])
 	
 	return nil
 }

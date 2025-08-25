@@ -20,6 +20,18 @@ type DataPresentationManagerImpl struct {
 	windowManager       *ReceiveWindowManagerImpl
 	backpressureManager *BackpressureManagerImpl
 
+	// Resource reservation system
+	reservationManager *ResourceReservationManager
+
+	// Garbage collection system
+	garbageCollector *ResourceGarbageCollector
+	
+	// Resource monitoring system
+	resourceMonitor *ResourceMonitor
+	
+	// Resource configuration manager
+	resourceConfigManager *ResourceConfigManager
+
 	// Configuration
 	config *PresentationConfig
 
@@ -97,10 +109,17 @@ func NewDataPresentationManager(config *PresentationConfig) *DataPresentationMan
 	}
 	backpressureManager := NewBackpressureManager(backpressureConfig)
 
+	// Create resource reservation manager
+	reservationManager := NewResourceReservationManager(
+		5*time.Second, // 5 second reservation timeout
+		100,           // Max 100 concurrent reservations
+	)
+
 	dpm := &DataPresentationManagerImpl{
 		streamBuffers:       make(map[uint64]*StreamBufferImpl),
 		windowManager:       windowManager,
 		backpressureManager: backpressureManager,
+		reservationManager:  reservationManager,
 		config:              config,
 		globalStats: &GlobalPresentationStatsImpl{
 			ActiveStreams:        0,
@@ -125,6 +144,21 @@ func NewDataPresentationManager(config *PresentationConfig) *DataPresentationMan
 	// Set up backpressure callback
 	backpressureManager.SetBackpressureCallback(dpm.handleBackpressureEvent)
 
+	// Create garbage collector
+	gcConfig := DefaultGCConfig()
+	gcConfig.EnableImmediateCleanup = config.EnableMemoryPooling // Use memory pooling config as proxy
+	dpm.garbageCollector = NewResourceGarbageCollector(dpm, windowManager, gcConfig)
+	
+	// Create resource monitor
+	memoryPool := GetGlobalMemoryManager().pool
+	monitorConfig := DefaultResourceMonitorConfig()
+	monitorConfig.EnableLeakDetection = true
+	monitorConfig.EnableTrendAnalysis = config.EnableDetailedMetrics
+	dpm.resourceMonitor = NewResourceMonitor(dpm, windowManager, memoryPool, dpm.garbageCollector, monitorConfig)
+	
+	// Create resource configuration manager
+	dpm.resourceConfigManager = NewResourceConfigManager()
+
 	return dpm
 }
 
@@ -137,14 +171,6 @@ func (dpm *DataPresentationManagerImpl) CreateStreamBuffer(streamID uint64, meta
 		return fmt.Errorf("invalid stream ID: 0")
 	}
 
-	dpm.buffersMutex.Lock()
-	defer dpm.buffersMutex.Unlock()
-
-	// Check if stream already exists
-	if _, exists := dpm.streamBuffers[streamID]; exists {
-		return fmt.Errorf("stream buffer %d already exists", streamID)
-	}
-
 	// Convert metadata to the expected type
 	var streamMetadata *StreamMetadata
 	if metadata != nil {
@@ -153,42 +179,92 @@ func (dpm *DataPresentationManagerImpl) CreateStreamBuffer(streamID uint64, meta
 		}
 	}
 
-	// Allocate window space for the new stream
-	bufferSize := dpm.config.DefaultStreamBufferSize
-	if streamMetadata != nil && streamMetadata.MaxBufferSize > 0 {
-		bufferSize = streamMetadata.MaxBufferSize
-		if bufferSize > dpm.config.MaxStreamBufferSize {
-			bufferSize = dpm.config.MaxStreamBufferSize
+	// Use atomic stream creation to prevent race conditions
+	return dpm.createStreamBufferAtomic(streamID, streamMetadata)
+}
+
+// createStreamBufferAtomic atomically creates a stream buffer with resource reservation
+func (dpm *DataPresentationManagerImpl) createStreamBufferAtomic(streamID uint64, streamMetadata *StreamMetadata) error {
+	// Step 1: Reserve resources first
+	bufferSize := dpm.calculateAdaptiveBufferSize(streamMetadata)
+	
+	priority := StreamPriorityNormal
+	if streamMetadata != nil {
+		priority = streamMetadata.Priority
+	}
+	
+	reservation, err := dpm.reservationManager.ReserveResources(streamID, bufferSize, bufferSize, priority)
+	if err != nil {
+		return fmt.Errorf("failed to reserve resources: %w", err)
+	}
+	
+	// Ensure we release the reservation if something goes wrong
+	defer func() {
+		if err != nil {
+			dpm.reservationManager.ReleaseReservation(reservation.ReservationID)
 		}
+	}()
+	
+	// Step 2: Check and allocate resources atomically
+	dpm.buffersMutex.Lock()
+	defer dpm.buffersMutex.Unlock()
+
+	// Check if stream already exists
+	if _, exists := dpm.streamBuffers[streamID]; exists {
+		return fmt.Errorf("stream buffer %d already exists", streamID)
 	}
 
-	// Ensure buffer size doesn't exceed available window space
+	// Try dynamic window expansion if needed
 	windowStatus := dpm.windowManager.GetWindowStatus()
-	if bufferSize > windowStatus.AvailableSize {
-		// If no space is available, return an error
-		if windowStatus.AvailableSize == 0 {
-			return fmt.Errorf("no window space available for new stream")
+	reservedWindow, _ := dpm.reservationManager.GetReservedResources()
+	effectiveAvailable := windowStatus.AvailableSize
+	
+	// Account for reserved resources
+	if effectiveAvailable > reservedWindow {
+		effectiveAvailable -= reservedWindow
+	} else {
+		effectiveAvailable = 0
+	}
+	
+	if bufferSize > effectiveAvailable {
+		// Try to trigger dynamic window expansion if enabled
+		if dynamicStats := dpm.windowManager.GetDynamicWindowStats(); dynamicStats.Enabled {
+			// Force a window adjustment to try to accommodate the new stream
+			dpm.windowManager.ForceWindowAdjustment()
+			
+			// Re-check available space after adjustment
+			windowStatus = dpm.windowManager.GetWindowStatus()
+			effectiveAvailable = windowStatus.AvailableSize
+			if effectiveAvailable > reservedWindow {
+				effectiveAvailable -= reservedWindow
+			} else {
+				effectiveAvailable = 0
+			}
 		}
-		// Adjust buffer size to fit available window space
-		bufferSize = windowStatus.AvailableSize
+		
+		if bufferSize > effectiveAvailable {
+			// If still no space is available, return an error
+			if effectiveAvailable == 0 {
+				return fmt.Errorf("no window space available for new stream")
+			}
+			// Adjust buffer size to fit available window space
+			bufferSize = effectiveAvailable
+		}
 	}
 
-	err := dpm.windowManager.AllocateWindow(streamID, bufferSize)
+	// Step 3: Allocate window space atomically
+	err = dpm.windowManager.AllocateWindowAtomic(streamID, bufferSize)
 	if err != nil {
 		return fmt.Errorf("failed to allocate window space: %w", err)
 	}
 
-	// Create stream buffer configuration
+	// Step 4: Create stream buffer configuration
 	bufferConfig := &StreamBufferConfig{
 		StreamID:      streamID,
 		BufferSize:    bufferSize,
-		Priority:      StreamPriorityNormal,
+		Priority:      priority,
 		GapTimeout:    dpm.config.GapTimeout,
 		EnableMetrics: dpm.config.EnableDetailedMetrics,
-	}
-
-	if streamMetadata != nil {
-		bufferConfig.Priority = streamMetadata.Priority
 	}
 
 	// Configure buffer with logger from DPM if available
@@ -197,7 +273,7 @@ func (dpm *DataPresentationManagerImpl) CreateStreamBuffer(streamID uint64, meta
 		bufferConfig.Logger = dpm.logger
 	}
 
-	// Create the stream buffer
+	// Step 5: Create the stream buffer
 	buffer := NewStreamBuffer(streamID, streamMetadata, bufferConfig)
 
 	// Set backpressure callback
@@ -215,12 +291,29 @@ func (dpm *DataPresentationManagerImpl) CreateStreamBuffer(streamID uint64, meta
 		}
 	})
 
+	// Step 6: Add to stream buffers map
 	dpm.streamBuffers[streamID] = buffer
+
+	// Step 7: Commit the reservation (resources are now allocated)
+	err = dpm.reservationManager.CommitReservation(reservation.ReservationID)
+	if err != nil {
+		// If commit fails, clean up the allocated resources
+		delete(dpm.streamBuffers, streamID)
+		dpm.windowManager.ReleaseWindow(streamID, bufferSize)
+		return fmt.Errorf("failed to commit resource reservation: %w", err)
+	}
 
 	// Update statistics (buffersMutex already held)
 	dpm.updateGlobalStatsLocked()
 
 	return nil
+}
+
+// CreateStreamBufferWithReservation creates a stream buffer using an existing reservation
+func (dpm *DataPresentationManagerImpl) CreateStreamBufferWithReservation(reservationID string) error {
+	// This method would be used when a reservation was made separately
+	// For now, we'll keep the main CreateStreamBuffer method as the primary interface
+	return fmt.Errorf("not implemented: use CreateStreamBuffer instead")
 }
 
 // RemoveStreamBuffer removes a stream buffer
@@ -254,6 +347,9 @@ func (dpm *DataPresentationManagerImpl) RemoveStreamBuffer(streamID uint64) erro
 
 	// Deactivate backpressure for this stream
 	dpm.backpressureManager.DeactivateBackpressure(streamID)
+
+	// Note: Don't call garbageCollector.CleanupStreamResources here to avoid circular dependency
+	// The GC will clean up resources in its next run
 
 	// Update statistics (buffersMutex already held)
 	dpm.updateGlobalStatsLocked()
@@ -456,6 +552,22 @@ func (dpm *DataPresentationManagerImpl) Start() error {
 		go dpm.metricsWorker()
 	}
 
+	// Start garbage collector
+	if dpm.garbageCollector != nil {
+		err := dpm.garbageCollector.Start()
+		if err != nil {
+			return fmt.Errorf("failed to start garbage collector: %w", err)
+		}
+	}
+	
+	// Start resource monitor
+	if dpm.resourceMonitor != nil {
+		err := dpm.resourceMonitor.Start()
+		if err != nil {
+			return fmt.Errorf("failed to start resource monitor: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -503,9 +615,20 @@ func (dpm *DataPresentationManagerImpl) Shutdown() error {
 		dpm.RemoveStreamBuffer(streamID)
 	}
 
+	// Stop garbage collector
+	if dpm.garbageCollector != nil {
+		dpm.garbageCollector.Stop()
+	}
+	
+	// Stop resource monitor
+	if dpm.resourceMonitor != nil {
+		dpm.resourceMonitor.Stop()
+	}
+
 	// Shutdown components
 	dpm.windowManager.Shutdown()
 	dpm.backpressureManager.Shutdown()
+	dpm.reservationManager.Shutdown()
 
 	return nil
 }
@@ -904,6 +1027,130 @@ func (dpm *DataPresentationManagerImpl) GetDetailedGlobalStats() *GlobalPresenta
 	}
 }
 
+// GetResourceMonitor returns the resource monitor instance
+func (dpm *DataPresentationManagerImpl) GetResourceMonitor() *ResourceMonitor {
+	return dpm.resourceMonitor
+}
+
+// GetGarbageCollector returns the garbage collector instance
+func (dpm *DataPresentationManagerImpl) GetGarbageCollector() *ResourceGarbageCollector {
+	return dpm.garbageCollector
+}
+
+// GetResourceMetrics returns current resource monitoring metrics
+func (dpm *DataPresentationManagerImpl) GetResourceMetrics() *ResourceMetrics {
+	if dpm.resourceMonitor != nil {
+		return dpm.resourceMonitor.GetMetrics()
+	}
+	return nil
+}
+
+// GetResourceAlerts returns current resource monitoring alerts
+func (dpm *DataPresentationManagerImpl) GetResourceAlerts() []ResourceAlert {
+	if dpm.resourceMonitor != nil {
+		return dpm.resourceMonitor.GetAlerts()
+	}
+	return nil
+}
+
+// GetActiveResourceAlerts returns only unresolved resource alerts
+func (dpm *DataPresentationManagerImpl) GetActiveResourceAlerts() []ResourceAlert {
+	if dpm.resourceMonitor != nil {
+		return dpm.resourceMonitor.GetActiveAlerts()
+	}
+	return nil
+}
+
+// SetResourceThresholds updates resource monitoring thresholds
+func (dpm *DataPresentationManagerImpl) SetResourceThresholds(thresholds *ResourceThresholds) {
+	if dpm.resourceMonitor != nil {
+		dpm.resourceMonitor.SetThresholds(thresholds)
+	}
+}
+
+// ForceResourceCleanup forces an immediate resource cleanup
+func (dpm *DataPresentationManagerImpl) ForceResourceCleanup() *GCStats {
+	if dpm.garbageCollector != nil {
+		return dpm.garbageCollector.ForceGC()
+	}
+	return nil
+}
+
+// SetResourceAlertCallback sets a callback for resource alerts
+func (dpm *DataPresentationManagerImpl) SetResourceAlertCallback(callback func(alert ResourceAlert)) {
+	if dpm.resourceMonitor != nil {
+		dpm.resourceMonitor.SetAlertCallback(callback)
+	}
+}
+
+// GetResourceConfigManager returns the resource configuration manager
+func (dpm *DataPresentationManagerImpl) GetResourceConfigManager() *ResourceConfigManager {
+	return dpm.resourceConfigManager
+}
+
+// GetResourceManagementConfig returns the current resource management configuration
+func (dpm *DataPresentationManagerImpl) GetResourceManagementConfig() *ResourceManagementConfig {
+	if dpm.resourceConfigManager != nil {
+		return dpm.resourceConfigManager.GetConfig()
+	}
+	return nil
+}
+
+// SetResourceManagementConfig sets the resource management configuration
+func (dpm *DataPresentationManagerImpl) SetResourceManagementConfig(config *ResourceManagementConfig) error {
+	if dpm.resourceConfigManager != nil {
+		return dpm.resourceConfigManager.SetConfig(config)
+	}
+	return fmt.Errorf("resource configuration manager not available")
+}
+
+// ApplyResourceProfile applies a predefined resource profile
+func (dpm *DataPresentationManagerImpl) ApplyResourceProfile(profileName string) error {
+	if dpm.resourceConfigManager != nil {
+		return dpm.resourceConfigManager.ApplyProfile(profileName)
+	}
+	return fmt.Errorf("resource configuration manager not available")
+}
+
+// GetAvailableResourceProfiles returns available resource profiles
+func (dpm *DataPresentationManagerImpl) GetAvailableResourceProfiles() []string {
+	if dpm.resourceConfigManager != nil {
+		return dpm.resourceConfigManager.GetAvailableProfiles()
+	}
+	return nil
+}
+
+// GetResourceProfile returns a specific resource profile
+func (dpm *DataPresentationManagerImpl) GetResourceProfile(name string) (*ResourceProfile, error) {
+	if dpm.resourceConfigManager != nil {
+		return dpm.resourceConfigManager.GetProfile(name)
+	}
+	return nil, fmt.Errorf("resource configuration manager not available")
+}
+
+// AddCustomResourceProfile adds a custom resource profile
+func (dpm *DataPresentationManagerImpl) AddCustomResourceProfile(name string, profile *ResourceProfile) error {
+	if dpm.resourceConfigManager != nil {
+		return dpm.resourceConfigManager.AddCustomProfile(name, profile)
+	}
+	return fmt.Errorf("resource configuration manager not available")
+}
+
+// GetResourcePolicy returns the current resource policy
+func (dpm *DataPresentationManagerImpl) GetResourcePolicy() *ResourcePolicy {
+	if dpm.resourceConfigManager != nil {
+		return dpm.resourceConfigManager.GetPolicy()
+	}
+	return nil
+}
+
+// SetResourcePolicy sets the resource policy
+func (dpm *DataPresentationManagerImpl) SetResourcePolicy(policy *ResourcePolicy) {
+	if dpm.resourceConfigManager != nil {
+		dpm.resourceConfigManager.SetPolicy(policy)
+	}
+}
+
 // Advanced routing and data writing methods
 
 // WriteToStreamBatch writes multiple data chunks to streams in a batch
@@ -1051,11 +1298,71 @@ func (dpm *DataPresentationManagerImpl) GetStreamRoutingInfo(streamID uint64) (*
 		StreamID:           streamID,
 		BufferUtilization:  usage.Utilization,
 		Priority:           metadata.Priority,
-		BackpressureActive: dpm.backpressureManager.IsBackpressureActive(streamID),
-		WindowAllocation:   dpm.getStreamWindowAllocation(streamID),
+		BackpressureActive: dpm.IsBackpressureActive(streamID),
+		WindowAllocation:   dpm.windowManager.GetWindowStatus().StreamAllocations[streamID],
 		LastActivity:       metadata.LastActivity,
 	}, nil
 }
+
+// calculateAdaptiveBufferSize calculates an adaptive buffer size based on current system conditions
+func (dpm *DataPresentationManagerImpl) calculateAdaptiveBufferSize(metadata *StreamMetadata) uint64 {
+	// Start with default size
+	baseSize := dpm.config.DefaultStreamBufferSize
+	
+	// Adjust based on stream metadata if available
+	if metadata != nil {
+		if metadata.MaxBufferSize > 0 {
+			baseSize = metadata.MaxBufferSize
+			if baseSize > dpm.config.MaxStreamBufferSize {
+				baseSize = dpm.config.MaxStreamBufferSize
+			}
+		}
+		
+		// Adjust based on stream priority
+		switch metadata.Priority {
+		case StreamPriorityCritical:
+			baseSize = uint64(float64(baseSize) * 1.5) // 50% larger for critical streams
+		case StreamPriorityHigh:
+			baseSize = uint64(float64(baseSize) * 1.2) // 20% larger for high priority
+		case StreamPriorityLow:
+			baseSize = uint64(float64(baseSize) * 0.8) // 20% smaller for low priority
+		}
+	}
+	
+	// Adjust based on current system load
+	dpm.buffersMutex.RLock()
+	activeStreams := len(dpm.streamBuffers)
+	dpm.buffersMutex.RUnlock()
+	
+	// If we have many active streams, reduce buffer size to accommodate more streams
+	if activeStreams > 50 {
+		reductionFactor := 1.0 - (float64(activeStreams-50) * 0.01) // Reduce by 1% per stream over 50
+		if reductionFactor < 0.5 {
+			reductionFactor = 0.5 // Don't reduce below 50%
+		}
+		baseSize = uint64(float64(baseSize) * reductionFactor)
+	}
+	
+	// Adjust based on window utilization
+	windowStatus := dpm.windowManager.GetWindowStatus()
+	if windowStatus.Utilization > 0.8 {
+		// High utilization - reduce buffer size
+		baseSize = uint64(float64(baseSize) * 0.7)
+	} else if windowStatus.Utilization < 0.3 {
+		// Low utilization - can afford larger buffers
+		baseSize = uint64(float64(baseSize) * 1.3)
+	}
+	
+	// Ensure we stay within bounds
+	if baseSize < MinStreamBufferSize {
+		baseSize = MinStreamBufferSize
+	}
+	if baseSize > dpm.config.MaxStreamBufferSize {
+		baseSize = dpm.config.MaxStreamBufferSize
+	}
+	
+	return baseSize
+}       
 
 // getStreamWindowAllocation returns the window allocation for a stream
 func (dpm *DataPresentationManagerImpl) getStreamWindowAllocation(streamID uint64) uint64 {

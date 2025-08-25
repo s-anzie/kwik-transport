@@ -37,6 +37,16 @@ type ReceiveWindowManagerImpl struct {
 	// State
 	isBackpressureActive bool
 	backpressureMutex    sync.RWMutex
+	
+	// Dynamic window management
+	dynamicAdjustmentEnabled bool
+	lastAdjustmentTime       time.Time
+	adjustmentMutex          sync.RWMutex
+	memoryMonitor           *MemoryMonitor
+	
+	// Lifecycle management
+	stopDynamicAdjustment chan struct{}
+	dynamicWorkerWg       sync.WaitGroup
 }
 
 // WindowManagerConfig holds configuration for the window manager
@@ -49,6 +59,13 @@ type WindowManagerConfig struct {
 	AutoSlideEnabled      bool          `json:"auto_slide_enabled"`
 	AutoSlideInterval     time.Duration `json:"auto_slide_interval"`
 	MaxStreams            int           `json:"max_streams"`
+	
+	// Dynamic window management configuration
+	EnableDynamicSizing   bool          `json:"enable_dynamic_sizing"`
+	GrowthFactor          float64       `json:"growth_factor"`          // Factor by which to grow window (default: 1.5)
+	ShrinkFactor          float64       `json:"shrink_factor"`          // Factor by which to shrink window (default: 0.8)
+	MemoryPressureThreshold float64     `json:"memory_pressure_threshold"` // Memory usage threshold to trigger shrinking (default: 0.85)
+	DynamicAdjustInterval time.Duration `json:"dynamic_adjust_interval"`   // Interval for dynamic adjustments (default: 5s)
 }
 
 // WindowManagerStats contains statistics for the window manager
@@ -63,6 +80,52 @@ type WindowManagerStats struct {
 	LastUpdate         time.Time `json:"last_update"`
 }
 
+// MemoryMonitor tracks system memory usage for dynamic window management
+type MemoryMonitor struct {
+	totalMemory     uint64
+	availableMemory uint64
+	usedMemory      uint64
+	lastUpdate      time.Time
+	mutex           sync.RWMutex
+}
+
+// NewMemoryMonitor creates a new memory monitor
+func NewMemoryMonitor() *MemoryMonitor {
+	return &MemoryMonitor{
+		totalMemory:     8 * 1024 * 1024 * 1024, // Default 8GB, would be detected in real implementation
+		availableMemory: 6 * 1024 * 1024 * 1024, // Default 6GB available
+		usedMemory:      2 * 1024 * 1024 * 1024, // Default 2GB used
+		lastUpdate:      time.Now(),
+	}
+}
+
+// GetMemoryUsage returns current memory usage as a ratio (0.0 to 1.0)
+func (mm *MemoryMonitor) GetMemoryUsage() float64 {
+	mm.mutex.RLock()
+	defer mm.mutex.RUnlock()
+	
+	if mm.totalMemory == 0 {
+		return 0.0
+	}
+	return float64(mm.usedMemory) / float64(mm.totalMemory)
+}
+
+// UpdateMemoryStats updates memory statistics (would use real system calls in production)
+func (mm *MemoryMonitor) UpdateMemoryStats() {
+	mm.mutex.Lock()
+	defer mm.mutex.Unlock()
+	
+	// In a real implementation, this would query actual system memory
+	// For now, we simulate memory pressure based on time
+	mm.lastUpdate = time.Now()
+	
+	// Simulate varying memory pressure
+	baseUsage := 0.3 // 30% base usage
+	variableUsage := 0.2 * (1 + 0.5*float64(time.Now().Unix()%10)/10) // Variable 20-30%
+	mm.usedMemory = uint64(float64(mm.totalMemory) * (baseUsage + variableUsage))
+	mm.availableMemory = mm.totalMemory - mm.usedMemory
+}
+
 // NewReceiveWindowManager creates a new receive window manager
 func NewReceiveWindowManager(config *WindowManagerConfig) *ReceiveWindowManagerImpl {
 	if config == nil {
@@ -75,7 +138,19 @@ func NewReceiveWindowManager(config *WindowManagerConfig) *ReceiveWindowManagerI
 			AutoSlideEnabled:      true,
 			AutoSlideInterval:     100 * time.Millisecond,
 			MaxStreams:            1000,
+			
+			// Dynamic window management defaults
+			EnableDynamicSizing:     true,
+			GrowthFactor:           1.5,
+			ShrinkFactor:           0.8,
+			MemoryPressureThreshold: 0.85,
+			DynamicAdjustInterval:  5 * time.Second,
 		}
+	}
+	
+	// Ensure MaxStreams is set to a reasonable default if not specified
+	if config.MaxStreams <= 0 {
+		config.MaxStreams = 1000
 	}
 	
 	rwm := &ReceiveWindowManagerImpl{
@@ -96,11 +171,23 @@ func NewReceiveWindowManager(config *WindowManagerConfig) *ReceiveWindowManagerI
 			AverageUtilization: 0,
 			LastUpdate:         time.Now(),
 		},
+		
+		// Dynamic window management
+		dynamicAdjustmentEnabled: config.EnableDynamicSizing,
+		lastAdjustmentTime:       time.Now(),
+		memoryMonitor:           NewMemoryMonitor(),
+		stopDynamicAdjustment:   make(chan struct{}),
 	}
 	
 	// Start auto-slide goroutine if enabled
 	if config.AutoSlideEnabled {
 		go rwm.autoSlideWorker()
+	}
+	
+	// Start dynamic adjustment worker if enabled
+	if config.EnableDynamicSizing {
+		rwm.dynamicWorkerWg.Add(1)
+		go rwm.dynamicAdjustmentWorker()
 	}
 	
 	return rwm
@@ -161,20 +248,29 @@ func (rwm *ReceiveWindowManagerImpl) AllocateWindow(streamID uint64, size uint64
 		return fmt.Errorf("cannot allocate zero bytes")
 	}
 	
-	// Check stream limit
-	rwm.allocationsMutex.RLock()
-	if len(rwm.streamAllocations) >= rwm.config.MaxStreams {
-		if _, exists := rwm.streamAllocations[streamID]; !exists {
-			rwm.allocationsMutex.RUnlock()
-			return fmt.Errorf("maximum number of streams (%d) reached", rwm.config.MaxStreams)
-		}
-	}
-	rwm.allocationsMutex.RUnlock()
+	// Use atomic allocation to prevent race conditions
+	return rwm.AllocateWindowAtomic(streamID, size)
+}
+
+// AllocateWindowAtomic atomically allocates window space for a stream
+func (rwm *ReceiveWindowManagerImpl) AllocateWindowAtomic(streamID uint64, size uint64) error {
+	// Acquire all necessary locks in a consistent order to prevent deadlocks
+	// Order: allocationsMutex -> sizeMutex -> statsMutex -> backpressureMutex
+	
+	rwm.allocationsMutex.Lock()
+	defer rwm.allocationsMutex.Unlock()
 	
 	rwm.sizeMutex.Lock()
 	defer rwm.sizeMutex.Unlock()
 	
-	// Check if we have enough space
+	// Check stream limit while holding the allocation mutex
+	if len(rwm.streamAllocations) >= rwm.config.MaxStreams {
+		if _, exists := rwm.streamAllocations[streamID]; !exists {
+			return fmt.Errorf("maximum number of streams (%d) reached", rwm.config.MaxStreams)
+		}
+	}
+	
+	// Check if we have enough space while holding the size mutex
 	if rwm.usedSize+size > rwm.totalSize {
 		// Trigger backpressure
 		rwm.activateBackpressure()
@@ -182,17 +278,15 @@ func (rwm *ReceiveWindowManagerImpl) AllocateWindow(streamID uint64, size uint64
 			size, rwm.totalSize-rwm.usedSize)
 	}
 	
-	// Allocate the space
+	// Allocate the space atomically
 	rwm.usedSize += size
 	
-	// Update stream allocation
-	rwm.allocationsMutex.Lock()
+	// Update stream allocation (already holding allocationsMutex)
 	if existing, exists := rwm.streamAllocations[streamID]; exists {
 		rwm.streamAllocations[streamID] = existing + size
 	} else {
 		rwm.streamAllocations[streamID] = size
 	}
-	rwm.allocationsMutex.Unlock()
 	
 	// Update statistics
 	rwm.statsMutex.Lock()
@@ -226,6 +320,93 @@ func (rwm *ReceiveWindowManagerImpl) AllocateWindow(streamID uint64, size uint64
 				go callback() // Run in goroutine to avoid blocking
 			}
 		}
+	}
+	
+	return nil
+}
+
+// TryAllocateWindow attempts to allocate window space without blocking
+func (rwm *ReceiveWindowManagerImpl) TryAllocateWindow(streamID uint64, size uint64) error {
+	// Use a timeout-based approach since TryLock is not available in older Go versions
+	allocDone := make(chan bool, 1)
+	sizeDone := make(chan bool, 1)
+	
+	// Try to acquire allocation mutex with timeout
+	go func() {
+		rwm.allocationsMutex.Lock()
+		allocDone <- true
+	}()
+	
+	select {
+	case <-allocDone:
+		defer rwm.allocationsMutex.Unlock()
+	case <-time.After(10 * time.Millisecond):
+		return fmt.Errorf("allocation mutex busy")
+	}
+	
+	// Try to acquire size mutex with timeout
+	go func() {
+		rwm.sizeMutex.Lock()
+		sizeDone <- true
+	}()
+	
+	select {
+	case <-sizeDone:
+		defer rwm.sizeMutex.Unlock()
+	case <-time.After(10 * time.Millisecond):
+		return fmt.Errorf("size mutex busy")
+	}
+	
+	// Check stream limit
+	if len(rwm.streamAllocations) >= rwm.config.MaxStreams {
+		if _, exists := rwm.streamAllocations[streamID]; !exists {
+			return fmt.Errorf("maximum number of streams (%d) reached", rwm.config.MaxStreams)
+		}
+	}
+	
+	// Check if we have enough space
+	if rwm.usedSize+size > rwm.totalSize {
+		return fmt.Errorf("insufficient window space: requested %d, available %d", 
+			size, rwm.totalSize-rwm.usedSize)
+	}
+	
+	// Allocate the space
+	rwm.usedSize += size
+	
+	// Update stream allocation
+	if existing, exists := rwm.streamAllocations[streamID]; exists {
+		rwm.streamAllocations[streamID] = existing + size
+	} else {
+		rwm.streamAllocations[streamID] = size
+	}
+	
+	// Update statistics
+	rwm.statsMutex.Lock()
+	rwm.stats.TotalAllocations++
+	rwm.statsMutex.Unlock()
+	
+	return nil
+}
+
+// CheckResourceAvailability checks if resources are available without allocating
+func (rwm *ReceiveWindowManagerImpl) CheckResourceAvailability(streamID uint64, size uint64) error {
+	rwm.allocationsMutex.RLock()
+	defer rwm.allocationsMutex.RUnlock()
+	
+	rwm.sizeMutex.RLock()
+	defer rwm.sizeMutex.RUnlock()
+	
+	// Check stream limit
+	if len(rwm.streamAllocations) >= rwm.config.MaxStreams {
+		if _, exists := rwm.streamAllocations[streamID]; !exists {
+			return fmt.Errorf("maximum number of streams (%d) reached", rwm.config.MaxStreams)
+		}
+	}
+	
+	// Check if we have enough space
+	if rwm.usedSize+size > rwm.totalSize {
+		return fmt.Errorf("insufficient window space: requested %d, available %d", 
+			size, rwm.totalSize-rwm.usedSize)
 	}
 	
 	return nil
@@ -560,6 +741,12 @@ func (rwm *ReceiveWindowManagerImpl) GetStats() *WindowManagerStats {
 
 // Shutdown gracefully shuts down the window manager
 func (rwm *ReceiveWindowManagerImpl) Shutdown() error {
+	// Stop dynamic adjustment worker
+	if rwm.dynamicAdjustmentEnabled {
+		close(rwm.stopDynamicAdjustment)
+		rwm.dynamicWorkerWg.Wait()
+	}
+	
 	// Clear all allocations
 	rwm.allocationsMutex.Lock()
 	rwm.streamAllocations = make(map[uint64]uint64)
@@ -723,4 +910,229 @@ func (rwm *ReceiveWindowManagerImpl) calculateSlidesPerSecond() float64 {
 	}
 	
 	return float64(rwm.stats.TotalSlides) / timeSinceStart.Seconds()
+}
+
+// Dynamic Window Management Methods
+
+// dynamicAdjustmentWorker runs the dynamic window adjustment worker
+func (rwm *ReceiveWindowManagerImpl) dynamicAdjustmentWorker() {
+	defer rwm.dynamicWorkerWg.Done()
+	
+	ticker := time.NewTicker(rwm.config.DynamicAdjustInterval)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ticker.C:
+			rwm.performDynamicAdjustment()
+		case <-rwm.stopDynamicAdjustment:
+			return
+		}
+	}
+}
+
+// performDynamicAdjustment performs dynamic window size adjustment based on current conditions
+func (rwm *ReceiveWindowManagerImpl) performDynamicAdjustment() {
+	// Check if adjustment is enabled without holding locks
+	if !rwm.dynamicAdjustmentEnabled {
+		return
+	}
+	
+	rwm.adjustmentMutex.Lock()
+	defer rwm.adjustmentMutex.Unlock()
+	
+	// Update memory statistics
+	rwm.memoryMonitor.UpdateMemoryStats()
+	
+	// Get current metrics (avoid nested locking)
+	rwm.sizeMutex.RLock()
+	currentSize := rwm.totalSize
+	usedSize := rwm.usedSize
+	rwm.sizeMutex.RUnlock()
+	
+	// Calculate utilization without calling GetWindowUtilization to avoid nested locks
+	var currentUtilization float64
+	if currentSize > 0 {
+		currentUtilization = float64(usedSize) / float64(currentSize)
+	}
+	
+	memoryUsage := rwm.memoryMonitor.GetMemoryUsage()
+	
+	// Determine if we should grow or shrink the window
+	shouldGrow := rwm.shouldGrowWindow(currentUtilization, memoryUsage)
+	shouldShrink := rwm.shouldShrinkWindow(currentUtilization, memoryUsage)
+	
+	var newSize uint64
+	var adjusted bool
+	
+	if shouldGrow && !shouldShrink {
+		// Grow the window
+		newSize = uint64(float64(currentSize) * rwm.config.GrowthFactor)
+		if newSize > rwm.config.MaxSize {
+			newSize = rwm.config.MaxSize
+		}
+		if newSize != currentSize {
+			adjusted = true
+		}
+	} else if shouldShrink && !shouldGrow {
+		// Shrink the window
+		newSize = uint64(float64(currentSize) * rwm.config.ShrinkFactor)
+		if newSize < rwm.config.MinSize {
+			newSize = rwm.config.MinSize
+		}
+		if newSize != currentSize {
+			adjusted = true
+		}
+	}
+	
+	// Apply the adjustment if needed
+	if adjusted {
+		err := rwm.SetWindowSize(newSize)
+		if err == nil {
+			rwm.lastAdjustmentTime = time.Now()
+			
+			// Log the adjustment (in a real implementation, this would use proper logging)
+			// fmt.Printf("Dynamic window adjustment: %d -> %d (utilization: %.2f, memory: %.2f)\n",
+			//	currentSize, newSize, currentUtilization, memoryUsage)
+		}
+	}
+}
+
+// shouldGrowWindow determines if the window should be grown
+func (rwm *ReceiveWindowManagerImpl) shouldGrowWindow(utilization, memoryUsage float64) bool {
+	// Don't grow if memory pressure is high
+	if memoryUsage > rwm.config.MemoryPressureThreshold {
+		return false
+	}
+	
+	// Don't grow if we're already at max size
+	rwm.sizeMutex.RLock()
+	atMaxSize := rwm.totalSize >= rwm.config.MaxSize
+	rwm.sizeMutex.RUnlock()
+	if atMaxSize {
+		return false
+	}
+	
+	// Grow if utilization is high (above 80% of backpressure threshold)
+	growThreshold := rwm.config.BackpressureThreshold * 0.8
+	if utilization > growThreshold {
+		return true
+	}
+	
+	// Grow if we have many active streams and low memory pressure
+	rwm.allocationsMutex.RLock()
+	activeStreams := len(rwm.streamAllocations)
+	rwm.allocationsMutex.RUnlock()
+	
+	if activeStreams > rwm.config.MaxStreams/2 && memoryUsage < 0.6 {
+		return true
+	}
+	
+	return false
+}
+
+// shouldShrinkWindow determines if the window should be shrunk
+func (rwm *ReceiveWindowManagerImpl) shouldShrinkWindow(utilization, memoryUsage float64) bool {
+	// Shrink if memory pressure is very high
+	if memoryUsage > rwm.config.MemoryPressureThreshold {
+		return true
+	}
+	
+	// Don't shrink if we're already at min size
+	rwm.sizeMutex.RLock()
+	atMinSize := rwm.totalSize <= rwm.config.MinSize
+	rwm.sizeMutex.RUnlock()
+	if atMinSize {
+		return false
+	}
+	
+	// Shrink if utilization is very low (below 25% of backpressure threshold)
+	shrinkThreshold := rwm.config.BackpressureThreshold * 0.25
+	if utilization < shrinkThreshold {
+		return true
+	}
+	
+	// Shrink if we have few active streams
+	rwm.allocationsMutex.RLock()
+	activeStreams := len(rwm.streamAllocations)
+	rwm.allocationsMutex.RUnlock()
+	
+	if activeStreams < rwm.config.MaxStreams/4 && utilization < 0.5 {
+		return true
+	}
+	
+	return false
+}
+
+// GetDynamicWindowStats returns statistics about dynamic window management
+func (rwm *ReceiveWindowManagerImpl) GetDynamicWindowStats() *DynamicWindowStats {
+	rwm.adjustmentMutex.RLock()
+	defer rwm.adjustmentMutex.RUnlock()
+	
+	rwm.sizeMutex.RLock()
+	currentSize := rwm.totalSize
+	rwm.sizeMutex.RUnlock()
+	
+	return &DynamicWindowStats{
+		Enabled:              rwm.dynamicAdjustmentEnabled,
+		CurrentSize:          currentSize,
+		MinSize:              rwm.config.MinSize,
+		MaxSize:              rwm.config.MaxSize,
+		LastAdjustmentTime:   rwm.lastAdjustmentTime,
+		MemoryUsage:          rwm.memoryMonitor.GetMemoryUsage(),
+		WindowUtilization:    rwm.GetWindowUtilization(),
+		GrowthFactor:         rwm.config.GrowthFactor,
+		ShrinkFactor:         rwm.config.ShrinkFactor,
+		MemoryPressureThreshold: rwm.config.MemoryPressureThreshold,
+	}
+}
+
+// SetDynamicWindowConfig updates the dynamic window configuration
+func (rwm *ReceiveWindowManagerImpl) SetDynamicWindowConfig(enabled bool, growthFactor, shrinkFactor, memoryThreshold float64) error {
+	if growthFactor <= 1.0 {
+		return fmt.Errorf("growth factor must be > 1.0")
+	}
+	if shrinkFactor <= 0.0 || shrinkFactor >= 1.0 {
+		return fmt.Errorf("shrink factor must be between 0.0 and 1.0")
+	}
+	if memoryThreshold <= 0.0 || memoryThreshold > 1.0 {
+		return fmt.Errorf("memory threshold must be between 0.0 and 1.0")
+	}
+	
+	rwm.adjustmentMutex.Lock()
+	defer rwm.adjustmentMutex.Unlock()
+	
+	// Update configuration
+	rwm.config.EnableDynamicSizing = enabled
+	rwm.config.GrowthFactor = growthFactor
+	rwm.config.ShrinkFactor = shrinkFactor
+	rwm.config.MemoryPressureThreshold = memoryThreshold
+	
+	// Update enabled state
+	wasEnabled := rwm.dynamicAdjustmentEnabled
+	rwm.dynamicAdjustmentEnabled = enabled
+	
+	// Start or stop worker as needed
+	if enabled && !wasEnabled {
+		// Create new stop channel if needed
+		if rwm.stopDynamicAdjustment == nil {
+			rwm.stopDynamicAdjustment = make(chan struct{})
+		}
+		rwm.dynamicWorkerWg.Add(1)
+		go rwm.dynamicAdjustmentWorker()
+	} else if !enabled && wasEnabled {
+		// Worker will stop on next tick when it sees the disabled state
+	}
+	
+	return nil
+}
+
+// ForceWindowAdjustment forces an immediate window size adjustment
+func (rwm *ReceiveWindowManagerImpl) ForceWindowAdjustment() error {
+	if !rwm.dynamicAdjustmentEnabled {
+		return fmt.Errorf("dynamic window adjustment is not enabled")
+	}
+	
+	rwm.performDynamicAdjustment()
+	return nil
 }

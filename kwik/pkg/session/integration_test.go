@@ -624,9 +624,9 @@ func TestStreamMultiplexing_Integration(t *testing.T) {
 	_, err = pathManager.CreatePathFromConnection(secondaryConn)
 	require.NoError(t, err)
 
-	// Create client session
+	// Create client session with large window to avoid resource limits
 	config := DefaultSessionConfig()
-	session := NewClientSession(pathManager, config)
+	session := createSessionWithLargeWindow(pathManager, config)
 	session.primaryPath = primaryPath
 	session.state = SessionStateActive
 

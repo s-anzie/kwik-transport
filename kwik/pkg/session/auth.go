@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"kwik/internal/utils"
@@ -25,21 +26,26 @@ type AuthenticationManager struct {
 	createdAt       time.Time
 	sessionRole     control.SessionRole // Role of this session (PRIMARY or SECONDARY)
 
+	// Path authentication tracking
+	authenticatedPaths map[string]bool
+	pathsMutex         sync.RWMutex
+
 	logger stream.StreamLogger
 }
 
 // NewAuthenticationManager creates a new authentication manager
 func NewAuthenticationManager(sessionID string, isClient bool) *AuthenticationManager {
 	return &AuthenticationManager{
-		sessionID:       sessionID,
-		isClient:        isClient,
-		isAuthenticated: false,
-		credentials:     nil,
-		clientVersion:   utils.KwikVersion,
-		serverVersion:   "",
-		enabledFeatures: utils.GetDefaultEnabledFeatures(),
-		sessionTimeout:  utils.DefaultSessionTimeout,
-		createdAt:       time.Now(),
+		sessionID:          sessionID,
+		isClient:           isClient,
+		isAuthenticated:    false,
+		credentials:        nil,
+		clientVersion:      utils.KwikVersion,
+		serverVersion:      "",
+		enabledFeatures:    utils.GetDefaultEnabledFeatures(),
+		sessionTimeout:     utils.DefaultSessionTimeout,
+		createdAt:          time.Now(),
+		authenticatedPaths: make(map[string]bool),
 	}
 }
 
@@ -292,4 +298,59 @@ func (am *AuthenticationManager) filterSupportedFeatures(requestedFeatures []str
 	}
 
 	return enabledFeatures
+}
+// SetPathAuthenticated marks a path as authenticated
+func (am *AuthenticationManager) SetPathAuthenticated(pathID string, authenticated bool) {
+	am.pathsMutex.Lock()
+	defer am.pathsMutex.Unlock()
+	am.authenticatedPaths[pathID] = authenticated
+}
+
+// IsPathAuthenticated checks if a path is authenticated
+func (am *AuthenticationManager) IsPathAuthenticated(pathID string) bool {
+	am.pathsMutex.RLock()
+	defer am.pathsMutex.RUnlock()
+	
+	// If session is not authenticated, no paths are authenticated
+	if !am.isAuthenticated {
+		return false
+	}
+	
+	// Check if path is explicitly authenticated
+	authenticated, exists := am.authenticatedPaths[pathID]
+	if exists {
+		return authenticated
+	}
+	
+	// For primary paths, inherit session authentication status
+	// For secondary paths, require explicit authentication
+	return false
+}
+
+// MarkPrimaryPathAuthenticated marks the primary path as authenticated when session is authenticated
+func (am *AuthenticationManager) MarkPrimaryPathAuthenticated(pathID string) {
+	if am.isAuthenticated {
+		am.SetPathAuthenticated(pathID, true)
+	}
+}
+
+// GetAuthenticatedPaths returns all authenticated paths
+func (am *AuthenticationManager) GetAuthenticatedPaths() []string {
+	am.pathsMutex.RLock()
+	defer am.pathsMutex.RUnlock()
+	
+	var paths []string
+	for pathID, authenticated := range am.authenticatedPaths {
+		if authenticated {
+			paths = append(paths, pathID)
+		}
+	}
+	return paths
+}
+
+// ClearPathAuthentication removes authentication for a path
+func (am *AuthenticationManager) ClearPathAuthentication(pathID string) {
+	am.pathsMutex.Lock()
+	defer am.pathsMutex.Unlock()
+	delete(am.authenticatedPaths, pathID)
 }

@@ -9,17 +9,17 @@ import (
 type MemoryPool struct {
 	pools map[int]*sync.Pool // Size -> Pool mapping
 	mutex sync.RWMutex
-	
+
 	// Statistics
 	allocations   int64
 	deallocations int64
 	hits          int64
 	misses        int64
-	
+
 	// Configuration
 	maxBlockSize    int
 	cleanupInterval time.Duration
-	
+
 	// Cleanup management
 	stopCleanup chan struct{}
 	cleanupWg   sync.WaitGroup
@@ -41,7 +41,7 @@ func NewMemoryPool(maxBlockSize int, cleanupInterval time.Duration) *MemoryPool 
 		cleanupInterval: cleanupInterval,
 		stopCleanup:     make(chan struct{}),
 	}
-	
+
 	// Initialize common block sizes
 	commonSizes := []int{64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536}
 	for _, size := range commonSizes {
@@ -49,11 +49,11 @@ func NewMemoryPool(maxBlockSize int, cleanupInterval time.Duration) *MemoryPool 
 			mp.initializePool(size)
 		}
 	}
-	
+
 	// Start cleanup routine
 	mp.cleanupWg.Add(1)
 	go mp.cleanupRoutine()
-	
+
 	return mp
 }
 
@@ -83,14 +83,14 @@ func (mp *MemoryPool) GetBlock(size int) *MemoryBlock {
 			inUse:    true,
 		}
 	}
-	
+
 	// Find the smallest pool that can accommodate the request
 	poolSize := mp.findPoolSize(size)
-	
+
 	mp.mutex.RLock()
 	pool, exists := mp.pools[poolSize]
 	mp.mutex.RUnlock()
-	
+
 	if !exists {
 		mp.mutex.Lock()
 		// Double-check after acquiring write lock
@@ -100,14 +100,14 @@ func (mp *MemoryPool) GetBlock(size int) *MemoryBlock {
 		}
 		mp.mutex.Unlock()
 	}
-	
+
 	block := pool.Get().(*MemoryBlock)
 	block.inUse = true
 	block.size = size // Actual requested size
-	
+
 	mp.allocations++
 	mp.hits++
-	
+
 	return block
 }
 
@@ -116,22 +116,22 @@ func (mp *MemoryPool) PutBlock(block *MemoryBlock) {
 	if block == nil || !block.inUse {
 		return
 	}
-	
+
 	block.inUse = false
-	
+
 	// Don't pool very large blocks
 	if block.capacity > mp.maxBlockSize {
 		mp.deallocations++
 		return
 	}
-	
+
 	// Reset the block
 	block.size = block.capacity
-	
+
 	mp.mutex.RLock()
 	pool, exists := mp.pools[block.capacity]
 	mp.mutex.RUnlock()
-	
+
 	if exists {
 		pool.Put(block)
 		mp.deallocations++
@@ -174,7 +174,7 @@ func (mp *MemoryPool) findPoolSize(size int) int {
 	if size <= 65536 {
 		return 65536
 	}
-	
+
 	// For larger sizes, round up to next multiple of 64KB
 	return ((size + 65535) / 65536) * 65536
 }
@@ -183,26 +183,26 @@ func (mp *MemoryPool) findPoolSize(size int) int {
 func (mp *MemoryPool) GetStats() MemoryPoolStats {
 	mp.mutex.RLock()
 	defer mp.mutex.RUnlock()
-	
+
 	totalBlocks := 0
 	usedBlocks := int(mp.allocations - mp.deallocations)
-	
+
 	// Estimate total blocks based on active pools
 	for range mp.pools {
 		// This is an approximation since sync.Pool doesn't expose exact counts
 		totalBlocks += 10 // Assume average of 10 blocks per pool
 	}
-	
+
 	availableBlocks := totalBlocks - usedBlocks
 	if availableBlocks < 0 {
 		availableBlocks = 0
 	}
-	
+
 	utilization := 0.0
 	if totalBlocks > 0 {
 		utilization = float64(usedBlocks) / float64(totalBlocks)
 	}
-	
+
 	return MemoryPoolStats{
 		TotalBlocks:     totalBlocks,
 		UsedBlocks:      usedBlocks,
@@ -217,10 +217,10 @@ func (mp *MemoryPool) GetStats() MemoryPoolStats {
 // cleanupRoutine performs periodic cleanup of unused memory blocks
 func (mp *MemoryPool) cleanupRoutine() {
 	defer mp.cleanupWg.Done()
-	
+
 	ticker := time.NewTicker(mp.cleanupInterval)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ticker.C:
@@ -235,7 +235,7 @@ func (mp *MemoryPool) cleanupRoutine() {
 func (mp *MemoryPool) performCleanup() {
 	mp.mutex.Lock()
 	defer mp.mutex.Unlock()
-	
+
 	// For each pool, we could implement more sophisticated cleanup
 	// For now, we rely on Go's GC to handle unused blocks in sync.Pool
 	// In a production system, you might want to implement custom cleanup logic
@@ -298,6 +298,182 @@ func (gmm *GlobalMemoryManager) Shutdown() {
 	}
 }
 
+// DynamicBufferPool manages dynamically sized buffer pools
+type DynamicBufferPool struct {
+	pools           map[int]*sync.Pool
+	poolsMutex      sync.RWMutex
+	maxBlockSize    int
+	minBlockSize    int
+	growthFactor    float64
+	shrinkThreshold float64
+
+	// Statistics
+	allocations     int64
+	deallocations   int64
+	poolAdjustments int64
+
+	// Dynamic adjustment
+	lastAdjustment  time.Time
+	adjustmentMutex sync.Mutex
+}
+
+// NewDynamicBufferPool creates a new dynamic buffer pool
+func NewDynamicBufferPool(minBlockSize, maxBlockSize int, growthFactor, shrinkThreshold float64) *DynamicBufferPool {
+	dbp := &DynamicBufferPool{
+		pools:           make(map[int]*sync.Pool),
+		maxBlockSize:    maxBlockSize,
+		minBlockSize:    minBlockSize,
+		growthFactor:    growthFactor,
+		shrinkThreshold: shrinkThreshold,
+		lastAdjustment:  time.Now(),
+	}
+
+	// Initialize with minimum block size
+	dbp.poolsMutex.Lock()
+	dbp.initializePoolLocked(minBlockSize)
+	dbp.poolsMutex.Unlock()
+
+	return dbp
+}
+
+// GetDynamicBlock retrieves a buffer block, creating new pool sizes as needed
+func (dbp *DynamicBufferPool) GetDynamicBlock(size int) *MemoryBlock {
+	dbp.allocations++
+
+	if size > dbp.maxBlockSize {
+		// Allocate directly for oversized requests
+		return &MemoryBlock{
+			data:     make([]byte, size),
+			size:     size,
+			capacity: size,
+			inUse:    true,
+		}
+	}
+
+	// Find or create appropriate pool
+	poolSize := dbp.findOrCreatePoolSize(size)
+
+	dbp.poolsMutex.RLock()
+	pool := dbp.pools[poolSize]
+	dbp.poolsMutex.RUnlock()
+
+	block := pool.Get().(*MemoryBlock)
+	block.inUse = true
+	block.size = size
+
+	return block
+}
+
+// PutDynamicBlock returns a block to the appropriate pool
+func (dbp *DynamicBufferPool) PutDynamicBlock(block *MemoryBlock) {
+	if block == nil || !block.inUse {
+		return
+	}
+
+	block.inUse = false
+
+	if block.capacity > dbp.maxBlockSize {
+		dbp.deallocations++
+		return
+	}
+
+	// Reset block
+	block.size = block.capacity
+
+	dbp.poolsMutex.RLock()
+	pool, exists := dbp.pools[block.capacity]
+	dbp.poolsMutex.RUnlock()
+
+	if exists {
+		pool.Put(block)
+		dbp.deallocations++
+	}
+}
+
+// findOrCreatePoolSize finds existing pool or creates new one for the size
+func (dbp *DynamicBufferPool) findOrCreatePoolSize(size int) int {
+	// First, try to find existing pool that can accommodate
+	dbp.poolsMutex.RLock()
+	for poolSize := range dbp.pools {
+		if poolSize >= size && poolSize <= int(float64(size)*dbp.growthFactor) {
+			dbp.poolsMutex.RUnlock()
+			return poolSize
+		}
+	}
+	dbp.poolsMutex.RUnlock()
+
+	// Need to create new pool
+	newPoolSize := dbp.calculateOptimalPoolSize(size)
+
+	dbp.poolsMutex.Lock()
+	// Double-check after acquiring write lock
+	if _, exists := dbp.pools[newPoolSize]; !exists {
+		dbp.initializePoolLocked(newPoolSize)
+		dbp.poolAdjustments++
+	}
+	dbp.poolsMutex.Unlock()
+
+	return newPoolSize
+}
+
+// calculateOptimalPoolSize calculates the optimal pool size for a request
+func (dbp *DynamicBufferPool) calculateOptimalPoolSize(size int) int {
+	// Round up to next power of 2 or use growth factor
+	if size <= dbp.minBlockSize {
+		return dbp.minBlockSize
+	}
+
+	// Find next power of 2
+	poolSize := 1
+	for poolSize < size {
+		poolSize <<= 1
+	}
+
+	// Don't exceed max size
+	if poolSize > dbp.maxBlockSize {
+		poolSize = dbp.maxBlockSize
+	}
+
+	return poolSize
+}
+
+// initializePoolLocked creates a new pool (must be called with poolsMutex held)
+func (dbp *DynamicBufferPool) initializePoolLocked(size int) {
+	dbp.pools[size] = &sync.Pool{
+		New: func() interface{} {
+			return &MemoryBlock{
+				data:     make([]byte, size),
+				size:     size,
+				capacity: size,
+				inUse:    false,
+			}
+		},
+	}
+}
+
+// GetDynamicPoolStats returns statistics about the dynamic pool
+func (dbp *DynamicBufferPool) GetDynamicPoolStats() *DynamicPoolStats {
+	dbp.poolsMutex.RLock()
+	activePools := len(dbp.pools)
+	poolSizes := make([]int, 0, activePools)
+	for size := range dbp.pools {
+		poolSizes = append(poolSizes, size)
+	}
+	dbp.poolsMutex.RUnlock()
+
+	return &DynamicPoolStats{
+		ActivePools:        activePools,
+		PoolSizes:          poolSizes,
+		TotalAllocations:   dbp.allocations,
+		TotalDeallocations: dbp.deallocations,
+		PoolAdjustments:    dbp.poolAdjustments,
+		LastAdjustment:     dbp.lastAdjustment,
+		MinBlockSize:       dbp.minBlockSize,
+		MaxBlockSize:       dbp.maxBlockSize,
+		GrowthFactor:       dbp.growthFactor,
+	}
+}
+
 // OptimizedBuffer is a buffer that uses the memory pool for efficient allocation
 type OptimizedBuffer struct {
 	block  *MemoryBlock
@@ -328,11 +504,11 @@ func (ob *OptimizedBuffer) Write(data []byte, offset int) error {
 	if ob.block == nil {
 		return ErrBufferClosed
 	}
-	
+
 	if offset+len(data) > ob.length {
 		return ErrBufferOverflow
 	}
-	
+
 	copy(ob.block.data[ob.offset+offset:], data)
 	return nil
 }
@@ -342,11 +518,11 @@ func (ob *OptimizedBuffer) Read(offset int, length int) ([]byte, error) {
 	if ob.block == nil {
 		return nil, ErrBufferClosed
 	}
-	
+
 	if offset+length > ob.length {
 		return nil, ErrBufferOverflow
 	}
-	
+
 	result := make([]byte, length)
 	copy(result, ob.block.data[ob.offset+offset:ob.offset+offset+length])
 	return result, nil

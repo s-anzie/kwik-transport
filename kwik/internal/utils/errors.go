@@ -57,6 +57,7 @@ const (
 	ErrPacketLoss            = "KWIK_PACKET_LOSS"
 	ErrBackpressure          = "KWIK_BACKPRESSURE"
 	ErrTimeout               = "KWIK_TIMEOUT"
+	ErrInvalidState          = "KWIK_INVALID_STATE"
 )
 
 // KWIK error codes - Control plane
@@ -92,6 +93,18 @@ func (e *KwikError) Error() string {
 
 func (e *KwikError) Unwrap() error {
 	return e.Cause
+}
+
+// IsRetryable determines if this error can be retried
+func (e *KwikError) IsRetryable() bool {
+	switch e.Code {
+	case ErrConnectionLost, ErrTimeout, ErrControlTimeout, ErrPacketLoss:
+		return true
+	case ErrAuthenticationFailed, ErrInvalidFrame, ErrConfigurationInvalid:
+		return false
+	default:
+		return true // Default to retryable for unknown errors
+	}
 }
 
 // NewKwikError creates a new KWIK error

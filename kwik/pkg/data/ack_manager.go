@@ -105,7 +105,7 @@ type AckManagerImpl struct {
 	lossDetector *LossDetector
 
 	// Retransmission management
-	retransmissionManager *RetransmissionManager
+	retransmissionManager RetransmissionManager
 
 	// Congestion control
 	congestionController *CongestionController
@@ -222,7 +222,14 @@ func NewAckManager(config *AckManagerConfig) *AckManagerImpl {
 	am.scheduler = NewAckScheduler(config)
 	am.lossDetector = NewLossDetector(config)
 	am.congestionController = NewCongestionController(config)
-	am.retransmissionManager = NewRetransmissionManager(config, am.lossDetector)
+	retransmissionConfig := &RetransmissionConfig{
+		DefaultTimeout:       config.LossDetectionTimeout,
+		CleanupInterval:      30 * time.Second,
+		MaxConcurrentRetries: 100,
+		EnableDetailedStats:  true,
+		Logger:               nil,
+	}
+	am.retransmissionManager = NewRetransmissionManager(retransmissionConfig)
 
 	return am
 }

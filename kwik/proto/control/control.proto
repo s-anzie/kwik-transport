@@ -30,6 +30,8 @@ enum ControlFrameType {
     SESSION_CLOSE = 12;
     DATA_CHUNK_ACK = 13; // Ack for delivered data chunks (transparent to app)
     PACKET_ACK = 14;     // Ack for delivered transport packet
+    WINDOW_UPDATE = 15;  // Flow control window update
+    BACKPRESSURE_SIGNAL = 16; // Backpressure signal
 }
 
 // Add path request - server requests client to connect to secondary server
@@ -192,4 +194,21 @@ message PacketAck {
     uint64 packet_id = 1;
     string path_id = 2;
     uint64 timestamp = 3;
+}
+
+// WindowUpdate - flow control window update
+message WindowUpdate {
+    string path_id = 1;            // Path ID for which window is updated
+    uint64 window_size = 2;        // New window size in bytes
+    uint64 timestamp = 3;          // Update timestamp
+    uint64 consumed_bytes = 4;     // Bytes consumed since last update (optional)
+}
+
+// BackpressureSignal - backpressure signal for flow control
+message BackpressureSignal {
+    string path_id = 1;            // Path ID experiencing backpressure
+    bool active = 2;               // Whether backpressure is active or released
+    uint64 timestamp = 3;          // Signal timestamp
+    string reason = 4;             // Reason for backpressure (optional)
+    uint64 estimated_delay_ms = 5; // Estimated delay until backpressure is released (optional)
 }

@@ -12,15 +12,7 @@ import (
 	"kwik/proto/data"
 )
 
-// DefaultDataLogger provides a simple logger implementation for data plane
-type DefaultDataLogger struct{}
 
-func (d *DefaultDataLogger) Debug(msg string, keysAndValues ...interface{}) {}
-func (d *DefaultDataLogger) Info(msg string, keysAndValues ...interface{})  {}
-func (d *DefaultDataLogger) Warn(msg string, keysAndValues ...interface{})  {}
-func (d *DefaultDataLogger) Error(msg string, keysAndValues ...interface{}) {
-	log.Printf("[ERROR] %s", msg)
-}
 func (d *DefaultDataLogger) Critical(msg string, keysAndValues ...interface{}) {
 	log.Printf("[CRITICAL] %s", msg)
 }

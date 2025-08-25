@@ -40,6 +40,8 @@ const (
 	ControlFrameType_SESSION_CLOSE              ControlFrameType = 12
 	ControlFrameType_DATA_CHUNK_ACK             ControlFrameType = 13 // Ack for delivered data chunks (transparent to app)
 	ControlFrameType_PACKET_ACK                 ControlFrameType = 14 // Ack for delivered transport packet
+	ControlFrameType_WINDOW_UPDATE              ControlFrameType = 15 // Flow control window update
+	ControlFrameType_BACKPRESSURE_SIGNAL        ControlFrameType = 16 // Backpressure signal
 )
 
 // Enum value maps for ControlFrameType.
@@ -60,6 +62,8 @@ var (
 		12: "SESSION_CLOSE",
 		13: "DATA_CHUNK_ACK",
 		14: "PACKET_ACK",
+		15: "WINDOW_UPDATE",
+		16: "BACKPRESSURE_SIGNAL",
 	}
 	ControlFrameType_value = map[string]int32{
 		"ADD_PATH_REQUEST":           0,
@@ -77,6 +81,8 @@ var (
 		"SESSION_CLOSE":              12,
 		"DATA_CHUNK_ACK":             13,
 		"PACKET_ACK":                 14,
+		"WINDOW_UPDATE":              15,
+		"BACKPRESSURE_SIGNAL":        16,
 	}
 )
 
@@ -1535,6 +1541,152 @@ func (x *PacketAck) GetTimestamp() uint64 {
 	return 0
 }
 
+// WindowUpdate - flow control window update
+type WindowUpdate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PathId        string                 `protobuf:"bytes,1,opt,name=path_id,json=pathId,proto3" json:"path_id,omitempty"`                       // Path ID for which window is updated
+	WindowSize    uint64                 `protobuf:"varint,2,opt,name=window_size,json=windowSize,proto3" json:"window_size,omitempty"`          // New window size in bytes
+	Timestamp     uint64                 `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                              // Update timestamp
+	ConsumedBytes uint64                 `protobuf:"varint,4,opt,name=consumed_bytes,json=consumedBytes,proto3" json:"consumed_bytes,omitempty"` // Bytes consumed since last update (optional)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WindowUpdate) Reset() {
+	*x = WindowUpdate{}
+	mi := &file_proto_control_control_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WindowUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WindowUpdate) ProtoMessage() {}
+
+func (x *WindowUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_control_control_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WindowUpdate.ProtoReflect.Descriptor instead.
+func (*WindowUpdate) Descriptor() ([]byte, []int) {
+	return file_proto_control_control_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *WindowUpdate) GetPathId() string {
+	if x != nil {
+		return x.PathId
+	}
+	return ""
+}
+
+func (x *WindowUpdate) GetWindowSize() uint64 {
+	if x != nil {
+		return x.WindowSize
+	}
+	return 0
+}
+
+func (x *WindowUpdate) GetTimestamp() uint64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *WindowUpdate) GetConsumedBytes() uint64 {
+	if x != nil {
+		return x.ConsumedBytes
+	}
+	return 0
+}
+
+// BackpressureSignal - backpressure signal for flow control
+type BackpressureSignal struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	PathId           string                 `protobuf:"bytes,1,opt,name=path_id,json=pathId,proto3" json:"path_id,omitempty"`                                  // Path ID experiencing backpressure
+	Active           bool                   `protobuf:"varint,2,opt,name=active,proto3" json:"active,omitempty"`                                               // Whether backpressure is active or released
+	Timestamp        uint64                 `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                                         // Signal timestamp
+	Reason           string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`                                                // Reason for backpressure (optional)
+	EstimatedDelayMs uint64                 `protobuf:"varint,5,opt,name=estimated_delay_ms,json=estimatedDelayMs,proto3" json:"estimated_delay_ms,omitempty"` // Estimated delay until backpressure is released (optional)
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *BackpressureSignal) Reset() {
+	*x = BackpressureSignal{}
+	mi := &file_proto_control_control_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BackpressureSignal) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BackpressureSignal) ProtoMessage() {}
+
+func (x *BackpressureSignal) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_control_control_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BackpressureSignal.ProtoReflect.Descriptor instead.
+func (*BackpressureSignal) Descriptor() ([]byte, []int) {
+	return file_proto_control_control_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *BackpressureSignal) GetPathId() string {
+	if x != nil {
+		return x.PathId
+	}
+	return ""
+}
+
+func (x *BackpressureSignal) GetActive() bool {
+	if x != nil {
+		return x.Active
+	}
+	return false
+}
+
+func (x *BackpressureSignal) GetTimestamp() uint64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *BackpressureSignal) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *BackpressureSignal) GetEstimatedDelayMs() uint64 {
+	if x != nil {
+		return x.EstimatedDelayMs
+	}
+	return 0
+}
+
 var File_proto_control_control_proto protoreflect.FileDescriptor
 
 const file_proto_control_control_proto_rawDesc = "" +
@@ -1652,7 +1804,19 @@ const file_proto_control_control_proto_rawDesc = "" +
 	"\tPacketAck\x12\x1b\n" +
 	"\tpacket_id\x18\x01 \x01(\x04R\bpacketId\x12\x17\n" +
 	"\apath_id\x18\x02 \x01(\tR\x06pathId\x12\x1c\n" +
-	"\ttimestamp\x18\x03 \x01(\x04R\ttimestamp*\xff\x02\n" +
+	"\ttimestamp\x18\x03 \x01(\x04R\ttimestamp\"\x8d\x01\n" +
+	"\fWindowUpdate\x12\x17\n" +
+	"\apath_id\x18\x01 \x01(\tR\x06pathId\x12\x1f\n" +
+	"\vwindow_size\x18\x02 \x01(\x04R\n" +
+	"windowSize\x12\x1c\n" +
+	"\ttimestamp\x18\x03 \x01(\x04R\ttimestamp\x12%\n" +
+	"\x0econsumed_bytes\x18\x04 \x01(\x04R\rconsumedBytes\"\xa9\x01\n" +
+	"\x12BackpressureSignal\x12\x17\n" +
+	"\apath_id\x18\x01 \x01(\tR\x06pathId\x12\x16\n" +
+	"\x06active\x18\x02 \x01(\bR\x06active\x12\x1c\n" +
+	"\ttimestamp\x18\x03 \x01(\x04R\ttimestamp\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\x12,\n" +
+	"\x12estimated_delay_ms\x18\x05 \x01(\x04R\x10estimatedDelayMs*\xab\x03\n" +
 	"\x10ControlFrameType\x12\x14\n" +
 	"\x10ADD_PATH_REQUEST\x10\x00\x12\x15\n" +
 	"\x11ADD_PATH_RESPONSE\x10\x01\x12\x17\n" +
@@ -1670,7 +1834,9 @@ const file_proto_control_control_proto_rawDesc = "" +
 	"\rSESSION_CLOSE\x10\f\x12\x12\n" +
 	"\x0eDATA_CHUNK_ACK\x10\r\x12\x0e\n" +
 	"\n" +
-	"PACKET_ACK\x10\x0e*\xb1\x01\n" +
+	"PACKET_ACK\x10\x0e\x12\x11\n" +
+	"\rWINDOW_UPDATE\x10\x0f\x12\x17\n" +
+	"\x13BACKPRESSURE_SIGNAL\x10\x10*\xb1\x01\n" +
 	"\n" +
 	"PathStatus\x12\x17\n" +
 	"\x13CONTROL_PATH_ACTIVE\x10\x00\x12\x15\n" +
@@ -1702,7 +1868,7 @@ func file_proto_control_control_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_control_control_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_proto_control_control_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_proto_control_control_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_proto_control_control_proto_goTypes = []any{
 	(ControlFrameType)(0),            // 0: kwik.control.ControlFrameType
 	(PathStatus)(0),                  // 1: kwik.control.PathStatus
@@ -1725,17 +1891,19 @@ var file_proto_control_control_proto_goTypes = []any{
 	(*SessionClose)(nil),             // 18: kwik.control.SessionClose
 	(*DataChunkAck)(nil),             // 19: kwik.control.DataChunkAck
 	(*PacketAck)(nil),                // 20: kwik.control.PacketAck
-	nil,                              // 21: kwik.control.AddPathRequest.MetadataEntry
-	nil,                              // 22: kwik.control.StreamCreateNotification.MetadataEntry
+	(*WindowUpdate)(nil),             // 21: kwik.control.WindowUpdate
+	(*BackpressureSignal)(nil),       // 22: kwik.control.BackpressureSignal
+	nil,                              // 23: kwik.control.AddPathRequest.MetadataEntry
+	nil,                              // 24: kwik.control.StreamCreateNotification.MetadataEntry
 }
 var file_proto_control_control_proto_depIdxs = []int32{
 	0,  // 0: kwik.control.ControlFrame.type:type_name -> kwik.control.ControlFrameType
-	21, // 1: kwik.control.AddPathRequest.metadata:type_name -> kwik.control.AddPathRequest.MetadataEntry
+	23, // 1: kwik.control.AddPathRequest.metadata:type_name -> kwik.control.AddPathRequest.MetadataEntry
 	1,  // 2: kwik.control.PathStatusNotification.status:type_name -> kwik.control.PathStatus
 	10, // 3: kwik.control.PathStatusNotification.metrics:type_name -> kwik.control.PathMetrics
 	2,  // 4: kwik.control.AuthenticationRequest.role:type_name -> kwik.control.SessionRole
 	3,  // 5: kwik.control.StreamCreateNotification.stream_type:type_name -> kwik.control.StreamType
-	22, // 6: kwik.control.StreamCreateNotification.metadata:type_name -> kwik.control.StreamCreateNotification.MetadataEntry
+	24, // 6: kwik.control.StreamCreateNotification.metadata:type_name -> kwik.control.StreamCreateNotification.MetadataEntry
 	10, // 7: kwik.control.Heartbeat.current_metrics:type_name -> kwik.control.PathMetrics
 	8,  // [8:8] is the sub-list for method output_type
 	8,  // [8:8] is the sub-list for method input_type
@@ -1755,7 +1923,7 @@ func file_proto_control_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_control_control_proto_rawDesc), len(file_proto_control_control_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   19,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

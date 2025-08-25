@@ -2,7 +2,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -265,25 +264,6 @@ func handleFileRequest(stream session.Stream, sess session.Session, req types.Re
 			fmt.Printf("[PRIMARY SERVER] Commande chunk impair #%d envoyée au secondaire (frameLen prédite=%d) : fileOff=%d size=%d streamOff=%d\n", i, frameLen, fileOffset, n, aggPos)
 			aggPos += int64(frameLen)
 		}
-	}
-
-	// Attend un ACK de fin de réception du client avant de terminer
-	fmt.Println("[PRIMARY SERVER] Attente de l'ACK de fin du client...")
-	ackReader := bufio.NewReader(stream)
-	ackLine, err := ackReader.ReadString('\n')
-	if err != nil {
-		fmt.Printf("[PRIMARY SERVER] Erreur lors de la lecture de l'ACK: %v\n", err)
-		return nil
-	}
-	var ackReq types.Request
-	if err := json.Unmarshal([]byte(ackLine), &ackReq); err != nil {
-		fmt.Printf("[PRIMARY SERVER] ACK invalide: %v\n", err)
-		return nil
-	}
-	if ackReq.Type == "done" {
-		fmt.Printf("[PRIMARY SERVER] ACK reçu pour '%s', fin du transfert.\n", ackReq.Resource)
-	} else {
-		fmt.Printf("[PRIMARY SERVER] Message reçu en fin de transfert (type=%s)\n", ackReq.Type)
 	}
 	return nil
 }

@@ -521,21 +521,21 @@ func (drm *DataReorderingManager) attemptGapFilling(context *ReorderingContext) 
 
 	// Try to fill gaps with buffered frames
 	for i, gap := range context.reassemblyState.gaps {
-		frame := context.frameBuffer.GetFrameForOffset(gap.StartOffset)
+		frame := context.frameBuffer.GetFrameForOffset(uint64(gap.Start))
 		if frame != nil {
 			// Found a frame that can fill this gap
-			if frame.Frame.Offset == gap.StartOffset {
+			if frame.Frame.Offset == uint64(gap.Start) {
 				// Process the frame
 				context.reassemblyState.reassembledData = append(context.reassemblyState.reassembledData, frame.Frame.Data...)
 				
 				// Update gap
-				newStartOffset := gap.StartOffset + uint64(len(frame.Frame.Data))
-				if newStartOffset >= gap.EndOffset {
+				newStartOffset := gap.Start + int64(len(frame.Frame.Data))
+				if newStartOffset >= gap.End {
 					// Gap is completely filled, remove it
 					context.reassemblyState.gaps = append(context.reassemblyState.gaps[:i], context.reassemblyState.gaps[i+1:]...)
 				} else {
 					// Gap is partially filled, update it
-					context.reassemblyState.gaps[i].StartOffset = newStartOffset
+					context.reassemblyState.gaps[i].Start = newStartOffset
 				}
 				
 				// Remove frame from buffer
@@ -732,14 +732,15 @@ func (rs *ReassemblyState) AddGap(startOffset, endOffset uint64) {
 	defer rs.mutex.Unlock()
 
 	gap := OffsetGap{
-		StartOffset: startOffset,
-		EndOffset:   endOffset,
+		Start: int64(startOffset),
+		End:   int64(endOffset),
+		Size:  int64(endOffset - startOffset),
 	}
 
 	// Insert gap in sorted order
 	inserted := false
 	for i, existingGap := range rs.gaps {
-		if gap.StartOffset < existingGap.StartOffset {
+		if gap.Start < existingGap.Start {
 			rs.gaps = append(rs.gaps[:i], append([]OffsetGap{gap}, rs.gaps[i:]...)...)
 			inserted = true
 			break
@@ -756,27 +757,33 @@ func (rs *ReassemblyState) FillGap(offset uint64, data []byte) bool {
 	rs.mutex.Lock()
 	defer rs.mutex.Unlock()
 
+	offsetInt := int64(offset)
+	endOffsetInt := int64(offset + uint64(len(data)))
+
 	for i, gap := range rs.gaps {
-		if offset >= gap.StartOffset && offset < gap.EndOffset {
+		if offsetInt >= gap.Start && offsetInt < gap.End {
 			// This data can fill part of the gap
-			endOffset := offset + uint64(len(data))
 			
-			if offset == gap.StartOffset && endOffset >= gap.EndOffset {
+			if offsetInt == gap.Start && endOffsetInt >= gap.End {
 				// Gap is completely filled
 				rs.gaps = append(rs.gaps[:i], rs.gaps[i+1:]...)
-			} else if offset == gap.StartOffset {
+			} else if offsetInt == gap.Start {
 				// Gap is partially filled from the start
-				rs.gaps[i].StartOffset = endOffset
-			} else if endOffset >= gap.EndOffset {
+				rs.gaps[i].Start = endOffsetInt
+				rs.gaps[i].Size = rs.gaps[i].End - rs.gaps[i].Start
+			} else if endOffsetInt >= gap.End {
 				// Gap is partially filled from the end
-				rs.gaps[i].EndOffset = offset
+				rs.gaps[i].End = offsetInt
+				rs.gaps[i].Size = rs.gaps[i].End - rs.gaps[i].Start
 			} else {
 				// Gap is split into two gaps
 				newGap := OffsetGap{
-					StartOffset: endOffset,
-					EndOffset:   gap.EndOffset,
+					Start: endOffsetInt,
+					End:   gap.End,
+					Size:  gap.End - endOffsetInt,
 				}
-				rs.gaps[i].EndOffset = offset
+				rs.gaps[i].End = offsetInt
+				rs.gaps[i].Size = rs.gaps[i].End - rs.gaps[i].Start
 				rs.gaps = append(rs.gaps[:i+1], append([]OffsetGap{newGap}, rs.gaps[i+1:]...)...)
 			}
 			

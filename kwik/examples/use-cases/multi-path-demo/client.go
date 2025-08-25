@@ -124,14 +124,4 @@ func main() {
 		fmt.Printf("[CLIENT] Chunk reçu id=%d, écrit=%d bytes, total=%d/%d (%.1f%%)\n", ch.Id, len(data), received, resp.File.Size, float64(received)*100/float64(resp.File.Size))
 	}
 	fmt.Println("[CLIENT] Réception terminée avec succès")
-
-	// Envoie un ACK de fin de réception au serveur primaire
-	ack := types.Request{Type: "done", Resource: resp.File.Name}
-	ackPayload, _ := json.Marshal(ack)
-	if _, err := stream.Write(append(ackPayload, '\n')); err != nil {
-		log.Printf("[CLIENT] Erreur lors de l'envoi de l'ACK: %v", err)
-	} else {
-		fmt.Println("[CLIENT] ACK de fin envoyé au serveur primaire")
-	}
-	fmt.Println("[CLIENT] Fin du client")
 }

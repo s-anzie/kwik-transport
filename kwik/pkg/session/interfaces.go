@@ -59,6 +59,7 @@ type PathStatus int
 
 const (
 	PathStatusActive PathStatus = iota
+	PathStatusDegraded
 	PathStatusDead
 	PathStatusConnecting
 	PathStatusDisconnecting
@@ -68,10 +69,10 @@ const (
 type SessionState int
 
 const (
-	SessionStateIdle SessionState = iota
-	SessionStateConnecting
+	SessionStateConnecting SessionState = iota
+	SessionStateAuthenticating
+	SessionStateAuthenticated
 	SessionStateActive
-	SessionStateClosing
 	SessionStateClosed
 )
 
@@ -93,6 +94,8 @@ func (s PathStatus) String() string {
 	switch s {
 	case PathStatusActive:
 		return "ACTIVE"
+	case PathStatusDegraded:
+		return "DEGRADED"
 	case PathStatusDead:
 		return "DEAD"
 	case PathStatusConnecting:
@@ -106,14 +109,14 @@ func (s PathStatus) String() string {
 
 func (s SessionState) String() string {
 	switch s {
-	case SessionStateIdle:
-		return "IDLE"
 	case SessionStateConnecting:
 		return "CONNECTING"
+	case SessionStateAuthenticating:
+		return "AUTHENTICATING"
+	case SessionStateAuthenticated:
+		return "AUTHENTICATED"
 	case SessionStateActive:
 		return "ACTIVE"
-	case SessionStateClosing:
-		return "CLOSING"
 	case SessionStateClosed:
 		return "CLOSED"
 	default:

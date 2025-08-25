@@ -211,7 +211,50 @@ const (
 	AlertTypeBackpressureCascade
 	AlertTypeSystemOverload
 	AlertTypeStreamStalled
+	// Additional alert types for resource monitoring
+	AlertTypeMemory
+	AlertTypeStream
+	AlertTypeWindow
+	AlertTypePerformance
+	AlertTypeGC
+	AlertTypeLeak
+	AlertTypeTrend
 )
+
+func (at AlertType) String() string {
+	switch at {
+	case AlertTypeHighLatency:
+		return "HIGH_LATENCY"
+	case AlertTypeLowThroughput:
+		return "LOW_THROUGHPUT"
+	case AlertTypeHighErrorRate:
+		return "HIGH_ERROR_RATE"
+	case AlertTypeMemoryPressure:
+		return "MEMORY_PRESSURE"
+	case AlertTypeBackpressureCascade:
+		return "BACKPRESSURE_CASCADE"
+	case AlertTypeSystemOverload:
+		return "SYSTEM_OVERLOAD"
+	case AlertTypeStreamStalled:
+		return "STREAM_STALLED"
+	case AlertTypeMemory:
+		return "MEMORY"
+	case AlertTypeStream:
+		return "STREAM"
+	case AlertTypeWindow:
+		return "WINDOW"
+	case AlertTypePerformance:
+		return "PERFORMANCE"
+	case AlertTypeGC:
+		return "GC"
+	case AlertTypeLeak:
+		return "LEAK"
+	case AlertTypeTrend:
+		return "TREND"
+	default:
+		return "UNKNOWN"
+	}
+}
 
 // AlertThresholds contains thresholds for generating alerts
 type AlertThresholds struct {

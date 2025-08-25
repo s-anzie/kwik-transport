@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"kwik/internal/utils"
+	"kwik/pkg/data"
 
 	"github.com/quic-go/quic-go"
 )
@@ -26,6 +27,9 @@ type ClientSession interface {
 	// Expose metadata protocol for encapsulation/decapsulation
 	GetMetadataProtocol() *MetadataProtocolImpl
 
+	// Expose offset coordinator for offset management
+	GetOffsetCoordinator() data.OffsetCoordinator
+
 	// Logger access for streams
 	GetLogger() StreamLogger
 }
@@ -38,6 +42,8 @@ type DataPresentationManager interface {
 	CreateStreamBuffer(streamID uint64, metadata interface{}) error
 	IsBackpressureActive(streamID uint64) bool
 }
+
+
 
 // PathRouter interface to avoid circular imports
 type PathRouter interface {
@@ -126,7 +132,6 @@ func NewClientStreamWithQuic(id uint64, pathID string, session ClientSession, qu
 
 // Read reads data from the stream (QUIC-compatible)
 func (s *ClientStream) Read(p []byte) (int, error) {
-	go s.session.HandlePrimaryPathDataPacket("primary", s.quicStream)
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -181,21 +186,46 @@ func (s *ClientStream) Write(p []byte) (int, error) {
 		return 0, utils.NewKwikError(utils.ErrStreamCreationFailed, "no underlying QUIC stream", nil)
 	}
 
-	// Try to encapsulate data with metadata carrying the KWIK Stream ID and current offset
+	// Reserve offset range for coordinated writing
+	var reservedOffset int64 = -1
+	if oc := s.session.GetOffsetCoordinator(); oc != nil {
+		var err error
+		reservedOffset, err = oc.ReserveOffsetRange(s.id, len(p))
+		if err != nil {
+			s.logger.Warn("Failed to reserve offset range", "streamID", s.id, "size", len(p), "error", err)
+			// Continue with current offset if reservation fails
+			reservedOffset = int64(s.offset)
+		}
+	} else {
+		// Use current offset if no coordinator available
+		reservedOffset = int64(s.offset)
+	}
+
+	// Try to encapsulate data with metadata carrying the KWIK Stream ID and reserved offset
 	if mp := s.session.GetMetadataProtocol(); mp != nil {
 		encapsulated, err := mp.EncapsulateData(
 			uint64(s.id), // KWIK Stream ID (source stream ID)
 			uint64(s.id), // Secondary stream ID (not serialized; placeholder)
-			uint64(s.offset),
+			uint64(reservedOffset),
 			p,
 		)
 		if err == nil {
 			// Write encapsulated frame
 			if _, werr := s.quicStream.Write(encapsulated); werr != nil {
+				// If write fails, we should not commit the offset range
 				return 0, werr
 			}
-			// Update offset by application payload length
-			s.offset += len(p)
+			
+			// Commit the offset range after successful write
+			if oc := s.session.GetOffsetCoordinator(); oc != nil {
+				commitErr := oc.CommitOffsetRange(s.id, reservedOffset, len(p))
+				if commitErr != nil {
+					s.logger.Warn("Failed to commit offset range", "streamID", s.id, "offset", reservedOffset, "size", len(p), "error", commitErr)
+				}
+			}
+			
+			// Update local offset to match the reserved offset
+			s.offset = int(reservedOffset) + len(p)
 			return len(p), nil
 		}
 		// If encapsulation fails, fall back to raw write

@@ -527,3 +527,43 @@ type RoutingMetrics struct {
 	ErrorRate          float64       `json:"error_rate"`
 	LastUpdate         time.Time     `json:"last_update"`
 }
+
+// DynamicWindowStats contains statistics about dynamic window management
+type DynamicWindowStats struct {
+	Enabled                 bool      `json:"enabled"`
+	CurrentSize             uint64    `json:"current_size"`
+	MinSize                 uint64    `json:"min_size"`
+	MaxSize                 uint64    `json:"max_size"`
+	LastAdjustmentTime      time.Time `json:"last_adjustment_time"`
+	MemoryUsage             float64   `json:"memory_usage"`
+	WindowUtilization       float64   `json:"window_utilization"`
+	GrowthFactor            float64   `json:"growth_factor"`
+	ShrinkFactor            float64   `json:"shrink_factor"`
+	MemoryPressureThreshold float64   `json:"memory_pressure_threshold"`
+}
+
+// DynamicPoolStats contains statistics about dynamic buffer pool usage
+type DynamicPoolStats struct {
+	ActivePools        int       `json:"active_pools"`
+	PoolSizes          []int     `json:"pool_sizes"`
+	TotalAllocations   int64     `json:"total_allocations"`
+	TotalDeallocations int64     `json:"total_deallocations"`
+	PoolAdjustments    int64     `json:"pool_adjustments"`
+	LastAdjustment     time.Time `json:"last_adjustment"`
+	MinBlockSize       int       `json:"min_block_size"`
+	MaxBlockSize       int       `json:"max_block_size"`
+	GrowthFactor       float64   `json:"growth_factor"`
+}
+
+// ReservationStats contains statistics about resource reservations
+type ReservationStats struct {
+	ActiveReservations   int           `json:"active_reservations"`
+	ExpiredReservations  int           `json:"expired_reservations"`
+	ReservedWindowSpace  uint64        `json:"reserved_window_space"`
+	ReservedStreams      int           `json:"reserved_streams"`
+	MaxReservations      int           `json:"max_reservations"`
+	ReservationTimeout   time.Duration `json:"reservation_timeout"`
+	LastUpdate           time.Time     `json:"last_update"`
+}
+
+// GCStats is defined in resource_gc.go

@@ -584,3 +584,15 @@ func (ca *ClientDataAggregator) GetOffsetManagerStats() *OffsetManagerStats {
 		LastUpdate:        time.Now(),
 	}
 }
+// SetOffsetCoordinator sets the offset coordinator for continuity validation
+func (ca *ClientDataAggregator) SetOffsetCoordinator(coordinator OffsetCoordinator) {
+	// ClientDataAggregator doesn't use offset coordinator directly
+	// This is a no-op for compatibility with the interface
+}
+
+// ValidateOffsetContinuity validates offset continuity using the offset coordinator
+func (ca *ClientDataAggregator) ValidateOffsetContinuity(streamID uint64) ([]OffsetGap, error) {
+	// ClientDataAggregator doesn't use offset coordinator directly
+	// Return empty gaps for compatibility
+	return nil, nil
+}
